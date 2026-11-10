@@ -58,6 +58,8 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 | `internal/platform/helper`、`cmd/lanflow-helper` | TUN 权限组件（macOS LaunchDaemon / Windows 服务） |
 | `internal/geo`、`internal/locate` | 节点名识别、Cloudflare trace 实测、中转分析、陆地点阵 |
 | `internal/view/...` | 界面：外壳与各页面 |
+| `internal/rpc`、`internal/app/remote` | 本机接口（JSON-RPC 服务端、权限分级、审计与撤销）与生成的远程客户端、方法清单 |
+| `internal/ctl`、`internal/mcp`、`skills/lanflow` | `lanflow ctl`、`lanflow mcp` 与配套的 Claude skill |
 | `scripts/` | 下载内核、准备打包资源 |
 
 技术方案见 [architecture.md](docs/architecture.md)、[advanced.md](docs/advanced.md)、[exit-map.md](docs/exit-map.md)。
@@ -145,6 +147,36 @@ GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一
    ```
 
    更新日志取自 `CHANGELOG.md` 中对应版本的 `## 0.2.0` 小节（文件存在时必须有该小节）。开发构建（`mygo dev`、`go run`）和由包管理器安装的副本不会自更新。详见 MyGo 文档 `docs/updates.md`。
+
+## 用 agent 管理澜流
+
+澜流运行时在本机提供一个只有当前用户能连接的接口（macOS `~/Library/Application Support/Lanflow/run/lanflow.sock`，Windows 命名管道 `\\.\pipe\lanflow-<用户 SID>`），不开 TCP 端口。同一个可执行文件提供两个客户端：
+
+- **`lanflow mcp`**：stdio MCP 服务，供 Claude Desktop、Claude Code 等使用。在「设置 › 高级 › Agent 接入」点「复制 MCP 配置」，粘贴到 `claude_desktop_config.json` 或项目的 `.mcp.json`；或复制 `claude mcp add` 命令在终端运行。macOS 上的配置形如：
+
+  ```json
+  {
+    "mcpServers": {
+      "lanflow": {
+        "command": "/Applications/Lanflow.app/Contents/MacOS/Lanflow",
+        "args": ["mcp"]
+      }
+    }
+  }
+  ```
+
+  工具由接口的方法清单生成，另有组合工具 `route_domain`（让域名走某个节点或代理组：规则测试 → 生成规则 → 预览 → 应用 → 验证）、`diagnose_site`、`diagnose`、`switch_node`。仓库里的 [`skills/lanflow/SKILL.md`](skills/lanflow/SKILL.md) 是配套的 Claude skill（标准流程、常见请求、禁区）。
+- **`lanflow ctl <命令>`**：命令行，默认输出 JSON，`--format table` 给人看：`status`、`proxies list|select|test`、`mode set`、`sub list|add|use|update`、`rule add|test`、`config get|set|apply`（`--dry-run` 输出差异）、`diag`、`undo`、`audit`。macOS 上可以 `ln -s /Applications/Lanflow.app/Contents/MacOS/Lanflow /usr/local/bin/lanflow`。澜流没运行时以退出码 3 报错。
+
+权限分级（`docs/service-split.md` §4）：
+
+- 读取状态、节点、规则、设置随时可用；返回的设置和订阅都经过与诊断导出相同的脱敏，订阅链接不会出现。
+- 连接明细、日志原文、订阅原文、运行时配置属于敏感读取：MCP 每次会话需在澜流里确认；ctl 需加 `--reveal` 并确认。
+- 修改配置时，每个 MCP 客户端第一次写入会在澜流里弹窗（同时发系统通知）请你选择「仅本次 / 始终允许 / 拒绝」，结果可在「设置 › 高级 › Agent 接入」撤销。ctl 由你本人在终端执行，不再询问。
+- 安装权限组件、切换内核、删除订阅、导出/恢复备份等危险操作不向 MCP 开放；ctl 每次都要在澜流里确认。
+- 每次写入都记入日志目录下的 `audit.log`（参数已脱敏）；`lanflow ctl undo`（或 MCP 的 `undo`）撤销本次运行中最近一次写入，覆盖设置、自定义规则、覆写、节点选择和当前订阅。
+
+开发时可以用模拟后端试：`LANFLOW_FAKE=1 LANFLOW_SOCKET=/tmp/lf.sock go run .`，另开终端 `LANFLOW_SOCKET=/tmp/lf.sock go run . ctl status`。
 
 ## 日志与诊断
 

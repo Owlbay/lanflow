@@ -18,6 +18,7 @@ func TestToolName(t *testing.T) {
 	for in, want := range map[string]string{
 		"SelectProxy": "select_proxy", "DNSQuery": "dns_query", "ImportSubscriptionURL": "import_subscription_url",
 		"TUNHelperInstalled": "tun_helper_installed", "ProbeIP": "probe_ip", "Status": "status",
+		"TestWebDAV": "test_webdav", "ATrustReference": "atrust_reference",
 	} {
 		if got := ToolName(in); got != want {
 			t.Errorf("ToolName(%s) = %s, want %s", in, got, want)

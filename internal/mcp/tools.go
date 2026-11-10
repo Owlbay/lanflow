@@ -52,9 +52,8 @@ func offered(m rpc.Method) bool {
 // select_proxy, DNSQuery → dns_query, ImportSubscriptionURL →
 // import_subscription_url.
 func ToolName(method string) string {
-	if strings.HasPrefix(method, "ATrust") {
-		method = "Atrust" + strings.TrimPrefix(method, "ATrust")
-	}
+	// Names whose capitals are not word starts.
+	method = strings.NewReplacer("ATrust", "Atrust", "WebDAV", "Webdav").Replace(method)
 	r := []rune(method)
 	var b strings.Builder
 	for i, c := range r {
