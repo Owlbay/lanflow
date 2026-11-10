@@ -534,6 +534,19 @@ type Settings struct {
 	// Advanced holds the core options of 设置 › 高级 (advanced.go); zero
 	// values are not written to the config.
 	Advanced AdvancedSettings `json:",omitempty"`
+
+	// AgentGrants are the user's answers to agents (MCP clients) asking to
+	// change the configuration through the local interface
+	// (docs/service-split.md §4); revoked in 设置 › 高级.
+	AgentGrants []AgentGrant `json:",omitempty"`
+}
+
+// AgentGrant is the standing answer for one agent: Allow lets its writes
+// through without asking, !Allow refuses them without asking.
+type AgentGrant struct {
+	Agent string // the MCP client's name, as in "mcp:<name>"
+	Allow bool
+	At    time.Time
 }
 
 // Overrides holds the YAML override texts.
