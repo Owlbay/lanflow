@@ -32,18 +32,10 @@ func Listen(dataDir string) (net.Listener, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	fi, err := os.Lstat(dir)
-	if err != nil {
-		return nil, err
-	}
-	if !fi.IsDir() {
-		return nil, fmt.Errorf("本机接口目录不是目录: %s", dir)
-	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
-		return nil, fmt.Errorf("本机接口目录不属于当前用户: %s", dir)
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return nil, err
+	if os.Getenv("LANFLOW_SOCKET") == "" {
+		if err := checkRunDir(dir); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := os.Lstat(path); err == nil {
 		if c, err := net.DialTimeout("unix", path, 500*time.Millisecond); err == nil {
@@ -63,6 +55,23 @@ func Listen(dataDir string) (net.Listener, error) {
 		return nil, err
 	}
 	return &peerListener{Listener: l}, nil
+}
+
+// checkRunDir requires the socket's directory to be a real directory of
+// the current user, and makes it private. ($LANFLOW_SOCKET, for tests and
+// development, may point anywhere, e.g. /tmp.)
+func checkRunDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("本机接口目录不是目录: %s", dir)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && int(st.Uid) != os.Getuid() {
+		return fmt.Errorf("本机接口目录不属于当前用户: %s", dir)
+	}
+	return os.Chmod(dir, 0o700)
 }
 
 func dialEndpoint(ctx context.Context, dataDir string) (net.Conn, error) {
