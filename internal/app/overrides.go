@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
 	"lanflow/internal/i18n"
@@ -89,7 +88,7 @@ func (s *Service) validateOverrideLocked(o model.Override, args composeArgs) err
 	if err != nil {
 		return fmt.Errorf(i18n.T("覆写未保存，%v"), err)
 	}
-	os.Remove(p.tmp) // validated only; the reload composes again
+	p.discard() // validated only; the reload composes again
 	return nil
 }
 

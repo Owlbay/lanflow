@@ -217,7 +217,7 @@ func (s *Service) validateStored(id string) error {
 	if err != nil {
 		return err
 	}
-	os.Remove(p.tmp)
+	p.discard()
 	return nil
 }
 
@@ -241,8 +241,9 @@ func (s *Service) UseSubscription(id string) (err error) {
 	bin := s.state.coreBin
 	running := s.state.st.Core == model.CoreRunning
 	s.mu.Unlock()
+	var p prepared
 	if bin != "" {
-		if _, err := s.prepare(composeArgs{subID: id}); err != nil {
+		if p, err = s.prepare(composeArgs{subID: id}); err != nil {
 			detail := err.Error()
 			msg := fmt.Sprintf(i18n.T("「%s」的配置未通过校验"), sub.Name)
 			if hadPrev {
@@ -253,24 +254,32 @@ func (s *Service) UseSubscription(id string) (err error) {
 		}
 	}
 	if err := s.d.store.SetCurrent(id); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("切换订阅失败：%v"), err)
 	}
 	s.refreshStore(TopicSubs)
-	switch {
-	case running:
-		if err := s.reloadLocked(); err != nil {
-			if hadPrev {
-				_ = s.d.store.SetCurrent(prev.ID)
-				s.refreshStore(TopicSubs)
-			}
-			s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: err.Error(), Subject: id})
-			return err
+	if !running {
+		p.discard() // a stopped core composes afresh when it starts
+		if !hadPrev {
+			// first subscription: start the core; the system proxy stays off
+			return s.startLocked()
 		}
-	case !hadPrev:
-		// first subscription: start the core; the system proxy stays off
-		if err := s.startLocked(); err != nil {
-			return err
+		return nil
+	}
+	if p.tmp != "" {
+		// p composes exactly the now-current subscription: reload it
+		// without composing and validating a second time.
+		err = s.reloadPrepared(p)
+	} else {
+		err = s.reloadLocked()
+	}
+	if err != nil {
+		if hadPrev {
+			_ = s.d.store.SetCurrent(prev.ID)
+			s.refreshStore(TopicSubs)
 		}
+		s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: err.Error(), Subject: id})
+		return err
 	}
 	return nil
 }
@@ -334,34 +343,47 @@ func (s *Service) updateOne(sub model.Subscription) error {
 		return fail(errors.New(i18n.T("未知的订阅来源")))
 	}
 
+	// opMu covers validate → store → reload, so the validated config is
+	// the one reloaded (no switch or edit can slip in between) and is
+	// composed and checked once.
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	s.mu.Lock()
 	bin := s.state.coreBin
 	s.mu.Unlock()
+	var p prepared
 	if bin != "" {
-		p, err := s.prepare(composeArgs{subID: sub.ID, content: data})
-		if err != nil {
+		var err error
+		if p, err = s.prepare(composeArgs{subID: sub.ID, content: data}); err != nil {
 			// §6.3: the dialog, not a toast; the stored content is unchanged.
 			msg := fmt.Sprintf(i18n.T("「%s」更新后的配置未通过校验，仍在使用上次的配置"), sub.Name)
 			s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: msg + i18n.T("。") + "\n" + err.Error(), Subject: sub.ID})
 			return fail(fmt.Errorf(i18n.T("「%s」更新后的%w：%v。仍在使用上次的配置。"), sub.Name, ErrInvalidConfig, err))
 		}
-		os.Remove(p.tmp) // validated only; the reload below composes again
 	}
 	if err := s.d.store.SetContent(sub.ID, data); err != nil {
+		p.discard()
 		return fail(fmt.Errorf(i18n.T("保存订阅内容失败：%v"), err))
 	}
 	if _, err := s.d.store.Put(sub); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("保存订阅失败：%v"), err)
 	}
-	if cur, ok := s.d.store.Current(); ok && cur.ID == sub.ID {
-		s.opMu.Lock()
-		err := s.reloadLocked()
-		s.opMu.Unlock()
-		if err != nil {
-			sub.LastError = err.Error()
-			_, _ = s.d.store.Put(sub)
-			return err
-		}
+	cur, ok := s.d.store.Current()
+	if !ok || cur.ID != sub.ID {
+		p.discard()
+		return nil
+	}
+	var err error
+	if p.tmp != "" {
+		err = s.reloadPrepared(p)
+	} else {
+		err = s.reloadLocked()
+	}
+	if err != nil {
+		sub.LastError = err.Error()
+		_, _ = s.d.store.Put(sub)
+		return err
 	}
 	return nil
 }
@@ -463,20 +485,25 @@ func (s *Service) EditSubscription(in model.Subscription) error {
 	s.mu.Unlock()
 	cur, hasCur := s.d.store.Current()
 	affects := hasCur && cur.ID == sub.ID
+	var p prepared
 	if bin != "" {
-		p, err := s.prepare(composeArgs{subID: sub.ID, subOverrides: &selection})
-		if err != nil {
+		var err error
+		if p, err = s.prepare(composeArgs{subID: sub.ID, subOverrides: &selection}); err != nil {
 			return fmt.Errorf(i18n.T("覆写未保存，%v"), err)
 		}
-		os.Remove(p.tmp)
 	}
 	if _, err := s.d.store.Put(sub); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("保存订阅失败：%v"), err)
 	}
 	s.refreshStore(TopicSubs, TopicSettings)
-	if affects {
+	switch {
+	case affects && p.tmp != "":
+		return s.reloadPrepared(p) // p composes the stored selection
+	case affects:
 		return s.reloadLocked()
 	}
+	p.discard()
 	return nil
 }
 
