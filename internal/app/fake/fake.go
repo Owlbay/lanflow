@@ -777,7 +777,7 @@ func (f *Fake) TestGroupDelay(group string) error {
 func (f *Fake) TestProxyDelay(name string) error {
 	return f.testNames(f.Proxies().GroupNodes(name))
 }
-func (f *Fake) TestAllDelays() error             { return f.testNames(nodes) }
+func (f *Fake) TestAllDelays() error { return f.testNames(nodes) }
 func (f *Fake) pprov(name string) *model.ProxyProvider {
 	for i := range f.pprovs {
 		if f.pprovs[i].Name == name {

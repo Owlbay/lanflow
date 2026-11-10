@@ -21,7 +21,7 @@ func newClient() *protocol.Client {
 }
 
 // pingTimeout bounds Installed.
-const pingTimeout = time.Second
+const pingTimeout = 3 * time.Second
 
 // ExpectedVersion is the helper version this app requires. It can be set
 // at build time (-ldflags "-X lanflow/internal/platform/helper.ExpectedVersion=1.2.3");
@@ -122,7 +122,7 @@ func check(ctx context.Context) error {
 	resp, err := ping(ctx)
 	if err != nil {
 		if isTransport(err) {
-			return fmt.Errorf("%w: %v", ErrNotRunning, err)
+			return fmt.Errorf("%w: %w", ErrNotRunning, err) // keeps a timeout visible (errors.As net.Error)
 		}
 		// An old helper refuses our request version with an error
 		// response.

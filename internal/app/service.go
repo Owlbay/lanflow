@@ -167,6 +167,7 @@ type state struct {
 	stray         *strayRun   // a core of the previous run found at start (takeover.go)
 	helperOK      bool        // helper.Check passed at last check
 	helperStale   bool        // last Check: installed helper of another version/protocol
+	helperSlow    bool        // last Check timed out: the helper may be there but slow to answer
 	runningTUN    bool        // the running config has TUN enabled
 	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
 	lastAutoStart time.Time
@@ -390,7 +391,7 @@ func (s *Service) bootstrap() {
 		}
 	}
 	s.learnBundledHelper()
-	s.refreshHelper()
+	s.refreshHelperAtStart()
 	s.learnBundledVersion()
 	if s.takeOver() {
 		_ = s.RefreshNetwork()
@@ -413,21 +414,55 @@ func (s *Service) bootstrap() {
 	}
 }
 
+// helperStartTries is how often startup asks a helper that times out
+// before TUN counts as unavailable (a loaded machine answered a ping in
+// over a second, and TUN then stayed off until the next restart).
+const helperStartTries = 3
+
+// refreshHelperAtStart is refreshHelper, retried while the helper times
+// out rather than being absent.
+func (s *Service) refreshHelperAtStart() {
+	for i := 0; i < helperStartTries; i++ {
+		if s.refreshHelper() {
+			return
+		}
+		s.mu.Lock()
+		slow := s.state.helperSlow
+		s.mu.Unlock()
+		if !slow || i == helperStartTries-1 {
+			return
+		}
+		select {
+		case <-s.rootCtx.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// isTimeout reports whether err is a network timeout.
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
+}
+
 // refreshHelper re-checks whether the privileged helper is installed and
 // of this app's version. A helper left over from another release counts
 // as not installed (TUN needs a reinstall); the first time that is seen
 // the user is told so.
 func (s *Service) refreshHelper() bool {
-	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 5*time.Second)
 	err := s.d.helper.Check(ctx)
 	cancel()
 	ok := err == nil
+	slow := errors.Is(err, context.DeadlineExceeded) || isTimeout(err)
 	stale := errors.Is(err, helper.ErrVersionMismatch) || errors.Is(err, helper.ErrProtocolMismatch)
 	s.mu.Lock()
 	changed := s.state.helperOK != ok || s.state.helperStale != stale
 	becameStale := stale && !s.state.helperStale
 	s.state.helperOK = ok
 	s.state.helperStale = stale
+	s.state.helperSlow = slow
 	s.state.st.TUNAvailable = ok
 	s.state.st.HelperReinstall = stale
 	s.mu.Unlock()

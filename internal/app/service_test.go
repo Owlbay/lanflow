@@ -846,6 +846,34 @@ func TestSetTUNRefusesWithOtherTUN(t *testing.T) {
 	}
 }
 
+// A helper that answers slowly at startup (a loaded machine) is asked
+// again instead of leaving TUN unavailable until the next restart; an
+// absent one is not waited for.
+func TestHelperSlowAtStartIsRetried(t *testing.T) {
+	h := newHarness(t, func(h *harness) { h.helper.installed = true })
+	h.helper.mu.Lock()
+	h.helper.slow = helperStartTries - 1
+	h.helper.mu.Unlock()
+	h.s.refreshHelperAtStart()
+	h.helper.mu.Lock()
+	left := h.helper.slow
+	h.helper.mu.Unlock()
+	if left != 0 {
+		t.Fatalf("%d slow answers left", left)
+	}
+	if !h.s.Status().TUNAvailable {
+		t.Fatal("TUN unavailable after the helper answered on a retry")
+	}
+	h.helper.mu.Lock()
+	h.helper.installed, h.helper.slow = false, 0
+	h.helper.mu.Unlock()
+	start := time.Now()
+	h.s.refreshHelperAtStart()
+	if h.s.Status().TUNAvailable || time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("absent helper: available=%v after %s", h.s.Status().TUNAvailable, time.Since(start))
+	}
+}
+
 // A helper left over from another release: TUN is unavailable, the status
 // asks for a reinstall, the user is told once, and a reinstall clears it.
 func TestHelperVersionMismatchAsksForReinstall(t *testing.T) {

@@ -477,12 +477,17 @@ type fakeHelper struct {
 	installs   []helper.InstallOptions // every Install call (coredl tests)
 	installErr error
 	checkErr   error  // when set, Check returns it (version mismatch tests)
+	slow       int    // Check times out this many more times
 	bundled    string // last SetBundled path
 }
 
 func (h *fakeHelper) Check(context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.slow > 0 {
+		h.slow--
+		return fmt.Errorf("%w: %w", helper.ErrNotRunning, timeoutErr{})
+	}
 	if h.checkErr != nil {
 		return h.checkErr
 	}
@@ -953,3 +958,10 @@ func waitFor(cond func() bool) bool {
 	}
 	return cond()
 }
+
+// timeoutErr is a net.Error timeout, as a ping to a slow helper returns.
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "i/o timeout" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
