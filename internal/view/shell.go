@@ -7,10 +7,8 @@ package view
 import (
 	"fmt"
 	"log"
-	"net/url"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -90,13 +88,6 @@ type toastReq struct {
 	onAction    func()
 }
 
-// confirmReq is a pending confirmation dialog.
-type confirmReq struct {
-	title, body, ok string
-	danger          bool
-	onOK            func()
-}
-
 // Shell is the state of the main window.
 type Shell struct {
 	api  app.API
@@ -148,11 +139,6 @@ type Shell struct {
 
 	// notify shows a system notification; mygo by default, replaced in tests.
 	notify func(title, body string, onClick func())
-}
-
-// detailReq is the full text behind an error toast's 「查看详情」.
-type detailReq struct {
-	title, text string
 }
 
 // New builds the shell and all pages over api.
@@ -433,13 +419,6 @@ func (s *Shell) run(job func() error, okMsg string) {
 	go do()
 }
 
-// ask is Env.Confirm.
-func (s *Shell) ask(title, body, okLabel string, danger bool, onOK func()) {
-	s.confirm = &confirmReq{title: title, body: body, ok: okLabel, danger: danger, onOK: onOK}
-	s.confirmOpen = true
-	s.Redraw()
-}
-
 func (s *Shell) navigate(p env.Page, arg string) {
 	if _, ok := s.pages[p]; !ok {
 		return
@@ -478,12 +457,6 @@ func (s *Shell) ShowWindow() {
 // proxy is still on (docs/design.md §6.4).
 func (s *Shell) NeedsQuitConfirm() bool {
 	return s.api.Status().SystemProxy
-}
-
-// AskQuit shows the quit confirmation; quit runs on the UI thread if the
-// user agrees.
-func (s *Shell) AskQuit(quit func()) {
-	s.ask(i18n.T("退出后将关闭系统代理。"), i18n.T("由澜流开启的系统代理会恢复为关闭，内核也会停止。"), i18n.T("退出"), false, quit)
 }
 
 // HiddenToTray tells the user once ever that the app keeps running in the
@@ -596,47 +569,6 @@ func (s *Shell) SetGlobalShortcut(acc string) error {
 	return nil
 }
 
-// CheckUpdatesAtLaunch checks for a new version of the app once a day,
-// when the build can update itself and the setting allows (docs/design.md
-// §9 应用自动更新). A found version is announced with a toast that opens
-// the settings; the check itself runs off the UI thread.
-func (s *Shell) CheckUpdatesAtLaunch() {
-	if s.api.Settings().DisableUpdateCheck {
-		return
-	}
-	page, ok := s.pages[env.Settings].(*settings.Page)
-	if !ok || !page.UpdatesEnabled() || !s.updateCheckDue(time.Now()) {
-		return
-	}
-	page.CheckAppUpdate(true, func(version string) {
-		s.toast(toastReq{msg: i18n.Tf("澜流有新版本 %s", version), detail: i18n.T("在「设置 › 常规 › 关于」中下载并重启。"), action: i18n.T("前往设置"),
-			onAction: func() { s.post(func() { s.navigate(env.Settings, "general") }) }})
-	})
-}
-
-// updateCheckInterval is how often the launch-time update check runs.
-const updateCheckInterval = 24 * time.Hour
-
-// updateCheckDue reports whether the daily check is due at now, and
-// records now as the last check when it is. Without a stamp file every
-// launch checks.
-func (s *Shell) updateCheckDue(now time.Time) bool {
-	if s.updateStamp == "" {
-		return true
-	}
-	if data, err := os.ReadFile(s.updateStamp); err == nil {
-		if last, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data))); err == nil {
-			if d := now.Sub(last); d >= 0 && d < updateCheckInterval {
-				return false
-			}
-		}
-	}
-	if err := os.WriteFile(s.updateStamp, []byte(now.Format(time.RFC3339)+"\n"), 0o600); err != nil {
-		log.Printf("lanflow: update check marker: %v", err)
-	}
-	return true
-}
-
 // ToggleSystemProxy flips the system proxy (tray, hotkey).
 func (s *Shell) ToggleSystemProxy() {
 	st := s.api.Status()
@@ -646,95 +578,6 @@ func (s *Shell) ToggleSystemProxy() {
 		msg = i18n.T("系统代理已开启")
 	}
 	s.run(func() error { return s.api.SetSystemProxy(on) }, msg)
-}
-
-// OpenImportLink shows the window and opens the import-from-link dialog
-// with rawURL prefilled; nothing is imported until the user confirms.
-// It accepts the app's own deep links and the Clash convention:
-//
-//	lanflow://import?url=<subscription>&name=<name>
-//	clash://install-config?url=<subscription>&name=<name>
-//
-// Anything else is ignored. It is safe from any goroutine.
-func (s *Shell) OpenImportLink(rawURL string) {
-	target, name, ok := ParseImportLink(rawURL)
-	if !ok {
-		log.Printf("lanflow: ignoring link %q", rawURL)
-		return
-	}
-	s.post(func() { s.navigate(env.Subs, env.ImportURLArg(target, name)) })
-	s.ShowWindow()
-}
-
-// ParseImportLink extracts the subscription URL (http/https) and optional
-// name from a lanflow:// or clash:// link.
-func ParseImportLink(rawURL string) (target, name string, ok bool) {
-	u, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil {
-		return "", "", false
-	}
-	switch strings.ToLower(u.Scheme) {
-	case "lanflow":
-		if h := strings.ToLower(u.Host + u.Path); h != "import" && h != "import/" && h != "install-config" && h != "install-config/" {
-			return "", "", false
-		}
-	case "clash", "clashmeta", "mihomo":
-		if h := strings.ToLower(u.Host + u.Path); h != "install-config" && h != "install-config/" {
-			return "", "", false
-		}
-	default:
-		return "", "", false
-	}
-	q := u.Query()
-	target = strings.TrimSpace(q.Get("url"))
-	t, err := url.Parse(target)
-	if err != nil || (t.Scheme != "http" && t.Scheme != "https") || t.Host == "" {
-		return "", "", false
-	}
-	return target, strings.TrimSpace(q.Get("name")), true
-}
-
-// errorToast shows an error toast with a short first line and 「查看详情」
-// opening the full text (docs/design.md §6.5).
-func (s *Shell) errorToast(msg, detail string) {
-	short, full := splitError(msg)
-	if detail != "" {
-		full = strings.TrimSpace(msg + "\n\n" + detail)
-	}
-	s.toast(toastReq{msg: short, isError: true, action: i18n.T("查看详情"), onAction: func() { s.showDetail(full) }})
-}
-
-// splitError returns the toast line of an error message and the full text:
-// the first line, cut at the first sentence end once it gets long.
-func splitError(msg string) (short, full string) {
-	full = strings.TrimSpace(msg)
-	short = full
-	if i := strings.IndexAny(short, "\n\r"); i >= 0 {
-		short = strings.TrimSpace(short[:i])
-	}
-	const limit = 64
-	if r := []rune(short); len(r) > limit {
-		cut := -1
-		for i, c := range r[:limit] {
-			if i >= 16 && (c == '。' || c == '：' || c == '，' || c == '；' || c == '.' || c == ':') {
-				cut = i
-			}
-		}
-		if cut > 0 {
-			short = string(r[:cut]) + "…"
-		} else {
-			short = string(r[:limit]) + "…"
-		}
-	}
-	return short, full
-}
-
-// showDetail opens the detail dialog; safe from any goroutine.
-func (s *Shell) showDetail(text string) {
-	s.post(func() {
-		s.detail = &detailReq{title: i18n.T("错误详情"), text: text}
-		s.detailOpen = true
-	})
 }
 
 // ApplyAppearance applies the appearance setting ("system", "light", "dark").
@@ -877,272 +720,4 @@ func firstNonEmpty(a ...string) string {
 		}
 	}
 	return ""
-}
-
-// sidebarGroups are the sidebar's groups of destinations (docs/design.md
-// §4): daily use, what the core is doing, and diagnosis; 设置 sits apart
-// at the bottom.
-var sidebarGroups = [][]env.Page{
-	{env.Overview, env.Proxies, env.Subs},
-	{env.Conns, env.Logs, env.Rules},
-	{env.Net, env.Stats, env.Probe},
-}
-
-// sidebar draws the groups of destinations.
-func (s *Shell) sidebar(c *ui.Context, st model.Status, vib bool) {
-	t := c.Theme()
-	page := string(s.page)
-	item := func(p env.Page) ui.Element {
-		e := ui.SidebarItem(c, string(p), icons[pageIcons[string(p)]], env.Title(p))
-		if p == env.Conns && st.Connections > 0 && st.Core == model.CoreRunning {
-			e.Children(func() {
-				ui.Badge(c, fmt.Sprint(st.Connections)).FontFeatures("tnum")
-			})
-		}
-		return e
-	}
-	divider := func() {
-		ui.Box(c).Height(1).Background(t.Border).Margin(6, 8).Shrink(0)
-	}
-	main := ui.Sidebar(c, &page, func() {
-		for i, group := range sidebarGroups {
-			if i > 0 {
-				divider()
-			}
-			for _, p := range group {
-				item(p)
-			}
-		}
-	}).Grow(1).Label(i18n.T("页面"))
-	if vib {
-		main.Background(ui.Transparent)
-	}
-	if main.Changed() {
-		s.navigate(env.Page(page), "")
-	}
-	divider()
-	bottom := ui.Sidebar(c, &page, func() { item(env.Settings) }).Shrink(0).Label(i18n.T("更多"))
-	if vib {
-		bottom.Background(ui.Transparent)
-	}
-	if bottom.Changed() {
-		s.navigate(env.Page(page), "")
-	}
-}
-
-// statusBar is the sidebar's bottom status (docs/design.md §4 table).
-func (s *Shell) statusBar(c *ui.Context, st model.Status) {
-	t := c.Theme()
-	k := s.env.Kit
-	bar := env.ClickableColumn(c, i18n.T("状态：回到概览")).Padding(10, 18, 14, 18).Gap(3).Shrink(0)
-	bar.Children(func() {
-		ui.Box(c).Height(1).Background(t.Border).Margin(0, -8, 8, -8)
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-			switch st.Core {
-			case model.CoreRunning:
-				k.Dot(c, "green")
-				ui.Text(c, i18n.Tf("运行中 · %s", env.ModeName(st.Mode))).FontSize(12).SingleLine()
-			case model.CoreStarting:
-				ui.Spinner(c).Size(12, 12).Label(i18n.T("启动中"))
-				ui.Text(c, i18n.T("启动中…")).FontSize(12)
-			case model.CoreError:
-				k.Dot(c, "red")
-				ui.Text(c, i18n.T("内核异常")).FontSize(12).TextColor(t.Danger)
-			case model.CoreMissing:
-				k.Dot(c, "red")
-				ui.Text(c, i18n.T("未找到内核")).FontSize(12).TextColor(t.Danger)
-			default:
-				k.Dot(c, "gray")
-				ui.Text(c, i18n.T("未启动")).FontSize(12).TextColor(t.TextMuted)
-			}
-		})
-		if st.Core == model.CoreRunning {
-			if st.SystemProxy {
-				ui.Text(c, i18n.T("系统代理已开启")).FontSize(11).TextColor(t.TextMuted).Margin(0, 0, 0, 14)
-			}
-			// The active core, only when the version fits the 200 pt sidebar
-			// on one line (release tags and Alpha hashes do; a long custom
-			// build string would be cut, so it is left out).
-			if v := st.CoreVersion; v != "" && len(v) <= 20 {
-				ui.Text(c, "Mihomo "+v).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine().Margin(0, 0, 0, 14)
-			}
-			ui.Text(c, "↑ "+env.FmtSpeed(st.Up)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Margin(0, 0, 0, 14)
-			ui.Text(c, "↓ "+env.FmtSpeed(st.Down)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Margin(0, 0, 0, 14)
-		}
-	})
-	if bar.Clicked() {
-		s.navigate(env.Overview, "")
-	}
-}
-
-// shortcuts are ⌘1–⌘9 for the nine pages of the sidebar's groups and ⌘,
-// for settings.
-func (s *Shell) shortcuts(c *ui.Context) {
-	for i, p := range env.Order[:9] {
-		if c.Shortcut(ui.Cmd, ui.Key1+ui.Key(i)) {
-			s.navigate(p, "")
-		}
-	}
-	if c.Shortcut(ui.Cmd, ui.KeyComma) {
-		s.navigate(env.Settings, "")
-	}
-}
-
-// dropOverlay highlights the window while YAML files are dragged over it.
-func (s *Shell) dropOverlay(c *ui.Context) {
-	t := c.Theme()
-	ui.Overlay(c, func() {
-		ui.Column(c).Absolute().Left(12).Top(12).Right(12).Bottom(12).Center().Gap(6).Radius(12).
-			Border(2, t.Accent).BorderStyle(ui.BorderDashed).Background(t.Background.Alpha(0.88)).PassThrough().Children(func() {
-			ui.Box(c).TextColor(t.Accent).Children(func() { s.env.Kit.Icon(c, "down", 28) })
-			ui.Text(c, i18n.T("松开以导入")).FontSize(15).FontWeight(600)
-			ui.Text(c, i18n.T("支持 .yaml / .yml 文件")).FontSize(12).TextColor(t.TextMuted)
-		})
-	})
-}
-
-// importFiles imports dropped YAML files as subscriptions.
-func (s *Shell) importFiles(paths []string) {
-	var yaml []string
-	for _, p := range paths {
-		switch strings.ToLower(filepath.Ext(p)) {
-		case ".yaml", ".yml":
-			yaml = append(yaml, p)
-		}
-	}
-	if len(yaml) == 0 {
-		s.toast(toastReq{msg: i18n.T("只能导入 .yaml / .yml 配置文件"), isError: true})
-		return
-	}
-	// Without a subscription yet, the first dropped file becomes the
-	// current one and starts the core, like the other import paths
-	// (docs/design.md §8.1: Toast「已导入并启动」).
-	none := !s.api.Status().HasSubscriptions
-	s.navigate(env.Subs, "")
-	for i, p := range yaml {
-		path, first := p, none && i == 0
-		s.run(func() error { return subs.ImportFile(s.api, path, first) }, subs.ImportToast(path, first))
-	}
-}
-
-// dialogs draws the confirmation, the invalid-config alert and the
-// recovery dialog.
-func (s *Shell) dialogs(c *ui.Context, st model.Status) {
-	t := c.Theme()
-	k := s.env.Kit
-	if s.confirm != nil {
-		cf := s.confirm
-		if ui.AlertDialog(c, &s.confirmOpen, cf.title, cf.body, i18n.T("取消"), cf.ok) == 1 {
-			s.confirm = nil
-			if cf.onOK != nil {
-				cf.onOK()
-			}
-		} else if !s.confirmOpen {
-			s.confirm = nil
-		}
-	}
-	if s.detail != nil {
-		d := s.detail
-		ui.Modal(c, &s.detailOpen, func() {
-			ui.Column(c).Width(460).Gap(12).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).TextColor(t.Danger).Children(func() { k.Icon(c, "warn", 18) })
-					ui.Text(c, d.title).FontSize(15).FontWeight(600)
-				})
-				ui.Scroll(c).MaxHeight(260).Children(func() {
-					ui.Text(c, d.text).FontSize(13).Padding(8, 10).Radius(6).
-						Background(t.Surface).Border(1, t.Border).Selectable()
-				})
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, i18n.T("复制")).Clicked() {
-						c.WriteClipboard(d.text)
-						c.Toast(i18n.T("已复制"))
-					}
-					if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
-						s.detailOpen = false
-					}
-				})
-			})
-		})
-		if !s.detailOpen {
-			s.detail = nil
-		}
-	}
-	if s.invalid != nil {
-		n := s.invalid
-		ui.Modal(c, &s.invalidOpen, func() {
-			ui.Column(c).Width(440).Gap(12).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) })
-					ui.Text(c, firstNonEmpty(n.Title, i18n.T("配置无法使用"))).FontSize(15).FontWeight(600)
-				})
-				ui.Text(c, s.invalidBody(n)).FontSize(13)
-				if n.Detail != "" {
-					ui.Text(c, n.Detail).Font("monospace").FontSize(12).Padding(8, 10).Radius(6).
-						Background(t.Surface).Border(1, t.Border).Selectable()
-				}
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, i18n.T("复制错误")).Clicked() {
-						c.WriteClipboard(n.Detail)
-						c.Toast(i18n.T("已复制"))
-					}
-					if ui.PrimaryButton(c, i18n.T("好")).Clicked() {
-						s.invalidOpen = false
-					}
-				})
-			})
-		})
-		if !s.invalidOpen {
-			s.invalid = nil
-		}
-	}
-	if s.recovery {
-		ui.Modal(c, &s.recovery, func() {
-			ui.Column(c).Width(440).Gap(12).Children(func() {
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).TextColor(t.Warning).Children(func() { k.Icon(c, "warn", 18) })
-					ui.Text(c, i18n.T("系统代理未恢复")).FontSize(15).FontWeight(600)
-				})
-				port := st.MixedPort
-				if port == 0 {
-					port = 7890
-				}
-				ui.Text(c, i18n.Tf("上次澜流未正常退出，系统代理仍指向 127.0.0.1:%d。如果不处理，部分应用可能无法联网。", port)).FontSize(13)
-				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
-					if ui.Button(c, i18n.T("保持开启并启动内核")).Clicked() {
-						s.recovery = false
-						s.run(func() error { return s.api.ResolveRecovery(false) }, "")
-					}
-					if ui.PrimaryButton(c, i18n.T("恢复为关闭")).Clicked() {
-						s.recovery = false
-						s.run(func() error { return s.api.ResolveRecovery(true) }, i18n.T("系统代理已关闭"))
-					}
-				})
-			})
-		})
-	}
-}
-
-// invalidBody words the invalid-config message with the subscription names.
-func (s *Shell) invalidBody(n *app.Notice) string {
-	var bad, cur string
-	for _, sub := range s.api.Subscriptions() {
-		if sub.ID == n.Subject {
-			bad = sub.Name
-		}
-		if sub.Current {
-			cur = sub.Name
-		}
-	}
-	switch {
-	case bad != "" && bad == cur:
-		// An update of the current subscription failed validation.
-		return i18n.Tf("「%s」更新后的配置未通过校验，已继续使用上次的配置。", bad)
-	case bad != "" && cur != "":
-		return i18n.Tf("「%s」的配置未通过校验，已继续使用「%s」。", bad, cur)
-	case bad != "":
-		return i18n.Tf("「%s」的配置未通过校验，当前配置保持不变。", bad)
-	default:
-		return i18n.T("配置未通过校验，当前配置保持不变。")
-	}
 }
