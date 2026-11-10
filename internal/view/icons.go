@@ -37,13 +37,14 @@ var icons = map[string]*ui.SVG{
 	"chevron":  svg(`<path d="M6 3.5L10.5 8 6 12.5"/>`),
 	"probe":    svg(`<path d="M8 1.8l5 1.9v4.1c0 3.2-2.1 5.3-5 6.4-2.9-1.1-5-3.2-5-6.4V3.7z"/><path d="M5.8 8.2l1.6 1.6 3-3.2"/>`),
 	"up":       svg(`<path d="M8 13V3M4 7l4-4 4 4"/>`),
+	"capture":  svg(`<rect x="3.5" y="7" width="9" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/><path d="M8 9.6v1.8"/>`),
 	"locate":   svg(`<circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/>`),
 }
 
 // pageIcons maps sidebar pages to their icon names.
 var pageIcons = map[string]string{
 	"overview": "overview", "proxies": "proxies", "subs": "subs", "conns": "conns",
-	"logs": "logs", "rules": "rules", "net": "net", "stats": "stats", "probe": "probe", "settings": "settings",
+	"logs": "logs", "rules": "rules", "net": "net", "stats": "stats", "probe": "probe", "capture": "capture", "settings": "settings",
 }
 
 // Icon returns the SVG of a named icon, nil if unknown.

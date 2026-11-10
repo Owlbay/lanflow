@@ -12,7 +12,7 @@ import (
 
 func TestHeadersAndPath(t *testing.T) {
 	h := Headers([]model.KV{{Key: "Authorization", Value: "Bearer abcdefghijklmnop"}, {Key: "X-Session-Id", Value: "123456789"}, {Key: "Accept", Value: "*/*"}})
-	if !strings.HasPrefix(h[0].Value, "Bear…(") || !strings.Contains(h[1].Value, "(9 字节)") || h[2].Value != "*/*" {
+	if !strings.HasPrefix(h[0].Value, "Bear…(") || !strings.Contains(h[1].Value, "(9 B)") || h[2].Value != "*/*" {
 		t.Fatal(h)
 	}
 	p := Path("/a?access_token=secretsecret&x=1")

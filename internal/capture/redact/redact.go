@@ -36,7 +36,8 @@ func SensitiveHeader(name string) bool {
 // SensitiveKey reports a query parameter, form field or JSON key masked by default.
 func SensitiveKey(name string) bool { return sensitiveName.MatchString(name) }
 
-// Mask shows the first four characters and the length: "abcd…(32 字节)".
+// Mask shows the first four characters and the length: "abcd…(32 B)";
+// values of eight bytes or less show only the length.
 func Mask(v string) string {
 	if v == "" {
 		return ""
@@ -53,7 +54,7 @@ func Mask(v string) string {
 	if len(v) <= 8 {
 		cut = 0
 	}
-	return fmt.Sprintf("%s…(%d 字节)", v[:cut], len(v))
+	return fmt.Sprintf("%s…(%d B)", v[:cut], len(v))
 }
 
 // Headers returns the headers with sensitive values masked.
@@ -80,7 +81,7 @@ func Path(p string) string {
 		if ok {
 			name, _ := url.QueryUnescape(k)
 			if SensitiveKey(name) {
-				parts[i] = k + "=" + url.QueryEscape(Mask(v))
+				parts[i] = k + "=" + Mask(v)
 			}
 		}
 	}
@@ -140,7 +141,11 @@ func Kind(contentType string, body []byte) string {
 // Body masks sensitive values of a JSON or form body (other bodies are
 // returned as they are: masking cannot cover arbitrary text, §7.3).
 func Body(body []byte, contentType string) []byte {
-	switch Kind(contentType, body) {
+	kind := Kind(contentType, body)
+	if kind == "json" && !json.Valid(body) && looksForm(body) {
+		kind = "form" // a mislabelled form
+	}
+	switch kind {
 	case "json":
 		var v any
 		if json.Unmarshal(body, &v) != nil {
@@ -152,20 +157,31 @@ func Body(body []byte, contentType string) []byte {
 		}
 		return b
 	case "form":
-		vals, err := url.ParseQuery(string(body))
-		if err != nil {
-			return body
-		}
-		for k, vs := range vals {
-			if SensitiveKey(k) {
-				for i := range vs {
-					vs[i] = Mask(vs[i])
-				}
+		// field by field, order kept, values shown unescaped
+		parts := strings.Split(string(body), "&")
+		for i, kv := range parts {
+			k, v, ok := strings.Cut(kv, "=")
+			name, err1 := url.QueryUnescape(k)
+			val, err2 := url.QueryUnescape(v)
+			if err1 != nil || err2 != nil {
+				name, val = k, v
+			}
+			if ok && SensitiveKey(name) {
+				val = Mask(val)
+			}
+			if ok {
+				parts[i] = name + "=" + val
+			} else {
+				parts[i] = name
 			}
 		}
-		return []byte(vals.Encode())
+		return []byte(strings.Join(parts, "&"))
 	}
 	return body
+}
+
+func looksForm(b []byte) bool {
+	return bytes.IndexByte(b, '=') > 0 && !bytes.ContainsAny(b, " \n\r\t{}\"")
 }
 
 func maskJSON(v any) any {

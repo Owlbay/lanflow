@@ -84,7 +84,7 @@ func (tr *tray) changed(t app.Topic) {
 	case app.TopicTraffic:
 		// Every second: only the speed beside the icon can have changed.
 		tr.setTitle(tr.s.api.Status())
-	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings:
+	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings, app.TopicCapture:
 		tr.refresh(false)
 	}
 }
@@ -109,7 +109,8 @@ func (tr *tray) refresh(force bool) {
 	tr.setTitle(st)
 
 	var sig strings.Builder
-	fmt.Fprintf(&sig, "%s|%v|%s|%s|%s|%s|", st.Core, st.SystemProxy, st.Mode, st.CurrentSubscription, acc, i18n.Lang())
+	capOn := tr.s.api.CaptureStatus().Enabled
+	fmt.Fprintf(&sig, "%s|%v|%s|%s|%s|%s|%v|", st.Core, st.SystemProxy, st.Mode, st.CurrentSubscription, acc, i18n.Lang(), capOn)
 	g, ok := mainGroup(px, st)
 	if ok {
 		fmt.Fprintf(&sig, "%s=%s;%v;", g.Name, g.Now, tr.menuIcon(g.Icon) != nil)
@@ -133,7 +134,11 @@ func (tr *tray) refresh(force bool) {
 		if runtime.GOOS != "windows" {
 			tr.t.SetMenu(menu)
 		}
-		tr.t.SetToolTip(i18n.T("澜流 Lanflow"))
+		tip := i18n.T("澜流 Lanflow")
+		if capOn {
+			tip += " · " + i18n.T("HTTPS 解密中")
+		}
+		tr.t.SetToolTip(tip)
 	} else if it := menu.ItemByID("status"); it != nil {
 		it.SetLabel(statusLine(st))
 	}
@@ -209,6 +214,7 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 				env.SetTUN(s.Env(), on)
 			}},
 		{Label: i18n.T("模式"), Submenu: tr.modeItems(st)},
+		tr.captureItem(),
 	}
 	if hasGroup {
 		items = append(items,
@@ -235,6 +241,23 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 		&mygo.MenuItem{Label: i18n.T("退出澜流"), Accelerator: "CmdOrCtrl+Q", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	)
 	return mygo.NewMenu(items)
+}
+
+// captureItem is 「HTTPS 解密」: unchecking turns decryption off at once;
+// checking opens the 抓包 page, where turning on is confirmed.
+func (tr *tray) captureItem() *mygo.MenuItem {
+	s := tr.s
+	on := s.api.CaptureStatus().Enabled
+	return &mygo.MenuItem{ID: "capture", Label: i18n.T("HTTPS 解密"), Type: mygo.MenuItemCheckbox, Checked: on,
+		Click: func(it *mygo.MenuItem, _ *mygo.Window) {
+			if !it.Checked {
+				s.run(func() error { return s.api.SetCapture(false) }, i18n.T("已关闭解密"))
+				return
+			}
+			it.Checked = false
+			s.ShowWindow()
+			s.navigate(env.Capture, "")
+		}}
 }
 
 // commandItems is the 复制终端代理命令 submenu: one entry per shell family.
@@ -306,6 +329,9 @@ func (tr *tray) setTitle(st model.Status) {
 	title := ""
 	if st.Core == model.CoreRunning && !tr.s.api.Settings().HideTraySpeed {
 		title = traySpeed(st.Up, st.Down)
+	}
+	if tr.s.api.CaptureStatus().Enabled {
+		title = strings.TrimSpace(i18n.T("解密中") + " " + title) // docs/capture.md §7.2 指示
 	}
 	if title == tr.title {
 		return

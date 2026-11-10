@@ -1,6 +1,7 @@
 package fake
 
 import (
+	"bytes"
 	"errors"
 	"sync"
 	"time"
@@ -22,10 +23,11 @@ type fakeCapture struct {
 	flows   []model.CaptureFlowDetail
 }
 
-var fcap fakeCapture
+var fcaps sync.Map // *Fake → *fakeCapture
 
 func (f *Fake) capInit() *fakeCapture {
-	c := &fcap
+	v, _ := fcaps.LoadOrStore(f, &fakeCapture{})
+	c := v.(*fakeCapture)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.init {
@@ -38,13 +40,17 @@ func (f *Fake) capInit() *fakeCapture {
 	now := time.Now()
 	png := sampleIcon("/Applications/Preview.app")
 	mk := func(id int64, method, host, path string, status int, ct string, req, resp []byte, proc string, flags ...string) model.CaptureFlowDetail {
+		reqCT := "application/json"
+		if bytes.Contains(req, []byte("grant_type=")) {
+			reqCT = "application/x-www-form-urlencoded"
+		}
 		f := model.CaptureFlow{ID: id, Start: now.Add(time.Duration(id-20) * time.Second), DurationMs: 40 + id*7, Process: proc,
 			ProcessPath: "/Applications/" + proc + ".app", Attribution: "certain", Selector: "api.github.com", Proto: "h2",
 			Method: method, Scheme: "https", Host: host, Port: 443, Path: path, Status: status, ContentType: ct,
 			ReqSize: int64(len(req)), RespSize: int64(len(resp)), Flags: append([]string{model.FlowDecrypted}, flags...), Done: true}
 		return model.CaptureFlowDetail{Flow: f,
 			ReqHeader: []model.KV{{Key: "user-agent", Value: proc + "/1.0"}, {Key: "authorization", Value: "Bearer ghp_abcdefghijklmnopqrstuvwxyz0123456789"},
-				{Key: "content-type", Value: "application/json"}, {Key: "cookie", Value: "session=0123456789abcdef"}},
+				{Key: "content-type", Value: reqCT}, {Key: "cookie", Value: "session=0123456789abcdef"}},
 			RespHeader: []model.KV{{Key: "content-type", Value: ct}, {Key: "set-cookie", Value: "sid=s3cr3t; HttpOnly"}},
 			ReqBody:    req, RespBody: resp, ReqBodySize: int64(len(req)), RespBodySize: int64(len(resp)),
 			TLS:    model.CaptureTLS{SNI: host, Version: "TLS 1.3", Cipher: "TLS_AES_128_GCM_SHA256", ALPN: "h2"},
