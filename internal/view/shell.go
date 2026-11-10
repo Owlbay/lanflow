@@ -941,7 +941,7 @@ func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 			switch st.Core {
 			case model.CoreRunning:
 				k.Dot(c, "green")
-				ui.Text(c, i18n.T("运行中 · ")+modeName(st.Mode)).FontSize(12).SingleLine()
+				ui.Text(c, i18n.T("运行中 · ")+env.ModeName(st.Mode)).FontSize(12).SingleLine()
 			case model.CoreStarting:
 				ui.Spinner(c).Size(12, 12).Label(i18n.T("启动中"))
 				ui.Text(c, i18n.T("启动中…")).FontSize(12)
@@ -972,17 +972,6 @@ func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 	})
 	if bar.Clicked() {
 		s.navigate(env.Overview, "")
-	}
-}
-
-func modeName(m model.Mode) string {
-	switch m {
-	case model.ModeGlobal:
-		return i18n.T("全局")
-	case model.ModeDirect:
-		return i18n.T("直连")
-	default:
-		return i18n.T("规则")
 	}
 }
 

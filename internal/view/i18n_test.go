@@ -244,7 +244,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	c.text("core download", env.CoreDownloadText(model.CoreDownload{Active: true, Phase: "下载", Version: "v1", Bytes: 1, Total: 2}))
 	c.text("core download", env.CoreDownloadText(model.CoreDownload{Active: true, Phase: "启动"}))
 	c.text("delay", env.FmtDelay(-1, false))
-	for _, s := range []string{env.RuleTypeName("DOMAIN"), env.TargetName("DIRECT"), env.TargetName("REJECT"), modeName(model.ModeRule)} {
+	for _, s := range []string{env.RuleTypeName("DOMAIN"), env.TargetName("DIRECT"), env.TargetName("REJECT"), env.ModeName(model.ModeRule)} {
 		c.text("format", s)
 	}
 }

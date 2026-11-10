@@ -277,9 +277,9 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r row, col, q string) {
 			if withIcon {
 				p.icons.Draw(c, t, r.Detail, procicon.Size)
 			}
-			highlight(c, r.name, q, t.Text, t).SingleLine().Shrink(1)
+			env.Highlight(c, r.name, q, t.Text).SingleLine().Shrink(1)
 			if r.detail != "" && r.detail != r.name {
-				highlight(c, r.detail, q, t.TextMuted, t).FontSize(11).SingleLine().Shrink(2)
+				env.Highlight(c, r.detail, q, t.TextMuted).FontSize(11).SingleLine().Shrink(2)
 			}
 		})
 	case "req":
@@ -415,28 +415,6 @@ func sortRows(rows []row, s ui.SortOrder) {
 		}
 		return less(a, b)
 	})
-}
-
-// highlight draws text with the matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
 }
 
 // Topics are the service topics this page's view reads; the shell

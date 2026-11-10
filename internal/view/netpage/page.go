@@ -163,18 +163,6 @@ func (p *Page) flushToast() {
 
 // ---- exit cards ----
 
-func (p *Page) card(c *ui.Context, t *ui.Theme, title string, right func(), body func()) {
-	ui.Column(c).Grow(1).Basis(0).Padding(14).Gap(10).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, title).Bold().FontSize(13).Grow(1)
-			if right != nil {
-				right()
-			}
-		})
-		body()
-	})
-}
-
 // retest refreshes everything on the page: network info and public IP
 // (RefreshNetwork also re-measures the main exit), then the sites.
 func (p *Page) retest() {
@@ -192,7 +180,7 @@ func (p *Page) directCard(c *ui.Context, t *ui.Theme) {
 	you := e.API.You()
 	n := e.API.NetInfo()
 	fetching := n.PublicIPStatus == "fetching"
-	p.card(c, t, i18n.T("直连 · 本机公网"), func() {
+	env.InfoCard(c, i18n.T("直连 · 本机公网"), func() {
 		if you != nil && !fetching {
 			e.Kit.Tag(c, i18n.T("实测"), "green")
 		}
@@ -252,7 +240,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 	if group != "" {
 		title += " · " + group
 	}
-	p.card(c, t, title, func() {
+	env.InfoCard(c, title, func() {
 		if main != nil {
 			link := env.LinkText(c, i18n.T("在地图中查看"), "").FontSize(11)
 			if link.Clicked() {
@@ -281,7 +269,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 		}
 		ui.Text(c, ip).FontSize(20).FontFeatures("tnum").Selectable()
 		kvGrid(c, func() {
-			p.kvCell(c, t, i18n.T("节点"), flag(x.Place)+main.Node, nil)
+			p.kvCell(c, t, i18n.T("节点"), flagOf(x.Place)+main.Node, nil)
 			p.kvCell(c, t, i18n.T("位置"), placeName(x.Place), func() {
 				switch x.Source {
 				case model.LocateProbe:
@@ -292,7 +280,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 			})
 			if x.Source == model.LocateProbe {
 				p.kvCell(c, t, i18n.T("运营商"), ispText(x.Exit), nil)
-				p.kvCell(c, t, i18n.T("CF 机房"), dash(x.Colo), nil)
+				p.kvCell(c, t, i18n.T("CF 机房"), env.Dash(x.Colo), nil)
 			}
 		})
 		p.pathRow(c, t, x)
@@ -329,16 +317,6 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 			}
 		default:
 			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
-		}
-	})
-}
-
-func (p *Page) kv(c *ui.Context, t *ui.Theme, k, v string, extra func()) {
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, k).Width(56).Shrink(0).FontSize(12).TextColor(t.TextMuted).SingleLine()
-		ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable().SingleLine().Shrink(1)
-		if extra != nil {
-			extra()
 		}
 	})
 }
@@ -475,11 +453,11 @@ func (p *Page) localSection(c *ui.Context, t *ui.Theme) {
 			ipv6 = i18n.T("未分配公网地址")
 		}
 		kvGrid(c, func() {
-			p.kvCell(c, t, i18n.T("网络接口"), dash(n.Interface), nil)
-			p.kvCell(c, t, i18n.T("Wi-Fi 名称"), dash(n.SSID), nil)
-			p.kvCell(c, t, i18n.T("局域网 IP"), dash(n.LANIP), nil)
-			p.kvCell(c, t, i18n.T("网关"), dash(n.Gateway), nil)
-			p.kvCell(c, t, i18n.T("系统 DNS"), dash(strings.Join(n.DNS, ", ")), nil)
+			p.kvCell(c, t, i18n.T("网络接口"), env.Dash(n.Interface), nil)
+			p.kvCell(c, t, i18n.T("Wi-Fi 名称"), env.Dash(n.SSID), nil)
+			p.kvCell(c, t, i18n.T("局域网 IP"), env.Dash(n.LANIP), nil)
+			p.kvCell(c, t, i18n.T("网关"), env.Dash(n.Gateway), nil)
+			p.kvCell(c, t, i18n.T("系统 DNS"), env.Dash(strings.Join(n.DNS, ", ")), nil)
 			p.kvCell(c, t, "IPv6", ipv6, nil)
 		})
 	})
@@ -520,16 +498,16 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 		if st.TUN {
 			tun = i18n.T("已开启")
 		}
-		p.kv(c, t, i18n.T("监听端口"), port+" · "+i18n.T("TUN 模式")+" "+tun, nil)
+		env.KV(c, i18n.T("监听端口"), port+" · "+i18n.T("TUN 模式")+" "+tun, 56, true, nil)
 		// 嗅探 and DNS report the effective config (docs/design.md:463): the
 		// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
 		snf := i18n.T("未开启")
 		if p.snifferOn {
 			snf = i18n.T("已开启") + " · " + sourceName(p.effSniffer.Source)
 		}
-		p.kv(c, t, i18n.T("嗅探"), snf, nil)
-		p.kv(c, t, "DNS", dnsStatusText(p.effDNS), nil)
-		p.kv(c, t, i18n.T("控制接口"), i18n.T("本机套接字，仅澜流可访问"), nil)
+		env.KV(c, i18n.T("嗅探"), snf, 56, true, nil)
+		env.KV(c, "DNS", dnsStatusText(p.effDNS), 56, true, nil)
+		env.KV(c, i18n.T("控制接口"), i18n.T("本机套接字，仅澜流可访问"), 56, true, nil)
 		if a := st.ATrust; a.Running {
 			p.kvRich(c, t, i18n.T("aTrust 兼容"), func() {
 				e.Kit.Dot(c, "green")
@@ -860,11 +838,12 @@ func (p *Page) query() {
 
 // ---- helpers ----
 
-func dash(s string) string {
-	if s == "" {
-		return "—"
+// flagOf is the flag of a place's country and a space, "" when unknown.
+func flagOf(pl *model.Place) string {
+	if pl == nil {
+		return ""
 	}
-	return s
+	return env.FlagPrefix(pl.Country)
 }
 
 func placeName(pl *model.Place) string {
@@ -881,7 +860,7 @@ func placeText(pl *model.Place) string {
 	if pl == nil {
 		return i18n.T("未知")
 	}
-	return flag(pl) + placeName(pl)
+	return flagOf(pl) + placeName(pl)
 }
 
 func ispText(ep model.EndpointInfo) string {
@@ -894,23 +873,6 @@ func ispText(ep model.EndpointInfo) string {
 		return ep.ISP
 	}
 	return ep.ISP + " " + ep.ASN
-}
-
-// flag returns the regional-indicator flag of a place's country followed
-// by a space, or "" when unknown.
-func flag(pl *model.Place) string {
-	if pl == nil || len(pl.Country) != 2 {
-		return ""
-	}
-	cc := strings.ToUpper(pl.Country)
-	var b strings.Builder
-	for _, r := range cc {
-		if r < 'A' || r > 'Z' {
-			return ""
-		}
-		b.WriteRune(0x1F1E6 + r - 'A')
-	}
-	return b.String() + " "
 }
 
 func hostOf(url string) string {

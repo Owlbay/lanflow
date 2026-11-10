@@ -316,30 +316,8 @@ func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry) {
 	ui.Row(c).MinHeight(22).Gap(10).PaddingX(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, l.Time.Format("15:04:05")).TextColor(timeColor).FontFeatures("tnum").Unselectable()
 		ui.Text(c, levelName(l.Level)).Width(28).TextColor(color).Unselectable()
-		highlight(c, l.Payload, strings.TrimSpace(p.query), color, t).Grow(1).SingleLine()
+		env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color).Grow(1).SingleLine()
 	})
-}
-
-// highlight draws text with the case-insensitive matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
 }
 
 // Topics are the service topics this page's view reads; the shell

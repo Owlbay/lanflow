@@ -312,7 +312,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 	box.Children(func() {
 		switch col {
 		case "host":
-			highlight(c, cn.Host, q, t.Text, t).SingleLine()
+			env.Highlight(c, cn.Host, q, t.Text).SingleLine()
 		case "process":
 			name := cn.Process
 			if name == "" {
@@ -322,12 +322,12 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 				if cn.Process != "" {
 					p.icons.Draw(c, t, cn.ProcessPath, procicon.Size)
 				}
-				highlight(c, name, q, muted, t).SingleLine().Shrink(1)
+				env.Highlight(c, name, q, muted).SingleLine().Shrink(1)
 			})
 		case "rule":
-			highlight(c, ruleName(cn), q, muted, t).SingleLine()
+			env.Highlight(c, ruleName(cn), q, muted).SingleLine()
 		case "chain":
-			highlight(c, chain(cn), q, t.Text, t).SingleLine()
+			env.Highlight(c, chain(cn), q, t.Text).SingleLine()
 		case "down":
 			speed(c, t, cn.DownSpeed)
 		case "up":
@@ -409,13 +409,13 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bo
 				}
 				kv(i18n.T("源地址"), src)
 				kv(i18n.T("目标地址"), cn.Host)
-				kv(i18n.T("目标 IP"), dash(cn.DstIP))
+				kv(i18n.T("目标 IP"), env.Dash(cn.DstIP))
 				if cn.RemoteDestination != "" && cn.RemoteDestination != cn.DstIP {
 					kv(i18n.T("实际连接"), cn.RemoteDestination)
 				}
-				p.kv(c, t, i18n.T("进程"), dash(cn.Process), cn.ProcessPath)
+				p.kv(c, t, i18n.T("进程"), env.Dash(cn.Process), cn.ProcessPath)
 				kv(i18n.T("规则"), ruleName(cn))
-				kv(i18n.T("规则载荷"), dash(cn.RulePayload))
+				kv(i18n.T("规则载荷"), env.Dash(cn.RulePayload))
 				kv(i18n.T("链路"), chain(cn))
 				kv(i18n.T("下行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.DownSpeed), env.FmtBytes(cn.Download)))
 				kv(i18n.T("上行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.UpSpeed), env.FmtBytes(cn.Upload)))
@@ -617,13 +617,6 @@ func chain(cn model.Connection) string {
 	return strings.Join(cn.Chains, " › ")
 }
 
-func dash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
-}
-
 func hostOnly(h string) string {
 	if i := strings.LastIndex(h, ":"); i > 0 && strings.Count(h, ":") == 1 {
 		return h[:i]
@@ -643,28 +636,6 @@ func isIP(h string) bool {
 		}
 	}
 	return strings.ContainsAny(h, ".:")
-}
-
-// highlight draws text with the case-insensitive matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
 }
 
 // Topics are the service topics this page's view reads; the shell

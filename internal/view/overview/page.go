@@ -260,7 +260,7 @@ func (p *Page) modeRows(c *ui.Context, st model.Status, pm *model.Mode, busy boo
 					p.pendingMode = nil
 					p.mu.Unlock()
 					return err
-				}, i18n.Tf("已切换到%s模式", modeName(m)))
+				}, i18n.Tf("已切换到%s模式", env.ModeName(m)))
 			})
 		})
 	}
@@ -275,17 +275,6 @@ func modeIndex(m model.Mode) int {
 		}
 	}
 	return 0
-}
-
-func modeName(m model.Mode) string {
-	switch m {
-	case model.ModeGlobal:
-		return i18n.T("全局")
-	case model.ModeDirect:
-		return i18n.T("直连")
-	default:
-		return i18n.T("规则")
-	}
 }
 
 // row is a settings row with a fixed-width label, middle content and a

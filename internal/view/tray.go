@@ -256,9 +256,9 @@ func (tr *tray) modeItems(st model.Status) []*mygo.MenuItem {
 	var out []*mygo.MenuItem
 	for _, m := range []model.Mode{model.ModeRule, model.ModeGlobal, model.ModeDirect} {
 		mode := m
-		out = append(out, &mygo.MenuItem{Label: modeName(m), Type: mygo.MenuItemRadio, Checked: st.Mode == m,
+		out = append(out, &mygo.MenuItem{Label: env.ModeName(m), Type: mygo.MenuItemRadio, Checked: st.Mode == m,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				s.run(func() error { return s.api.SetMode(mode) }, i18n.Tf("已切换到%s模式", modeName(mode)))
+				s.run(func() error { return s.api.SetMode(mode) }, i18n.Tf("已切换到%s模式", env.ModeName(mode)))
 			}})
 	}
 	return out

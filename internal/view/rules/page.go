@@ -172,7 +172,7 @@ func (p *Page) customRows(c *ui.Context, t *ui.Theme, list, all []model.CustomRu
 			h, hasHit := hits[r.Type+","+r.Payload]
 			ui.Row(c.Key(r.ID)).Gap(10).MinHeight(40).PaddingX(12).Children(func() {
 				e.Kit.Tag(c, env.RuleTypeName(rule.Type), "gray")
-				highlight(c, rule.Payload, q, t.Text, t).Font("monospace").Grow(1).SingleLine()
+				env.Highlight(c, rule.Payload, q, t.Text).Font("monospace").Grow(1).SingleLine()
 				ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
 				hitText := i18n.T("命中 0")
 				if hasHit {
@@ -329,13 +329,13 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 	case "#":
 		fade(ui.Text(c, fmt.Sprint(r.Index+1)).TextColor(muted).FontFeatures("tnum"))
 	case "type":
-		fade(highlight(c, r.Type, q, muted, t).SingleLine())
+		fade(env.Highlight(c, r.Type, q, muted).SingleLine())
 	case "payload":
 		ui.Row(c).Gap(6).Children(func() {
 			if r.Payload == "" {
 				fade(ui.Text(c, "—").TextColor(muted))
 			} else {
-				fade(highlight(c, r.Payload, q, t.Text, t).Font("monospace").SingleLine())
+				fade(env.Highlight(c, r.Payload, q, t.Text).Font("monospace").SingleLine())
 			}
 			if r.Size > 0 {
 				fade(ui.Text(c, i18n.Tf("%s 条", env.FmtInt(int64(r.Size)))).FontSize(11).TextColor(muted).FontFeatures("tnum"))
@@ -345,7 +345,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 			}
 		})
 	case "policy":
-		fade(highlight(c, env.TargetName(r.Proxy), q, t.Text, t).SingleLine())
+		fade(env.Highlight(c, env.TargetName(r.Proxy), q, t.Text).SingleLine())
 	case "hits":
 		if r.HitCount == 0 {
 			fade(ui.Text(c, "0").TextColor(muted).FontFeatures("tnum"))
@@ -522,28 +522,6 @@ func (p *Page) runTest() {
 }
 
 // ---- helpers ----
-
-// highlight draws text with the case-insensitive matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
-}
 
 // Topics are the service topics this page's view reads; the shell
 // rebuilds it only for these (and its own).

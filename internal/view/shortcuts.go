@@ -195,5 +195,5 @@ func (s *Shell) runShortcut(action string) {
 }
 
 func (s *Shell) setModeShortcut(mode model.Mode) {
-	s.run(func() error { return s.api.SetMode(mode) }, i18n.Tf("已切换到%s模式", modeName(mode)))
+	s.run(func() error { return s.api.SetMode(mode) }, i18n.Tf("已切换到%s模式", env.ModeName(mode)))
 }
