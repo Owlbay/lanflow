@@ -23,7 +23,7 @@ func init() {
 		"已重命名":        "Renamed",
 		"重命名…":        "Rename…",
 		"下移":          "Move Down",
-		"启用 ":         "Enable ",
+		"启用 %s":       "Enable %s",
 		" · 链接":       " · link",
 		"删除覆写「%s」？":   "Delete the override \"%s\"?",
 		"使用它的订阅会重新生成配置。此操作无法撤销。": "Subscriptions using it regenerate their config. This cannot be undone.",
@@ -31,13 +31,13 @@ func init() {
 		"请输入以 http:// 或 https:// 开头的链接。": "Enter a link starting with http:// or https://.",
 		"订阅使用的覆写":                        "Overrides per Subscription",
 		"每个订阅可以额外选择要应用的覆写；全局覆写始终应用":      "Each subscription can pick extra overrides to apply; global overrides always apply",
-		"选择…":     "Choose…",
-		"选择覆写 · ": "Choose Overrides · ",
+		"选择…":       "Choose…",
+		"选择… %s":    "Choose… %s",
+		"选择覆写 · %s": "Choose Overrides · %s",
 		"勾选的覆写按列表顺序应用于这个订阅；全局覆写始终应用。": "The checked overrides apply to this subscription in list order; global overrides always apply.",
-		"（全局）":    " (global)",
-		"仅全局覆写":   "Global overrides only",
-		"全局覆写 + ": "Global overrides + ",
-
+		"%s（全局）":    "%s (global)",
+		"仅全局覆写":     "Global overrides only",
+		"全局覆写 + %s": "Global overrides + %s",
 		// override list (app)
 		"覆写不存在，可能已被删除。": "The override does not exist; it may have been deleted.",
 		" 覆写":      " override",
@@ -66,9 +66,8 @@ func init() {
 		"切换后立即断开经过该代理组的连接，让它们改走新节点":       "Closes the connections going through the group right after a switch, so they reconnect through the new node",
 
 		// proxies page
-		"定位当前节点":  "Locate Current Node",
-		"定位当前节点 ": "Locate current node of ",
-
+		"定位当前节点":    "Locate Current Node",
+		"定位当前节点 %s": "Locate current node of %s",
 		// subscriptions
 		"打开官网":     "Open Website",
 		"下载超时（秒）":  "Download timeout (s)",

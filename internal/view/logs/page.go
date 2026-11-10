@@ -125,7 +125,7 @@ func (p *Page) View(c *ui.Context) {
 			if len(vis) == 0 {
 				switch {
 				case strings.TrimSpace(p.query) != "":
-					e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的日志"), strings.TrimSpace(p.query)), "", nil)
+					e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的日志", strings.TrimSpace(p.query)), "", nil)
 				case p.paused:
 					e.Kit.Empty(c, "logs", i18n.T("暂无日志"), i18n.T("已暂停。按「继续」恢复接收新日志。"), nil)
 				case p.isApp():
@@ -251,7 +251,7 @@ func ExportDiagnostics(e *env.Env) {
 		}
 		mygo.Shell.ShowItemInFolder(path)
 		return nil
-	}, i18n.T("已导出到 ")+filepath.Base(path))
+	}, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }
 
 // revealLogFile selects the log file in the file manager; before it has

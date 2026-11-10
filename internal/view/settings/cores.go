@@ -96,11 +96,11 @@ func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, 
 	case dl.Error != "":
 		versionDesc = dl.Error
 	case latest != "":
-		versionDesc = i18n.T("有新版本 ") + latest
+		versionDesc = i18n.Tf("有新版本 %s", latest)
 	case hasActive && active.Bundled:
 		versionDesc = i18n.T("应用自带的内核")
 	case hasActive:
-		versionDesc = channelLabel(active.Channel) + " · " + i18n.T("安装于 ") + active.InstalledAt.Format("2006-01-02")
+		versionDesc = channelLabel(active.Channel) + " · " + i18n.Tf("安装于 %s", active.InstalledAt.Format("2006-01-02"))
 	case s.CorePath != "":
 		versionDesc = i18n.T("自定义内核文件")
 	}
@@ -127,7 +127,7 @@ func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, 
 					return
 				}
 				if latest != "" {
-					ui.PrimaryButton(c, i18n.T("更新到 ")+latest).OnClick(func() { p.updateCore(latest) })
+					ui.PrimaryButton(c, i18n.Tf("更新到 %s", latest)).OnClick(func() { p.updateCore(latest) })
 				}
 				label := i18n.T("检查更新")
 				if p.checking {

@@ -79,7 +79,7 @@ func (p *Page) View(c *ui.Context) {
 	st := e.API.TrafficStats(rangeKeys[p.rng])
 	subtitle := ""
 	if p.rng == len(rangeKeys)-1 && !st.Since.IsZero() {
-		subtitle = fmt.Sprintf(i18n.T("自 %s 起"), st.Since.Format("2006-01-02"))
+		subtitle = i18n.Tf("自 %s 起", st.Since.Format("2006-01-02"))
 	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("统计"), subtitle, func() { p.tools(c) })
@@ -144,7 +144,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			ui.Spacer(c)
 			legend(c, t, i18n.T("下载"), t.Accent)
 			legend(c, t, i18n.T("上传"), t.TextMuted.Alpha(0.55))
-			ui.Text(c, i18n.T("峰值 ")+env.FmtBytes(peak)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+			ui.Text(c, i18n.Tf("峰值 %s", env.FmtBytes(peak))).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 		})
 		box := ui.Box(c).Height(104).FillWidth().Label(title)
 		px, _, hovering := box.PointerPosition()
@@ -184,7 +184,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			}
 			if hover >= 0 {
 				s := series[hover]
-				tip := fmt.Sprintf(i18n.T("%s · ↓ %s ↑ %s · %d 次请求"), tipTime(s.Time, st.Hourly), env.FmtBytes(s.Download), env.FmtBytes(s.Upload), s.Requests)
+				tip := i18n.Tf("%s · ↓ %s ↑ %s · %d 次请求", tipTime(s.Time, st.Hourly), env.FmtBytes(s.Download), env.FmtBytes(s.Upload), s.Requests)
 				tw, _ := pt.MeasureText(0, ui.Span{Text: tip, Size: 11})
 				tx := min(max(r.X+px+10, r.X), r.X+r.W-tw-8)
 				pt.Fill(ui.Rect{X: tx - 6, Y: r.Y + 2, W: tw + 12, H: 20}, t.Background, 6)
@@ -242,7 +242,7 @@ func (p *Page) table(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 	q := strings.TrimSpace(p.query)
 	if len(rows) == 0 {
 		if q != "" {
-			e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的项目"), q), "", nil)
+			e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的项目", q), "", nil)
 		} else {
 			e.Kit.Empty(c, "stats", i18n.T("此范围内暂无数据"), "", nil)
 		}

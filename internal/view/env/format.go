@@ -100,9 +100,9 @@ func FmtDuration(d time.Duration) string {
 func FmtUptime(d time.Duration) string {
 	h, m := int(d.Hours()), int(d.Minutes())%60
 	if h > 0 {
-		return fmt.Sprintf(i18n.T("%d 小时 %d 分"), h, m)
+		return i18n.Tf("%d 小时 %d 分", h, m)
 	}
-	return fmt.Sprintf(i18n.T("%d 分钟"), m)
+	return i18n.Tf("%d 分钟", m)
 }
 
 // FmtAgo formats a past time: "刚刚", "5 分钟前", "今天 10:21", "昨天", "2026-11-01"; "—" for zero.
@@ -116,9 +116,9 @@ func FmtAgo(t time.Time) string {
 	case d < time.Minute:
 		return i18n.T("刚刚")
 	case d < time.Hour:
-		return fmt.Sprintf(i18n.T("%d 分钟前"), int(d.Minutes()))
+		return i18n.Tf("%d 分钟前", int(d.Minutes()))
 	case t.YearDay() == now.YearDay() && t.Year() == now.Year():
-		return i18n.T("今天 ") + t.Format("15:04")
+		return i18n.Tf("今天 %s", t.Format("15:04"))
 	case t.Year() == now.Year() && now.YearDay()-t.YearDay() == 1:
 		return i18n.T("昨天")
 	default:

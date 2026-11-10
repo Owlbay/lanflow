@@ -4,7 +4,6 @@
 package conns
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -247,7 +246,7 @@ func (p *Page) tools(c *ui.Context, running bool, n int) {
 	}
 	ui.Segmented(c.Key("view"), &p.view, i18n.T("列表"), i18n.T("拓扑")).Label(i18n.T("连接视图"))
 	ui.Button(c, i18n.T("全部断开")).Disabled(!running || n == 0).OnClick(func() {
-		e.Confirm(fmt.Sprintf(i18n.T("断开全部 %d 个连接？"), n), i18n.T("应用会自动重新建立需要的连接。"), i18n.T("断开"), false, func() {
+		e.Confirm(i18n.Tf("断开全部 %d 个连接？", n), i18n.T("应用会自动重新建立需要的连接。"), i18n.T("断开"), false, func() {
 			p.sel = ""
 			e.Run(e.API.CloseAllConnections, i18n.T("已断开全部连接"))
 		})
@@ -264,7 +263,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 	if len(rows) == 0 {
 		switch {
 		case strings.TrimSpace(p.query) != "":
-			p.e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的连接"), strings.TrimSpace(p.query)), "", nil)
+			p.e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的连接", strings.TrimSpace(p.query)), "", nil)
 		case p.tab == 1:
 			p.e.Kit.Empty(c, "conns", i18n.T("暂无已关闭连接"), i18n.T("断开的连接会在这里保留最近 500 条，仅保存在内存中。"), nil)
 		default:
@@ -398,7 +397,7 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bo
 				meta += " · " + cn.Type
 			}
 			if !cn.ClosedAt.IsZero() {
-				meta += i18n.T(" · 已关闭 ") + env.FmtAgo(cn.ClosedAt)
+				meta += i18n.Tf(" · 已关闭 %s", env.FmtAgo(cn.ClosedAt))
 			}
 			ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted)
 			ui.Column(c).Gap(6).Selectable().Children(func() {

@@ -90,7 +90,7 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 	if len(conns) == 0 {
 		tp.graph = nil
 		if strings.TrimSpace(p.query) != "" {
-			p.e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的连接"), strings.TrimSpace(p.query)), "", nil)
+			p.e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的连接", strings.TrimSpace(p.query)), "", nil)
 		} else {
 			p.e.Kit.Empty(c, "conns", i18n.T("暂无活动连接"), i18n.T("有连接经过澜流时，这里会画出它们从设备到目标的路径。"), nil)
 		}
@@ -384,7 +384,7 @@ func topoDescription(g *Graph) string {
 		nodes = append(nodes, g.Nodes[ni].Label)
 	}
 	if len(nodes) > 0 {
-		b.WriteString(i18n.T("节点：") + strings.Join(nodes, i18n.T("、")))
+		b.WriteString(i18n.Tf("节点：%s", strings.Join(nodes, i18n.T("、"))))
 	}
 	return b.String()
 }

@@ -18,7 +18,7 @@ func init() {
 		"%d 个连接 · %s": "%d connections · %s",
 		"%d 个连接 · ↓ %s ↑ %s · 共 %s":      "%d connections · ↓ %s ↑ %s · %s total",
 		"%d 个连接的流向，从来源经进程、规则、代理组、节点到目标。": "Where %d connections flow, from source through process, rule, proxy group and node to destination.",
-		"节点：": "Nodes: ",
+		"节点：%s": "Nodes: %s",
 		"有连接经过澜流时，这里会画出它们从设备到目标的路径。": "When connections go through Lanflow, their paths from the device to the destination are drawn here.",
 	} {
 		en[k] = v

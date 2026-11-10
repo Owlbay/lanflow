@@ -140,7 +140,7 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 					meta = "· " + st.CoreVersion
 				}
 				if !st.StartedAt.IsZero() {
-					meta += i18n.T(" · 已运行 ") + env.FmtUptime(time.Since(st.StartedAt))
+					meta += i18n.Tf(" · 已运行 %s", env.FmtUptime(time.Since(st.StartedAt)))
 				}
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 			case model.CoreStarting:
@@ -324,7 +324,7 @@ func (p *Page) missingBanner(c *ui.Context, st model.Status) {
 	}
 	msg := i18n.T("未找到 Mihomo 内核：内核文件不存在或无法执行。可下载官方内核，或选择本机已有的内核文件。")
 	if st.CoreError != "" {
-		msg = i18n.T("未找到 Mihomo 内核：") + st.CoreError
+		msg = i18n.Tf("未找到 Mihomo 内核：%s", st.CoreError)
 	}
 	if dl.Error != "" {
 		msg = dl.Error
@@ -397,7 +397,7 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 			traffic := i18n.T("无流量信息")
 			switch {
 			case cur.Total > 0:
-				traffic = fmt.Sprintf(i18n.T("已用 %s / %s GB"), env.FmtGB(used), env.FmtGB(cur.Total))
+				traffic = i18n.Tf("已用 %s / %s GB", env.FmtGB(used), env.FmtGB(cur.Total))
 			case cur.Source == "file":
 				traffic = i18n.T("本地文件 · 无流量信息")
 			}
@@ -428,9 +428,9 @@ func expiryText(expire, now time.Time, t *ui.Theme) (string, ui.Color) {
 	case expire.Before(now):
 		return i18n.T("已过期"), t.Danger
 	case expire.Sub(now) < 7*24*time.Hour:
-		return i18n.T("到期 ") + expire.Format("2006-01-02"), t.Warning
+		return i18n.Tf("到期 %s", expire.Format("2006-01-02")), t.Warning
 	default:
-		return i18n.T("到期 ") + expire.Format("2006-01-02"), t.TextMuted
+		return i18n.Tf("到期 %s", expire.Format("2006-01-02")), t.TextMuted
 	}
 }
 
@@ -463,7 +463,7 @@ func (p *Page) speedCard(c *ui.Context, st model.Status) {
 			ui.Row(c).Gap(4).Children(func() {
 				foot := "—"
 				if run {
-					foot = fmt.Sprintf(i18n.T("本次 ↑ %s ↓ %s · 连接 %d · 内存 %s"), env.FmtBytes(st.TotalUp), env.FmtBytes(st.TotalDown), st.Connections, env.FmtBytes(st.Memory))
+					foot = i18n.Tf("本次 ↑ %s ↓ %s · 连接 %d · 内存 %s", env.FmtBytes(st.TotalUp), env.FmtBytes(st.TotalDown), st.Connections, env.FmtBytes(st.Memory))
 				}
 				ui.Text(c, foot).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 			})

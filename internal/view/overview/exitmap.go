@@ -1,7 +1,6 @@
 package overview
 
 import (
-	"fmt"
 	"math"
 	"sort"
 	"strings"
@@ -572,7 +571,7 @@ func mapDescription(you *model.Place, rs []route, dests map[string][]dest) strin
 		b.WriteString(i18n.Tf("到%s", strings.Join(cities, i18n.T("、"))))
 	}
 	if len(countries) > 0 {
-		b.WriteString(i18n.T("；目标国家：") + strings.Join(countries, i18n.T("、")))
+		b.WriteString(i18n.Tf("；目标国家：%s", strings.Join(countries, i18n.T("、"))))
 	}
 	return b.String()
 }
@@ -903,9 +902,9 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 				pt.Fill(circle(ed.x, ed.y, exitRadius), routeColor(ed.r, t).Alpha(a), exitRadius)
 			}
 			if you != nil && yvis > 0 {
-				txt := i18n.T("你 · ") + you.City
+				txt := i18n.Tf("你 · %s", you.City)
 				if guessed {
-					txt += i18n.T("（推测）")
+					txt = i18n.Tf("你 · %s（推测）", you.City)
 				}
 				placeLabel(pt, b, r, yx, yy, youRadius+2+youPulse, txt, t.Text.Alpha(0.5+0.5*yvis), back, labelSize, true, true)
 			}
@@ -985,7 +984,7 @@ func pathNote(ex model.ExitInfo, t *ui.Theme) (string, ui.Color) {
 	case ex.Source != model.LocateProbe:
 		return "", ui.Color{}
 	case ex.Path == model.PathRelay:
-		return i18n.T("经中转 · ") + ex.PathNote, t.TextMuted
+		return i18n.Tf("经中转 · %s", ex.PathNote), t.TextMuted
 	default:
 		return ex.PathNote, t.TextMuted
 	}
@@ -1058,7 +1057,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 			if note, col := pathNote(rt.Exit, t); note != "" {
 				ui.Text(c, note).FontSize(11).TextColor(col)
 			}
-			ui.Text(c, fmt.Sprintf(i18n.T("%s · %d 个连接"), env.FmtSpeed(rt.Speed), rt.Connections)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+			ui.Text(c, i18n.Tf("%s · %d 个连接", env.FmtSpeed(rt.Speed), rt.Connections)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 		})
 		if item.Clicked() {
 			p.e.Navigate(env.Proxies, rt.Group)

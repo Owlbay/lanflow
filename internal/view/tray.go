@@ -162,7 +162,7 @@ func mainGroup(px model.ProxySnapshot, st model.Status) (model.ProxyGroup, bool)
 func statusLine(st model.Status) string {
 	switch st.Core {
 	case model.CoreRunning:
-		return i18n.T("● 运行中 · ↓ ") + env.FmtSpeed(st.Down)
+		return i18n.Tf("● 运行中 · ↓ %s", env.FmtSpeed(st.Down))
 	case model.CoreStarting:
 		return i18n.T("◌ 启动中…")
 	case model.CoreError:
@@ -212,7 +212,7 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 	}
 	if hasGroup {
 		items = append(items,
-			&mygo.MenuItem{Label: fmt.Sprintf(i18n.T("%s：%s"), g.Name, g.Now), Disabled: !run, Icon: tr.menuIcon(g.Icon), Submenu: tr.nodeItems(g, px)},
+			&mygo.MenuItem{Label: i18n.Tf("%s：%s", g.Name, g.Now), Disabled: !run, Icon: tr.menuIcon(g.Icon), Submenu: tr.nodeItems(g, px)},
 			&mygo.MenuItem{Label: i18n.T("测试当前组延迟"), Disabled: !run, Click: func(*mygo.MenuItem, *mygo.Window) {
 				name := g.Name
 				s.run(func() error { return s.api.TestGroupDelay(name) }, i18n.Tf("「%s」测速完成", name))
@@ -226,7 +226,7 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 		}
 	}
 	items = append(items,
-		&mygo.MenuItem{Label: i18n.T("订阅：") + curSub, Disabled: len(subs) == 0, Submenu: tr.subItems(subs)},
+		&mygo.MenuItem{Label: i18n.Tf("订阅：%s", curSub), Disabled: len(subs) == 0, Submenu: tr.subItems(subs)},
 		mygo.Separator(),
 		&mygo.MenuItem{Label: i18n.T("复制终端代理命令"), Submenu: tr.commandItems(st.MixedPort)},
 		&mygo.MenuItem{Label: i18n.T("打开澜流"), Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { s.ShowWindow() }},
@@ -275,7 +275,7 @@ func (tr *tray) nodeItems(g model.ProxyGroup, px model.ProxySnapshot) []*mygo.Me
 		}
 		out = append(out, &mygo.MenuItem{Label: label, Type: mygo.MenuItemRadio, Checked: g.Now == n, Disabled: g.Type != model.GroupSelect,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				s.run(func() error { return s.api.SelectProxy(g.Name, name) }, i18n.T("已切换到 ")+name)
+				s.run(func() error { return s.api.SelectProxy(g.Name, name) }, i18n.Tf("已切换到 %s", name))
 			}})
 	}
 	return out
@@ -288,7 +288,7 @@ func (tr *tray) subItems(subs []model.Subscription) []*mygo.MenuItem {
 		id, name := sub.ID, sub.Name
 		out = append(out, &mygo.MenuItem{Label: sub.Name, Type: mygo.MenuItemRadio, Checked: sub.Current,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				s.run(func() error { return s.api.UseSubscription(id) }, i18n.T("已切换到 ")+name)
+				s.run(func() error { return s.api.UseSubscription(id) }, i18n.Tf("已切换到 %s", name))
 			}})
 	}
 	return out

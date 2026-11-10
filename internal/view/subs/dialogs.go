@@ -110,7 +110,7 @@ func (p *Page) rawView(c *ui.Context) {
 	p.mu.Unlock()
 	ui.Modal(c, &d.open, func() {
 		ui.Column(c.Key("raw")).Width(640).Gap(10).Children(func() {
-			ui.Text(c, i18n.T("查看配置 · ")+d.name).FontSize(15).FontWeight(600)
+			ui.Text(c, i18n.Tf("查看配置 · %s", d.name)).FontSize(15).FontWeight(600)
 			find := "⌘F"
 			if !p.e.Mac {
 				find = "Ctrl+F"
@@ -344,7 +344,7 @@ func (p *Page) finishImport(c *ui.Context) {
 	case r.first:
 		p.e.Toast(i18n.T("已导入并启动"), false)
 	case r.use:
-		p.e.Toast(i18n.T("已导入并切换到 ")+r.sub.Name, false)
+		p.e.Toast(i18n.Tf("已导入并切换到 %s", r.sub.Name), false)
 	default:
 		p.e.Toast(i18n.T("订阅已导入"), false)
 	}

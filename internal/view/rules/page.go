@@ -196,7 +196,7 @@ func (p *Page) customRow(c *ui.Context, t *ui.Theme, list []model.CustomRule, i 
 		ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
 		hitText := i18n.T("命中 0")
 		if hasHit {
-			hitText = fmt.Sprintf(i18n.T("命中 %s"), env.FmtInt(h.HitCount))
+			hitText = i18n.Tf("命中 %s", env.FmtInt(h.HitCount))
 			if h.HitCount > 0 {
 				hitText += " · " + env.FmtAgo(h.HitAt)
 			}
@@ -306,7 +306,7 @@ func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 			subName = s.Name
 		}
 	}
-	note := fmt.Sprintf(i18n.T("共 %d 条"), total)
+	note := i18n.Tf("共 %d 条", total)
 	if subName != "" {
 		note = subName + " · " + note
 	}
@@ -319,7 +319,7 @@ func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 		if len(rows) == 0 {
 			msg := i18n.T("订阅中没有规则")
 			if q != "" {
-				msg = fmt.Sprintf(i18n.T("没有匹配“%s”的规则"), q)
+				msg = i18n.Tf("没有匹配“%s”的规则", q)
 			}
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(16).TextAlign(ui.Center)
 		} else {
@@ -416,7 +416,7 @@ func (p *Page) providers(c *ui.Context, t *ui.Theme) {
 	e.Kit.Section(c, i18n.T("规则集"), i18n.T("订阅引用的 rule-providers，可单独更新"), func() {
 		for _, pr := range provs {
 			pr := pr
-			desc := fmt.Sprintf(i18n.T("%s · %s 条 · 更新于 %s"), behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
+			desc := i18n.Tf("%s · %s 条 · 更新于 %s", behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
 			e.Kit.Row(c, pr.Name, desc, func() {
 				if pr.Updating {
 					ui.Row(c).Gap(6).Children(func() {
@@ -488,7 +488,7 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 	e := p.e
 	ui.Column(c).Gap(6).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Selectable().Children(func() {
 		if r.RuleIndex < 0 && r.Rule == "" {
-			ui.Text(c, fmt.Sprintf(i18n.T("%s 未命中任何规则"), r.Host)).Bold()
+			ui.Text(c, i18n.Tf("%s 未命中任何规则", r.Host)).Bold()
 			ui.Text(c, i18n.T("内核没有报告命中的规则，可能是该地址无法访问。")).FontSize(12).TextColor(t.TextMuted)
 			return
 		}
@@ -501,7 +501,7 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 			ui.Text(c, i18n.T("命中")).TextColor(t.TextMuted)
 			e.Kit.Tag(c, src, "gray")
 			if r.RuleIndex >= 0 {
-				ui.Text(c, fmt.Sprintf(i18n.T("规则 #%d"), r.RuleIndex+1)).FontFeatures("tnum")
+				ui.Text(c, i18n.Tf("规则 #%d", r.RuleIndex+1)).FontFeatures("tnum")
 			}
 		})
 		ui.Text(c, r.Rule).Font("monospace").FontSize(12)
@@ -512,7 +512,7 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 			}
 			chain = append(chain, env.TargetName(hop))
 		}
-		ui.Text(c, i18n.T("走向 ")+strings.Join(chain, " › ")).FontSize(12)
+		ui.Text(c, i18n.Tf("走向 %s", strings.Join(chain, " › "))).FontSize(12)
 	})
 }
 

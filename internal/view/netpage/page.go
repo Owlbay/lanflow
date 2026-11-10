@@ -305,11 +305,11 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 				if x.Entry.IP != "" {
 					entry += i18n.Tf("（%s）", x.Entry.IP)
 				}
-				text := fmt.Sprintf(i18n.T("入口 %s → 落地 %s"), entry, placeName(x.Place))
+				text := i18n.Tf("入口 %s → 落地 %s", entry, placeName(x.Place))
 				ui.Text(c, text).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(text)
 			}
 		case model.PathChain:
-			ui.Text(c, fmt.Sprintf(i18n.T("链式代理 · %d 跳"), x.ChainHops)).FontSize(12).SingleLine()
+			ui.Text(c, i18n.Tf("链式代理 · %d 跳", x.ChainHops)).FontSize(12).SingleLine()
 		case model.PathSuspicious:
 			ui.Text(c, i18n.T("⚠ 位置存疑")).FontSize(12).TextColor(t.Warning).SingleLine().Shrink(0)
 			if x.PathNote != "" {
@@ -482,13 +482,13 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 		p.kvRich(c, t, i18n.T("系统代理"), func() {
 			if st.SystemProxy {
 				e.Kit.Dot(c, "green")
-				ui.Text(c, fmt.Sprintf(i18n.T("指向澜流 127.0.0.1:%d"), st.MixedPort)).FontSize(12).FontFeatures("tnum").SingleLine()
+				ui.Text(c, i18n.Tf("指向澜流 127.0.0.1:%d", st.MixedPort)).FontSize(12).FontFeatures("tnum").SingleLine()
 			} else {
 				e.Kit.Dot(c, "gray")
 				ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
-		port := fmt.Sprintf(i18n.T("%d（HTTP + SOCKS5）"), st.MixedPort)
+		port := i18n.Tf("%d（HTTP + SOCKS5）", st.MixedPort)
 		if st.AllowLAN {
 			port += " · " + i18n.T("允许局域网连接")
 		}
@@ -496,7 +496,7 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 		if st.TUN {
 			tun = i18n.T("已开启")
 		}
-		env.KV(c, i18n.T("监听端口"), port+" · "+i18n.T("TUN 模式")+" "+tun, 56, true, nil)
+		env.KV(c, i18n.T("监听端口"), i18n.Tf("%s · TUN 模式 %s", port, tun), 56, true, nil)
 		// 嗅探 and DNS report the effective config (docs/design.md:463): the
 		// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
 		snf := i18n.T("未开启")

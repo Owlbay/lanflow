@@ -14,7 +14,6 @@
 package env
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -230,20 +229,20 @@ func CoreDownloadText(dl model.CoreDownload) string {
 	}
 	switch dl.Phase {
 	case "下载":
-		s := i18n.T("正在下载 Mihomo ") + dl.Version + "…"
+		s := i18n.Tf("正在下载 Mihomo %s…", dl.Version)
 		switch {
 		case dl.Total > 0:
-			s += fmt.Sprintf(i18n.T(" %s / %s（%d%%）"), FmtBytes(dl.Bytes), FmtBytes(dl.Total), dl.Bytes*100/dl.Total)
+			s += i18n.Tf(" %s / %s（%d%%）", FmtBytes(dl.Bytes), FmtBytes(dl.Total), dl.Bytes*100/dl.Total)
 		case dl.Bytes > 0:
 			s += " " + FmtBytes(dl.Bytes)
 		}
 		return s
 	case "校验":
-		return i18n.T("正在校验 Mihomo ") + dl.Version + "…"
+		return i18n.Tf("正在校验 Mihomo %s…", dl.Version)
 	case "安装":
-		return i18n.T("正在安装 Mihomo ") + dl.Version + "…"
+		return i18n.Tf("正在安装 Mihomo %s…", dl.Version)
 	case "启动":
 		return i18n.T("正在启动新内核…")
 	}
-	return i18n.T("正在处理 Mihomo ") + dl.Version + "…"
+	return i18n.Tf("正在处理 Mihomo %s…", dl.Version)
 }

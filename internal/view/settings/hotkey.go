@@ -172,7 +172,7 @@ func (p *Page) setShortcut(s model.Settings, action, acc string) {
 	if action == model.ShortcutSystemProxy { // the wording the feature started with
 		msg = i18n.T("全局快捷键已关闭")
 		if acc != "" {
-			msg = i18n.T("全局快捷键已改为 ") + hotkey.Display(acc, p.e.Mac)
+			msg = i18n.Tf("全局快捷键已改为 %s", hotkey.Display(acc, p.e.Mac))
 		}
 	}
 	p.save(s, msg, nil)

@@ -35,7 +35,7 @@ func init() {
 		"内核运行时，经过澜流的流量会按设备、域名、进程等在这里汇总。": "While the core runs, the traffic through Lanflow is summed up here by device, domain, process and more.",
 		"最近 30 天":                 "Last 30 Days",
 		"今天（按小时）":                 "Today (by Hour)",
-		"峰值 ":                     "Peak ",
+		"峰值 %s":                   "Peak %s",
 		"%s · ↓ %s ↑ %s · %d 次请求": "%s · ↓ %s ↑ %s · %d requests",
 		"统计维度":                    "Dimension",
 		"完整主机名":                   "Full host names",

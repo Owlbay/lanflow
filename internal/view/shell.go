@@ -941,7 +941,7 @@ func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 			switch st.Core {
 			case model.CoreRunning:
 				k.Dot(c, "green")
-				ui.Text(c, i18n.T("运行中 · ")+env.ModeName(st.Mode)).FontSize(12).SingleLine()
+				ui.Text(c, i18n.Tf("运行中 · %s", env.ModeName(st.Mode))).FontSize(12).SingleLine()
 			case model.CoreStarting:
 				ui.Spinner(c).Size(12, 12).Label(i18n.T("启动中"))
 				ui.Text(c, i18n.T("启动中…")).FontSize(12)
@@ -1106,7 +1106,7 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 				if port == 0 {
 					port = 7890
 				}
-				ui.Text(c, fmt.Sprintf(i18n.T("上次澜流未正常退出，系统代理仍指向 127.0.0.1:%d。如果不处理，部分应用可能无法联网。"), port)).FontSize(13)
+				ui.Text(c, i18n.Tf("上次澜流未正常退出，系统代理仍指向 127.0.0.1:%d。如果不处理，部分应用可能无法联网。", port)).FontSize(13)
 				ui.Row(c).Gap(8).Justify(ui.End).Children(func() {
 					if ui.Button(c, i18n.T("保持开启并启动内核")).Clicked() {
 						s.recovery = false
@@ -1136,11 +1136,11 @@ func (s *Shell) invalidBody(n *app.Notice) string {
 	switch {
 	case bad != "" && bad == cur:
 		// An update of the current subscription failed validation.
-		return fmt.Sprintf(i18n.T("「%s」更新后的配置未通过校验，已继续使用上次的配置。"), bad)
+		return i18n.Tf("「%s」更新后的配置未通过校验，已继续使用上次的配置。", bad)
 	case bad != "" && cur != "":
-		return fmt.Sprintf(i18n.T("「%s」的配置未通过校验，已继续使用「%s」。"), bad, cur)
+		return i18n.Tf("「%s」的配置未通过校验，已继续使用「%s」。", bad, cur)
 	case bad != "":
-		return fmt.Sprintf(i18n.T("「%s」的配置未通过校验，当前配置保持不变。"), bad)
+		return i18n.Tf("「%s」的配置未通过校验，当前配置保持不变。", bad)
 	default:
 		return i18n.T("配置未通过校验，当前配置保持不变。")
 	}

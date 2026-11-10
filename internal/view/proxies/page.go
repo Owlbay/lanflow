@@ -4,7 +4,6 @@
 package proxies
 
 import (
-	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -211,7 +210,7 @@ func (p *Page) View(c *ui.Context) {
 				}
 			})
 			if shown == 0 && p.query != "" {
-				k.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的节点"), p.query), i18n.T("换个关键词试试。"), nil)
+				k.Empty(c, "search", i18n.Tf("没有匹配“%s”的节点", p.query), i18n.T("换个关键词试试。"), nil)
 			}
 			if provs := p.e.API.ProxyProviders(); len(provs) > 0 && p.query == "" {
 				p.providers(c, provs, px)
@@ -378,14 +377,14 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1)
 			})
 			if now != "" {
-				loc := ui.Button(c, "").Label(i18n.T("定位当前节点 ") + g.Name).Tooltip(i18n.T("定位当前节点")).Children(func() {
+				loc := ui.Button(c, "").Label(i18n.Tf("定位当前节点 %s", g.Name)).Tooltip(i18n.T("定位当前节点")).Children(func() {
 					k.Icon(c, "locate", 14)
 				})
 				if loc.Clicked() {
 					p.locateNow(c, g.Name)
 				}
 			}
-			test := ui.Button(c, "").Label(i18n.T("测速 ") + g.Name).Tooltip(i18n.T("组内测速")).Disabled(groupTesting).Children(func() {
+			test := ui.Button(c, "").Label(i18n.Tf("测速 %s", g.Name)).Tooltip(i18n.T("组内测速")).Disabled(groupTesting).Children(func() {
 				if groupTesting {
 					ui.Spinner(c).Size(12, 12)
 				} else {
@@ -396,7 +395,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched 
 				name := g.Name
 				p.e.Run(func() error { return p.e.API.TestGroupDelay(name) }, "")
 			}
-			ui.Button(c, "").Label(i18n.T("更多 ") + g.Name).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+			ui.Button(c, "").Label(i18n.Tf("更多 %s", g.Name)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
 				if m.Item(i18n.T("设为主代理组")).Checked(g.Name == px.MainGroup).Disabled(!selectable).Chosen() {
 					name := g.Name
 					p.e.Run(func() error { return p.e.API.SetMainGroup(name) }, i18n.Tf("已将「%s」设为主代理组", name))
@@ -521,7 +520,7 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 				ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 				return
 			}
-			d := ui.ButtonBase(c).Label(i18n.T("重新测速 ")+n).Tooltip(i18n.T("单击重新测速")).Padding(1, 4).Radius(4)
+			d := ui.ButtonBase(c).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).Padding(1, 4).Radius(4)
 			if d.Hovered() {
 				d.Background(t.SurfaceHover)
 			}
@@ -549,8 +548,8 @@ func (p *Page) providers(c *ui.Context, provs []model.ProxyProvider, px model.Pr
 		parts.Trigger.MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(i18n.T("代理集合")).Children(func() {
 			ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 			ui.Text(c, i18n.T("代理集合")).FontSize(13).FontWeight(600).SingleLine()
-			ui.Text(c, fmt.Sprintf(i18n.T("%d 个代理集合"), len(provs))).FontSize(12).TextColor(t.TextMuted).SingleLine().
-				Tooltip(fmt.Sprintf(i18n.T("%d 个 proxy-provider"), len(provs)))
+			ui.Text(c, i18n.Tf("%d 个代理集合", len(provs))).FontSize(12).TextColor(t.TextMuted).SingleLine().
+				Tooltip(i18n.Tf("%d 个 proxy-provider", len(provs)))
 		})
 		parts.Panel(func() {
 			ui.Column(c).Padding(0, 6, 6, 6).Children(func() {
@@ -581,15 +580,15 @@ func providerSource(vehicle string) string {
 
 // providerMeta is the muted summary line under a provider's name.
 func providerMeta(pv model.ProxyProvider) string {
-	meta := fmt.Sprintf(i18n.T("%s · %d 个节点"), providerSource(pv.VehicleType), len(pv.Proxies))
+	meta := i18n.Tf("%s · %d 个节点", providerSource(pv.VehicleType), len(pv.Proxies))
 	if !pv.UpdatedAt.IsZero() {
-		meta += i18n.T(" · 更新于 ") + env.FmtAgo(pv.UpdatedAt)
+		meta += i18n.Tf(" · 更新于 %s", env.FmtAgo(pv.UpdatedAt))
 	}
 	if pv.Total > 0 {
-		meta += fmt.Sprintf(i18n.T(" · 已用 %s / %s GB"), env.FmtGB(pv.Upload+pv.Download), env.FmtGB(pv.Total))
+		meta += i18n.Tf(" · 已用 %s / %s GB", env.FmtGB(pv.Upload+pv.Download), env.FmtGB(pv.Total))
 	}
 	if !pv.Expire.IsZero() {
-		meta += i18n.T(" · 到期 ") + pv.Expire.Format("2006-01-02")
+		meta += i18n.Tf(" · 到期 %s", pv.Expire.Format("2006-01-02"))
 	}
 	return meta
 }
@@ -611,7 +610,7 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 			ui.Text(c, providerMeta(pv)).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
 		canUpdate := pv.VehicleType == "HTTP" || pv.VehicleType == "File"
-		up := ui.Button(c, "").Label(i18n.T("更新 ") + pv.Name).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
+		up := ui.Button(c, "").Label(i18n.Tf("更新 %s", pv.Name)).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
 			if pv.Updating {
 				ui.Spinner(c).Size(12, 12)
 			} else {
@@ -622,7 +621,7 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 			name := pv.Name
 			p.e.Run(func() error { return p.e.API.UpdateProxyProvider(name) }, i18n.Tf("已更新「%s」", name))
 		}
-		hc := ui.Button(c, "").Label(i18n.T("健康检查 ") + pv.Name).Tooltip(i18n.T("测试该集合中所有节点的延迟")).Disabled(checking || pv.TestURL == "").Children(func() {
+		hc := ui.Button(c, "").Label(i18n.Tf("健康检查 %s", pv.Name)).Tooltip(i18n.T("测试该集合中所有节点的延迟")).Disabled(checking || pv.TestURL == "").Children(func() {
 			if checking {
 				ui.Spinner(c).Size(12, 12)
 			} else {
@@ -685,7 +684,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 			return
 		}
-		d := ui.ButtonBase(c).Label(i18n.T("重新测速 ")+n).Tooltip(i18n.T("单击重新测速")).Padding(2, 6).Radius(4).MinWidth(56).Justify(ui.End)
+		d := ui.ButtonBase(c).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).Padding(2, 6).Radius(4).MinWidth(56).Justify(ui.End)
 		if d.Hovered() {
 			d.Background(t.SurfaceHover)
 		}
@@ -711,7 +710,7 @@ func (p *Page) pick(group, name string) {
 		delete(p.pending, group)
 		p.mu.Unlock()
 		return err
-	}, i18n.T("已切换到 ")+name)
+	}, i18n.Tf("已切换到 %s", name))
 }
 
 func (p *Page) testAll() {

@@ -24,7 +24,7 @@ func init() {
 		"内核版本":     "Core version",
 		"已安装的内核版本": "Installed core version",
 		"应用自带的内核":  "The core shipped with the app",
-		"安装于 ":     "installed ",
+		"安装于 %s":   "installed %s",
 		"使用中":      "In use",
 		"随应用安装":    "Ships with the app",
 		"安装其他版本…":  "Install another version…",

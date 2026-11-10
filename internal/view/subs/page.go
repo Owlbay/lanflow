@@ -307,7 +307,7 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 			}
 		})
 	case "menu":
-		ui.Button(c, "").Label(i18n.T("更多 ") + s.Name).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+		ui.Button(c, "").Label(i18n.Tf("更多 %s", s.Name)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
 			p.rowMenu(c, m, s)
 		})
 	}
@@ -373,8 +373,8 @@ func (p *Page) AskDelete(id string) {
 
 // askDelete confirms, then deletes.
 func (p *Page) askDelete(s model.Subscription) {
-	p.e.Confirm(fmt.Sprintf(i18n.T("删除「%s」？"), s.Name), i18n.T("此操作无法撤销。"), i18n.T("删除"), true, func() {
-		p.e.Run(func() error { return p.e.API.DeleteSubscription(s.ID) }, fmt.Sprintf(i18n.T("已删除「%s」"), s.Name))
+	p.e.Confirm(i18n.Tf("删除「%s」？", s.Name), i18n.T("此操作无法撤销。"), i18n.T("删除"), true, func() {
+		p.e.Run(func() error { return p.e.API.DeleteSubscription(s.ID) }, i18n.Tf("已删除「%s」", s.Name))
 	})
 }
 
@@ -409,7 +409,7 @@ func (p *Page) use(s model.Subscription) {
 		p.switching = ""
 		p.mu.Unlock()
 		return err
-	}, i18n.T("已切换到 ")+s.Name)
+	}, i18n.Tf("已切换到 %s", s.Name))
 }
 
 func (p *Page) updateAll() {
@@ -465,7 +465,7 @@ func ImportToast(path string, first bool) string {
 	if first {
 		return i18n.T("已导入并启动")
 	}
-	return i18n.T("已导入 ") + filepath.Base(path)
+	return i18n.Tf("已导入 %s", filepath.Base(path))
 }
 
 // isURL reports whether s looks like a subscription link.
