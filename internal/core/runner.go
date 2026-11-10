@@ -32,6 +32,22 @@ type execRunner struct {
 	stopping bool          // Stop was called; the exit is expected
 }
 
+// ownPIDs are the cores execRunner started and that still run; on Windows
+// the controller pipe is only trusted when one of them (or the helper's
+// core) serves it.
+var (
+	ownMu   sync.Mutex
+	ownPIDs = map[int]bool{}
+)
+
+func trackServer(pid int)   { ownMu.Lock(); ownPIDs[pid] = true; ownMu.Unlock() }
+func untrackServer(pid int) { ownMu.Lock(); delete(ownPIDs, pid); ownMu.Unlock() }
+func ownServer(pid int) bool {
+	ownMu.Lock()
+	defer ownMu.Unlock()
+	return ownPIDs[pid]
+}
+
 func newExecRunner() Runner {
 	return &execRunner{exited: make(chan error, 1)}
 }
@@ -78,6 +94,7 @@ func (r *execRunner) Start(ctx context.Context, spec Spec) error {
 	}
 
 	writePID(spec.WorkDir, cmd.Process.Pid)
+	trackServer(cmd.Process.Pid)
 	r.cmd = cmd
 	r.spec = spec
 	r.logf = logf
@@ -91,6 +108,7 @@ func (r *execRunner) Start(ctx context.Context, spec Spec) error {
 // wait reaps the child and reports unexpected exits.
 func (r *execRunner) wait(cmd *exec.Cmd, logf *rotatingFile, spec Spec, done chan struct{}, exited chan error) {
 	err := cmd.Wait()
+	untrackServer(cmd.Process.Pid)
 	_ = logf.Close()
 	cleanupController(spec)
 	removePID(spec.WorkDir)

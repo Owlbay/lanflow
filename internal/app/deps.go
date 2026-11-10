@@ -94,7 +94,13 @@ type sysDNS interface {
 
 // helperAPI wraps package helper.
 type helperAPI interface {
-	Installed(ctx context.Context) bool
+	// Check is nil when the helper answers with this app's protocol and
+	// version; else it matches helper.ErrNotRunning, ErrProtocolMismatch
+	// or ErrVersionMismatch.
+	Check(ctx context.Context) error
+	// SetBundled records the helper shipped with the app as the version
+	// Check requires.
+	SetBundled(ctx context.Context, path string) error
 	Install(ctx context.Context, o helper.InstallOptions) error
 	Uninstall(ctx context.Context) error
 }
@@ -223,7 +229,10 @@ func (realSysDNS) Restore(s sysdns.Saved, ours []string) error {
 
 type realHelper struct{}
 
-func (realHelper) Installed(ctx context.Context) bool { return helper.Installed(ctx) }
+func (realHelper) Check(ctx context.Context) error { return helper.Check(ctx) }
+func (realHelper) SetBundled(ctx context.Context, path string) error {
+	return helper.SetBundledHelper(ctx, path)
+}
 func (realHelper) Install(ctx context.Context, o helper.InstallOptions) error {
 	return helper.Install(ctx, o)
 }

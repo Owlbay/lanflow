@@ -14,6 +14,7 @@ import (
 
 	"lanflow/internal/controller"
 	"lanflow/internal/model"
+	"lanflow/internal/platform/helper"
 )
 
 func TestSettingsDefaultsAndPersistence(t *testing.T) {
@@ -842,5 +843,85 @@ func TestSetTUNRefusesWithOtherTUN(t *testing.T) {
 	h.tunOf = ""
 	if err := h.s.SetTUN(true); err != nil {
 		t.Fatalf("SetTUN without conflict: %v", err)
+	}
+}
+
+// A helper left over from another release: TUN is unavailable, the status
+// asks for a reinstall, the user is told once, and a reinstall clears it.
+func TestHelperVersionMismatchAsksForReinstall(t *testing.T) {
+	h := newHarness(t, func(h *harness) {
+		_ = os.WriteFile(filepath.Join(h.dir, helperName()), []byte("x"), 0o755)
+		h.helper.installed = true
+		h.helper.checkErr = &helper.VersionError{Kind: helper.ErrVersionMismatch, Installed: "0.9.0", Bundled: "1.0.0"}
+	})
+	h.s.learnBundledHelper() // as bootstrap does
+	h.s.refreshHelper()
+	if !h.s.Status().HelperReinstall {
+		t.Fatalf("status after a version mismatch: %+v", h.s.Status())
+	}
+	h.helper.mu.Lock()
+	bundled := h.helper.bundled
+	h.helper.mu.Unlock()
+	if bundled != filepath.Join(h.dir, helperName()) {
+		t.Fatalf("SetBundled got %q", bundled)
+	}
+	if h.s.Status().TUNAvailable || h.s.TUNHelperInstalled() {
+		t.Fatal("a mismatched helper must not count as installed")
+	}
+	if err := h.s.SetTUN(true); err != ErrHelperRequired {
+		t.Fatalf("SetTUN with a mismatched helper: %v", err)
+	}
+	count := func(ns []Notice) (n int) {
+		for _, x := range ns {
+			if x.Title == "需要重新安装权限组件" {
+				n++
+				if !strings.Contains(x.Detail, "0.9.0") || !strings.Contains(x.Detail, "1.0.0") {
+					t.Fatalf("notice detail: %q", x.Detail)
+				}
+			}
+		}
+		return n
+	}
+	if n := count(h.s.TakeNotices()); n != 1 {
+		t.Fatalf("reinstall notices = %d, want 1", n)
+	}
+	h.s.refreshHelper()
+	if n := count(h.s.TakeNotices()); n != 0 {
+		t.Fatalf("the reinstall notice repeated (%d)", n)
+	}
+	if err := h.s.InstallTUNHelper(); err != nil {
+		t.Fatalf("InstallTUNHelper: %v", err)
+	}
+	if st := h.s.Status(); st.HelperReinstall || !st.TUNAvailable {
+		t.Fatalf("status after reinstall: %+v", st)
+	}
+}
+
+func helperName() string {
+	if runtime.GOOS == "windows" {
+		return "lanflow-helper.exe"
+	}
+	return "lanflow-helper"
+}
+
+// Shutdown waits for the hint file Status writes in the background once the
+// system proxy is on; an untracked goroutine used to write it after
+// Shutdown returned, racing the removal of the data directory (the
+// "directory not empty" flake of TestUseCoreHotSwitchesRunningCore).
+func TestShutdownWaitsForHintSave(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		h := newHarness(t, nil)
+		if err := h.s.SetSystemProxy(true); err != nil {
+			t.Fatal(err)
+		}
+		_ = h.s.Status() // starts the background write of the hint file
+		h.s.Shutdown()
+		if _, err := os.Stat(h.s.hintPath()); err != nil {
+			t.Fatalf("hint file not written before Shutdown returned: %v", err)
+		}
+		left, _ := filepath.Glob(filepath.Join(h.dir, ".*.tmp-*"))
+		if len(left) != 0 {
+			t.Fatalf("temporary files left after Shutdown: %v", left)
+		}
 	}
 }

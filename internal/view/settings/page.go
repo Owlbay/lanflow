@@ -423,6 +423,11 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 				tunDesc = i18n.T("接管所有应用的流量，包括不遵守系统代理的程序")
 			}
 			p.switchRow(c, i18n.T("TUN 模式（增强模式）"), tunDesc, st.TUN, p.setTUN)
+			if st.HelperReinstall {
+				e.Kit.Banner(c, "warn", i18n.T("已安装的权限组件来自另一个版本的澜流，TUN 模式暂不可用，需要重新安装权限组件。"), func() {
+					ui.Button(c, i18n.T("重新安装…")).OnClick(func() { env.ReinstallHelper(p.e, s.TUN) })
+				})
+			}
 			if st.TUNAvailable || st.TUN {
 				stackOpts := []string{"mixed", "system", "gvisor"}
 				stack := s.TUNStack

@@ -1,0 +1,21 @@
+# Build output
+/build/
+/dist/
+/bin/
+/.mygo/
+mygo_windows_*.syso
+/lanflow
+/lanflow.exe
+
+# Bundled at build time by scripts/prepare-resources.sh (resources/icon.png
+# and the rest of resources/ stay tracked)
+/resources/geo/
+/resources/*-*/
+
+# Local
+/runtime/
+/.env
+/.env.*
+/.agents/
+/.claude/worktrees/
+.DS_Store

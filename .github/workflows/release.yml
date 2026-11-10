@@ -68,8 +68,23 @@ jobs:
           scripts/prepare-resources.sh darwin amd64
 
       # No Developer ID: mygo signs ad hoc ("-"), which Apple Silicon requires to run at all.
+      # One platform per build: build-app.sh links in that platform's
+      # helper version and SHA-256 (bin/<plat>/app-ldflags from prepare-resources.sh).
       - name: Build app and disk images
-        run: go tool mygo build -platform darwin/arm64,darwin/amd64
+        run: |
+          scripts/build-app.sh darwin arm64
+          scripts/build-app.sh darwin amd64
+
+      # The helper inside each bundle must be the exact file whose SHA-256
+      # was linked into the app, or TUN install refuses it.
+      - name: Check bundled helper hash
+        run: |
+          for arch in arm64 amd64; do
+            want="$(sed -n 's/.*ExpectedHelperSHA256=\([0-9a-f]*\).*/\1/p' "bin/darwin-${arch}/app-ldflags")"
+            got="$(shasum -a 256 build/darwin-${arch}/*.app/Contents/Resources/lanflow-helper | cut -d' ' -f1)"
+            echo "darwin/${arch}: linked ${want}, bundled ${got}"
+            [ -n "$want" ] && [ "$want" = "$got" ]
+          done
 
       - name: Collect artifacts
         run: |
@@ -126,7 +141,7 @@ jobs:
           else echo "no NSIS on the runner; mygo downloads its pinned NSIS"; fi
 
       - name: Build app and installer
-        run: go tool mygo build -platform windows/amd64
+        run: scripts/build-app.sh windows amd64
 
       - name: Collect artifacts
         run: |
