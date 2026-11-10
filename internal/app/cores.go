@@ -66,7 +66,14 @@ type coresState struct {
 		mod  time.Time
 	}
 	releases  map[string]releaseCache
-	lastCheck time.Time // last update check (coreUpdateLoop)
+	lastCheck time.Time // last update check that reached GitHub (or its cache was fresh)
+	// The automatic check's failure schedule (coreCheckFailed): failures in
+	// a row, and when coreUpdateLoop may try again.
+	failures int
+	retryAt  time.Time
+	// limitedUntil: GitHub said the quota is used up until then
+	// (githubJSON sends nothing before).
+	limitedUntil time.Time
 }
 
 // versionDirRe keeps directory names (and the versions users can pass)

@@ -75,6 +75,7 @@ type Service struct {
 
 	recheckMu    sync.Mutex // debounces the wake / network-change recheck (watch.go)
 	recheckTimer *time.Timer
+	nw           *watchState // what the recheck compares and Lanflow's own changes (watch.go)
 
 	probeExitMu sync.Mutex // one 检测 probe uses the probe group at a time (probe.go)
 
@@ -247,7 +248,10 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	nw := &watchState{}
+	noteSelfChanges(&d, nw)
 	s := &Service{
+		nw:         nw,
 		opt:        o,
 		d:          d,
 		workDir:    filepath.Join(o.DataDir, "core"),
@@ -257,6 +261,7 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		rootCancel: cancel,
 		em:         newEmitter(),
 	}
+	nw.clock = func() time.Time { return s.d.now() }
 	s.alog, _ = applog.Open(o.LogDir) // a failure keeps the log in memory only
 	s.alog.OnWrite(func() { s.em.emit(TopicLogs) })
 	s.alog.Infof("Lanflow starting (%s/%s), data %s", runtime.GOOS, runtime.GOARCH, o.DataDir)

@@ -28,7 +28,15 @@ import (
 //
 // Lists are cached for releaseCacheTTL in memory and on disk
 // (cores/releases-<channel>.json), so a relaunch does not hit GitHub again
-// and a rate-limited answer can fall back to the last list.
+// and a rate-limited answer can fall back to the last list. The cache keeps
+// GitHub's ETag: a refresh asks with If-None-Match, and an unchanged list
+// comes back as 304 Not Modified, which GitHub does not count against the
+// quota of 60 unauthenticated requests an hour.
+//
+// When GitHub says the quota is used up, no request goes out until the
+// time it gives (X-RateLimit-Reset, or Retry-After for the secondary
+// limits), and the automatic check (coreUpdateLoop) is scheduled for then;
+// other failures back off from coreUpdateTick up to coreUpdateInterval.
 
 const (
 	coreAlphaTag       = "Prerelease-Alpha"
@@ -40,6 +48,8 @@ const (
 	coreUpdateInterval = 24 * time.Hour
 	coreUpdateTick     = time.Hour // how often coreUpdateLoop looks at the clock
 	coreUpdateDelay    = 3 * time.Minute
+	// coreUpdateMinWait is the shortest wait coreUpdateLoop schedules.
+	coreUpdateMinWait = time.Minute
 )
 
 // coreAPIBase is the GitHub API root of the repository; tests point it at
@@ -50,6 +60,7 @@ var coreAPIBase = "https://api.github.com/repos/MetaCubeX/mihomo"
 type releaseCache struct {
 	At   time.Time           `json:"at"`
 	List []model.CoreRelease `json:"list"`
+	ETag string              `json:"etag,omitempty"` // GitHub's ETag of the list, for If-None-Match
 }
 
 // ghRelease is the part of the GitHub release object used here.
@@ -198,8 +209,8 @@ func (s *Service) cachedReleases(channel string) (releaseCache, bool) {
 }
 
 // storeReleases caches list in memory and on disk.
-func (s *Service) storeReleases(channel string, list []model.CoreRelease) {
-	rc := releaseCache{At: s.d.now(), List: list}
+func (s *Service) storeReleases(channel string, list []model.CoreRelease, etag string) {
+	rc := releaseCache{At: s.d.now(), List: list, ETag: etag}
 	s.cores.mu.Lock()
 	if s.cores.releases == nil {
 		s.cores.releases = map[string]releaseCache{}
@@ -211,7 +222,9 @@ func (s *Service) storeReleases(channel string, list []model.CoreRelease) {
 	}
 }
 
-// rateLimitError is GitHub's 403/429 with the quota used up.
+// rateLimitError is GitHub's 403/429 with the quota used up. reset is
+// when GitHub says requests are allowed again (zero when it did not say);
+// the minutes in the message are counted from now each time it is shown.
 type rateLimitError struct{ reset time.Time }
 
 func (e rateLimitError) Error() string {
@@ -225,35 +238,102 @@ func (e rateLimitError) Error() string {
 	return fmt.Sprintf(i18n.T("GitHub 接口的请求次数已达上限，约 %d 分钟后恢复"), int(wait/time.Minute))
 }
 
-// githubJSON GETs a GitHub API URL and decodes it into out.
-func githubJSON(ctx context.Context, c *http.Client, u string, out any) error {
+// parseRateLimit reports whether a GitHub response says the quota is used
+// up, and until when: a 429, or a 403 with X-RateLimit-Remaining 0 (the
+// primary limit) or with Retry-After (the secondary limits). The later of
+// Retry-After (seconds or an HTTP date) and X-RateLimit-Reset (Unix time)
+// wins; zero when neither is given.
+func parseRateLimit(status int, h http.Header, now time.Time) (reset time.Time, limited bool) {
+	retryAfter := strings.TrimSpace(h.Get("Retry-After"))
+	switch {
+	case status == http.StatusTooManyRequests:
+	case status == http.StatusForbidden && (h.Get("X-RateLimit-Remaining") == "0" || retryAfter != ""):
+	default:
+		return time.Time{}, false
+	}
+	if n, err := strconv.ParseInt(strings.TrimSpace(h.Get("X-RateLimit-Reset")), 10, 64); err == nil && n > 0 {
+		reset = time.Unix(n, 0)
+	}
+	if retryAfter != "" {
+		var at time.Time
+		if n, err := strconv.ParseInt(retryAfter, 10, 64); err == nil && n >= 0 {
+			at = now.Add(time.Duration(n) * time.Second)
+		} else if t, err := http.ParseTime(retryAfter); err == nil {
+			at = t
+		}
+		if at.After(reset) {
+			reset = at
+		}
+	}
+	return reset, true
+}
+
+// ghResult is what githubJSON learned besides the body.
+type ghResult struct {
+	ETag        string // the response's ETag ("" when none)
+	NotModified bool   // 304: the etag sent still matches; out is untouched
+}
+
+// githubJSON GETs a GitHub API URL and decodes it into out. With etag set
+// it asks If-None-Match, and a 304 comes back as NotModified. While an
+// earlier answer said the quota is used up, it returns that rateLimitError
+// without a request; a new rate-limit answer is remembered the same way.
+func (s *Service) githubJSON(ctx context.Context, c *http.Client, u, etag string, out any) (ghResult, error) {
+	if until := s.rateLimitedUntil(); !until.IsZero() {
+		return ghResult{}, rateLimitError{reset: until}
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return err
+		return ghResult{}, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "Lanflow")
+	if etag != "" {
+		req.Header.Set("If-None-Match", etag)
+	}
 	resp, err := c.Do(req)
 	if err != nil {
-		return err
+		return ghResult{}, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
-		if resp.Header.Get("X-RateLimit-Remaining") == "0" || resp.StatusCode == http.StatusTooManyRequests {
-			var reset time.Time
-			if n, err := strconv.ParseInt(resp.Header.Get("X-RateLimit-Reset"), 10, 64); err == nil && n > 0 {
-				reset = time.Unix(n, 0)
-			}
-			return rateLimitError{reset: reset}
+	if reset, limited := parseRateLimit(resp.StatusCode, resp.Header, s.d.now()); limited {
+		s.setRateLimited(reset)
+		return ghResult{}, rateLimitError{reset: reset}
+	}
+	res := ghResult{ETag: resp.Header.Get("ETag")}
+	if resp.StatusCode == http.StatusNotModified && etag != "" {
+		res.NotModified = true
+		if res.ETag == "" {
+			res.ETag = etag
 		}
+		return res, nil
 	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf(i18n.T("GitHub 返回 HTTP %d"), resp.StatusCode)
+		return ghResult{}, fmt.Errorf(i18n.T("GitHub 返回 HTTP %d"), resp.StatusCode)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(out); err != nil {
-		return fmt.Errorf(i18n.T("无法解析 GitHub 的回复：%v"), err)
+		return ghResult{}, fmt.Errorf(i18n.T("无法解析 GitHub 的回复：%v"), err)
 	}
-	return nil
+	return res, nil
+}
+
+// rateLimitedUntil is when GitHub allows requests again after a rate-limit
+// answer; zero when no limit is known to be in force.
+func (s *Service) rateLimitedUntil() time.Time {
+	s.cores.mu.Lock()
+	defer s.cores.mu.Unlock()
+	if !s.cores.limitedUntil.IsZero() && s.d.now().Before(s.cores.limitedUntil) {
+		return s.cores.limitedUntil
+	}
+	return time.Time{}
+}
+
+// setRateLimited remembers a rate-limit answer. Without a reset time
+// nothing is held back: the next request asks again.
+func (s *Service) setRateLimited(reset time.Time) {
+	s.cores.mu.Lock()
+	s.cores.limitedUntil = reset
+	s.cores.mu.Unlock()
 }
 
 // githubClients lists the clients to try: through the running core's
@@ -270,8 +350,9 @@ func (s *Service) githubClients(timeout time.Duration) []*http.Client {
 	return append(clients, s.d.httpDirect(timeout))
 }
 
-// fetchReleases asks GitHub for the list of channel.
-func (s *Service) fetchReleases(ctx context.Context, channel string) ([]model.CoreRelease, error) {
+// fetchReleases asks GitHub for the list of channel. With etag set an
+// unchanged list comes back as notModified (and a nil list).
+func (s *Service) fetchReleases(ctx context.Context, channel, etag string) (list []model.CoreRelease, res ghResult, err error) {
 	u := coreAPIBase + "/releases?per_page=" + strconv.Itoa(releaseFetchLimit)
 	if channel == model.CoreChannelAlpha {
 		u = coreAPIBase + "/releases/tags/" + coreAlphaTag
@@ -281,49 +362,73 @@ func (s *Service) fetchReleases(ctx context.Context, channel string) ([]model.Co
 		var rels []ghRelease
 		if channel == model.CoreChannelAlpha {
 			var one ghRelease
-			lastErr = githubJSON(ctx, c, u, &one)
+			res, lastErr = s.githubJSON(ctx, c, u, etag, &one)
 			rels = []ghRelease{one}
 		} else {
-			lastErr = githubJSON(ctx, c, u, &rels)
+			res, lastErr = s.githubJSON(ctx, c, u, etag, &rels)
 		}
 		if lastErr == nil {
+			if res.NotModified {
+				return nil, res, nil
+			}
 			list := releasesFromAPI(channel, rels, runtime.GOOS, runtime.GOARCH)
 			if len(list) == 0 {
-				return nil, errors.New(i18n.T("GitHub 没有返回版本号"))
+				return nil, ghResult{}, errors.New(i18n.T("GitHub 没有返回版本号"))
 			}
-			return list, nil
+			return list, res, nil
 		}
 		var rl rateLimitError
 		if errors.As(lastErr, &rl) || ctx.Err() != nil {
 			break // another route will not help against the quota
 		}
 	}
-	return nil, lastErr
+	return nil, ghResult{}, lastErr
 }
 
 // CoreReleases implements API.CoreReleases.
 func (s *Service) CoreReleases(channel string, refresh bool) ([]model.CoreRelease, error) {
-	channel, err := validChannel(channel)
+	list, fetchErr, err := s.coreReleases(channel, refresh)
+	if fetchErr != nil && err == nil {
+		var rl rateLimitError
+		if errors.As(fetchErr, &rl) {
+			s.alog.Debugf("core releases (%s): %v; using the cached list", channel, fetchErr)
+		} else {
+			s.alog.Warnf("core releases (%s): %v; using the cached list", channel, fetchErr)
+		}
+	}
+	return list, err
+}
+
+// coreReleases is CoreReleases that also says when the list is an old one
+// because GitHub could not be asked (fetchErr; err is nil then).
+func (s *Service) coreReleases(channel string, refresh bool) (list []model.CoreRelease, fetchErr, err error) {
+	channel, err = validChannel(channel)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cached, hasCache := s.cachedReleases(channel)
 	if hasCache && !refresh && s.d.now().Sub(cached.At) < releaseCacheTTL {
-		return s.markInstalled(cached.List), nil
+		return s.markInstalled(cached.List), nil, nil
+	}
+	etag := ""
+	if hasCache {
+		etag = cached.ETag
 	}
 	ctx, cancel := s.ctrlCtx(nil, releaseTimeout)
 	defer cancel()
-	list, err := s.fetchReleases(ctx, channel)
-	if err != nil {
+	list, res, ferr := s.fetchReleases(ctx, channel, etag)
+	if ferr != nil {
 		if hasCache {
-			// A stale list beats none: say so in the log and return it.
-			s.alog.Warnf("core releases (%s): %v; using the list from %s", channel, err, cached.At.Format(time.RFC3339))
-			return s.markInstalled(cached.List), nil
+			// A stale list beats none; the caller logs fetchErr.
+			return s.markInstalled(cached.List), ferr, nil
 		}
-		return nil, fmt.Errorf(i18n.T("检查更新失败：%v"), err)
+		return nil, ferr, fmt.Errorf(i18n.T("检查更新失败：%v"), ferr)
 	}
-	s.storeReleases(channel, list)
-	return s.markInstalled(list), nil
+	if res.NotModified {
+		list = cached.List
+	}
+	s.storeReleases(channel, list, res.ETag)
+	return s.markInstalled(list), nil, nil
 }
 
 // markInstalled copies list with Installed set from the cores directory.
@@ -376,50 +481,119 @@ func autoCoreCheck(set model.Settings) bool {
 
 // CheckCoreUpdate implements API.CheckCoreUpdate.
 func (s *Service) CheckCoreUpdate() (model.CoreUpdateInfo, error) {
+	info, fetchErr, err := s.checkCoreUpdate()
+	if fetchErr != nil && err == nil {
+		s.alog.Warnf("core update check: %v; using the cached list", fetchErr)
+	}
+	return info, err
+}
+
+// checkCoreUpdate compares the latest release with the core in use.
+// fetchErr is set when GitHub could not be asked and the cached list was
+// used instead.
+func (s *Service) checkCoreUpdate() (info model.CoreUpdateInfo, fetchErr, err error) {
 	s.mu.Lock()
 	channel := s.state.settings.CoreChannel
 	s.mu.Unlock()
 	channel, _ = validChannel(channel)
-	list, err := s.CoreReleases(channel, false)
+	list, fetchErr, err := s.coreReleases(channel, false)
 	if err != nil {
-		return model.CoreUpdateInfo{Channel: channel}, err
+		return model.CoreUpdateInfo{Channel: channel}, fetchErr, err
 	}
-	info := model.CoreUpdateInfo{Channel: channel, Current: s.currentCoreVersion(), CheckedAt: s.d.now()}
+	info = model.CoreUpdateInfo{Channel: channel, Current: s.currentCoreVersion(), CheckedAt: s.d.now()}
 	if len(list) > 0 {
 		latest := list[0]
 		info.Latest, info.Notes, info.Installed = latest.Version, latest.Notes, latest.Installed
 		info.Available = isNewer(channel, latest.Version, info.Current) && !latest.Installed
 	}
-	s.cores.mu.Lock()
-	s.cores.lastCheck = info.CheckedAt
-	s.cores.mu.Unlock()
-	return info, nil
+	if fetchErr == nil {
+		s.cores.mu.Lock()
+		s.cores.lastCheck = info.CheckedAt
+		s.cores.mu.Unlock()
+	}
+	return info, fetchErr, nil
 }
 
 // coreUpdateLoop checks for a new core daily while Settings.CoreAutoCheck
 // is on and the app's own update check is not disabled (first a few
 // minutes after launch), notifies, and installs and switches when
-// CoreAutoInstall is on.
+// CoreAutoInstall is on. It wakes at least every coreUpdateTick, and at
+// the retry time a failed check scheduled (coreCheckFailed) when that is
+// sooner.
 func (s *Service) coreUpdateLoop() {
-	first := time.NewTimer(coreUpdateDelay)
-	defer first.Stop()
-	tick := time.NewTicker(coreUpdateTick)
-	defer tick.Stop()
+	t := time.NewTimer(coreUpdateDelay)
+	defer t.Stop()
 	for {
 		select {
 		case <-s.rootCtx.Done():
 			return
-		case <-first.C:
+		case <-t.C:
 			s.runCoreUpdateCheck()
-		case <-tick.C:
-			s.runCoreUpdateCheck()
+			t.Reset(s.nextCoreCheckWait())
 		}
+	}
+}
+
+// nextCoreCheckWait is how long coreUpdateLoop sleeps: until a scheduled
+// retry, at most coreUpdateTick, at least coreUpdateMinWait.
+func (s *Service) nextCoreCheckWait() time.Duration {
+	s.cores.mu.Lock()
+	retry := s.cores.retryAt
+	s.cores.mu.Unlock()
+	wait := coreUpdateTick
+	if !retry.IsZero() {
+		if d := retry.Sub(s.d.now()); d < wait {
+			wait = d
+		}
+	}
+	return max(wait, coreUpdateMinWait)
+}
+
+// coreCheckFailed schedules the next automatic check after a failure: when
+// GitHub's quota resets, else after a backoff that doubles from
+// coreUpdateTick up to coreUpdateInterval. Only the first of consecutive
+// failures is a warning; the rest are logged at debug level.
+func (s *Service) coreCheckFailed(err error) {
+	now := s.d.now()
+	s.cores.mu.Lock()
+	s.cores.failures++
+	n := s.cores.failures
+	backoff := coreUpdateInterval
+	if n <= 8 && coreUpdateTick<<(n-1) < coreUpdateInterval {
+		backoff = coreUpdateTick << (n - 1)
+	}
+	retry := now.Add(backoff)
+	var rl rateLimitError
+	if errors.As(err, &rl) && !rl.reset.IsZero() {
+		retry = rl.reset.Add(time.Minute) // a little after the reset, not before
+		if retry.Before(now) {
+			retry = now
+		}
+	}
+	s.cores.retryAt = retry
+	s.cores.mu.Unlock()
+	if n == 1 {
+		s.alog.Warnf("core update check: %v; next try at %s", err, retry.Format(time.TimeOnly))
+	} else {
+		s.alog.Debugf("core update check (failed %d times in a row): %v; next try at %s", n, err, retry.Format(time.TimeOnly))
+	}
+}
+
+// coreCheckSucceeded clears the failure schedule.
+func (s *Service) coreCheckSucceeded() {
+	s.cores.mu.Lock()
+	n := s.cores.failures
+	s.cores.failures = 0
+	s.cores.retryAt = time.Time{}
+	s.cores.mu.Unlock()
+	if n > 1 {
+		s.alog.Infof("core update check works again after %d failures", n)
 	}
 }
 
 // runCoreUpdateCheck is one pass of coreUpdateLoop: skipped when automatic
 // checks are off (autoCoreCheck), a check ran within coreUpdateInterval,
-// or a download is in progress.
+// a failed check scheduled a later retry, or a download is in progress.
 func (s *Service) runCoreUpdateCheck() {
 	s.mu.Lock()
 	set := s.state.settings
@@ -428,17 +602,25 @@ func (s *Service) runCoreUpdateCheck() {
 	if !autoCoreCheck(set) || busy {
 		return
 	}
+	now := s.d.now()
 	s.cores.mu.Lock()
-	last := s.cores.lastCheck
+	last, retry := s.cores.lastCheck, s.cores.retryAt
 	s.cores.mu.Unlock()
-	if !last.IsZero() && s.d.now().Sub(last) < coreUpdateInterval {
+	if !retry.IsZero() && now.Before(retry) {
 		return
 	}
-	info, err := s.CheckCoreUpdate()
+	if retry.IsZero() && !last.IsZero() && now.Sub(last) < coreUpdateInterval {
+		return
+	}
+	info, fetchErr, err := s.checkCoreUpdate()
+	if fetchErr != nil {
+		err = fetchErr // GitHub's own error (a cached list is no check either)
+	}
 	if err != nil {
-		s.alog.Warnf("core update check: %v", err)
+		s.coreCheckFailed(err)
 		return
 	}
+	s.coreCheckSucceeded()
 	if !info.Available {
 		s.alog.Infof("core update check: %s is current (%s)", info.Current, info.Channel)
 		return

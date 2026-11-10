@@ -22,7 +22,7 @@ func TestSysWatcherWakeAndNetworkChange(t *testing.T) {
 		now:         func() time.Time { return now },
 		fingerprint: func() string { return fp },
 		interval:    watchInterval,
-		onWake:      func() { wakes++ },
+		onWake:      func(time.Duration) { wakes++ },
 		onNetChange: func() { nets++ },
 	}
 	for i := 0; i < 5; i++ {
@@ -240,5 +240,207 @@ func TestListenAddr(t *testing.T) {
 		if got := listenAddr(in); got != want {
 			t.Errorf("listenAddr(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestDiffNet(t *testing.T) {
+	a := netSnap{ifaces: map[string]string{"en0": "192.168.1.5/24", "en5": "10.8.0.2/24"}, iface: "Wi-Fi (en0)", gateway: "192.168.1.1", dns: "192.168.1.1"}
+	b := netSnap{ifaces: map[string]string{"en0": "10.0.0.7/24", "en7": "172.16.0.2/16"}, iface: "Wi-Fi (en0)", gateway: "10.0.0.1", dns: "10.0.0.1"}
+	var got []string
+	for _, c := range diffNet(a, b) {
+		got = append(got, c.kind+": "+c.text)
+	}
+	want := []string{
+		"interface: en0 192.168.1.5/24 → 10.0.0.7/24",
+		"interface: en5 down",
+		"interface: en7 up (172.16.0.2/16)",
+		`route: gateway "192.168.1.1" → "10.0.0.1"`,
+		`dns: DNS "192.168.1.1" → "10.0.0.1"`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("diff:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if d := diffNet(a, a); len(d) != 0 {
+		t.Fatalf("no change expected: %+v", d)
+	}
+}
+
+func TestRecheckDelay(t *testing.T) {
+	first := time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)
+	if d := recheckDelay(first, first); d != recheckDebounce {
+		t.Fatalf("first event: %v", d)
+	}
+	if d := recheckDelay(first, first.Add(9*time.Second)); d != time.Second {
+		t.Fatalf("near the cap: %v", d)
+	}
+	if d := recheckDelay(first, first.Add(time.Minute)); d != 0 {
+		t.Fatalf("past the cap: %v", d)
+	}
+}
+
+// netHarness is a harness whose network the test changes.
+type netHarness struct {
+	*harness
+	mu     sync.Mutex
+	info   model.NetInfo
+	ifaces map[string]string
+	reads  int
+}
+
+func newNetHarness(t *testing.T) *netHarness {
+	n := &netHarness{
+		harness: newHarness(t, nil),
+		info:    model.NetInfo{Interface: "Wi-Fi (en0)", LANIP: "192.168.1.5", Gateway: "192.168.1.1", DNS: []string{"192.168.1.1"}},
+		ifaces:  map[string]string{"en0": "192.168.1.5/24"},
+	}
+	n.s.d.netinfo = func(context.Context) (model.NetInfo, error) {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		n.reads++
+		return n.info, nil
+	}
+	n.s.nw.ifaceSrc = func() map[string]string {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+		out := map[string]string{}
+		for k, v := range n.ifaces {
+			out[k] = v
+		}
+		return out
+	}
+	n.s.takeNetBaseline()
+	n.s.ClearAppLogs()
+	return n
+}
+
+func (n *netHarness) set(fn func(n *netHarness)) { n.mu.Lock(); fn(n); n.mu.Unlock() }
+
+// recheckLogs returns the network recheck lines as "level: payload".
+func (n *netHarness) recheckLogs() []string {
+	var out []string
+	for _, l := range n.s.AppLogs() {
+		if strings.HasPrefix(l.Payload, "network recheck") {
+			out = append(out, l.Level+": "+l.Payload)
+		}
+	}
+	return out
+}
+
+// The OS reports Lanflow's own system DNS change as a network change; with
+// nothing else changed it is skipped at debug level.
+func TestRecheckSkipsLanflowsOwnDNSChange(t *testing.T) {
+	n := newNetHarness(t)
+	if err := n.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	starts := n.mgr.starts
+	n.s.takeNetBaseline()
+	n.s.ClearAppLogs()
+	if err := n.s.d.dns.Set([]string{"223.5.5.5"}); err != nil {
+		t.Fatal(err)
+	}
+	n.set(func(n *netHarness) { n.info.DNS = []string{"223.5.5.5"} })
+	n.s.NetworkChanged()
+	n.s.runPendingRecheck()
+	logs := n.recheckLogs()
+	if len(logs) != 1 || !strings.HasPrefix(logs[0], "debug: network recheck skipped after network (OS network event)") || !strings.Contains(logs[0], "Lanflow's own changes (") || !strings.Contains(logs[0], "system DNS") {
+		t.Fatalf("logs: %q", logs)
+	}
+	if n.mgr.starts != starts {
+		t.Fatal("the core was restarted for Lanflow's own DNS change")
+	}
+}
+
+// A real change is logged at info level with what changed; events that
+// come together make one recheck naming them all.
+func TestRecheckLogsWhatChanged(t *testing.T) {
+	n := newNetHarness(t)
+	n.set(func(n *netHarness) {
+		n.info.DNS = []string{"10.0.0.1"}
+		n.info.Gateway = "10.0.0.1"
+		n.ifaces = map[string]string{"en0": "10.0.0.7/24"}
+	})
+	n.s.NetworkChanged()
+	n.s.systemChanged(srcInterfaces, "")
+	n.s.NetworkChanged() // the same event again is named once
+	n.s.runPendingRecheck()
+	n.s.runPendingRecheck() // nothing pending: no second recheck
+	logs := n.recheckLogs()
+	if len(logs) != 1 {
+		t.Fatalf("one recheck expected: %q", logs)
+	}
+	l := logs[0]
+	for _, want := range []string{
+		"info: network recheck after network (OS network event), interfaces;",
+		"en0 192.168.1.5/24 → 10.0.0.7/24",
+		`gateway "192.168.1.1" → "10.0.0.1"`,
+		`DNS "192.168.1.1" → "10.0.0.1"`,
+		"no repair needed",
+	} {
+		if !strings.Contains(l, want) {
+			t.Fatalf("log %q lacks %q", l, want)
+		}
+	}
+	if !strings.HasSuffix(l, "ms)") && !strings.HasSuffix(l, "s)") {
+		t.Fatalf("no duration: %q", l)
+	}
+	if n.s.NetInfo().Gateway != "10.0.0.1" {
+		t.Fatalf("network information not stored: %+v", n.s.NetInfo())
+	}
+}
+
+// A wake after which nothing changed and the core answers: no restart, and
+// the line is at debug level.
+func TestRecheckAfterQuietWakeIsDebug(t *testing.T) {
+	n := newNetHarness(t)
+	if err := n.s.StartCore(); err != nil {
+		t.Fatal(err)
+	}
+	n.s.takeNetBaseline()
+	n.s.ClearAppLogs()
+	starts := n.mgr.starts
+	n.s.Resumed()
+	n.s.runPendingRecheck()
+	logs := n.recheckLogs()
+	if len(logs) != 1 || !strings.HasPrefix(logs[0], "debug: network recheck after wake (OS resume event); nothing changed; no repair needed") {
+		t.Fatalf("logs: %q", logs)
+	}
+	if n.mgr.starts != starts {
+		t.Fatal("the core was restarted though it answered")
+	}
+	// A core that died while asleep is restarted, and the line says so.
+	n.mgr.mu.Lock()
+	n.mgr.running = false
+	n.mgr.mu.Unlock()
+	n.s.ClearAppLogs()
+	n.s.Resumed()
+	n.s.runPendingRecheck()
+	logs = n.recheckLogs()
+	if len(logs) != 1 || !strings.HasPrefix(logs[0], "info: ") || !strings.Contains(logs[0], "repaired: core had exited, restarted") {
+		t.Fatalf("logs after a dead core: %q", logs)
+	}
+}
+
+// Lanflow's own proxy change (no network difference) is skipped too, while
+// a gateway change is attributed to a core start (TUN routes) only then.
+func TestRecheckAttributesRouteChangeToCoreStart(t *testing.T) {
+	n := newNetHarness(t)
+	if err := n.s.StartCore(); err != nil { // notes a core start
+		t.Fatal(err)
+	}
+	n.set(func(n *netHarness) { n.info.Interface = "utun1500" })
+	n.s.NetworkChanged()
+	n.s.runPendingRecheck()
+	if logs := n.recheckLogs(); len(logs) != 1 || !strings.HasPrefix(logs[0], "debug: network recheck skipped") || !strings.Contains(logs[0], "core start/stop") {
+		t.Fatalf("logs: %q", logs)
+	}
+	if err := n.s.SetSystemProxy(true); err != nil {
+		t.Fatal(err)
+	}
+	n.s.ClearAppLogs()
+	n.s.NetworkChanged()
+	n.s.runPendingRecheck()
+	if logs := n.recheckLogs(); len(logs) != 1 || !strings.Contains(logs[0], "system proxy") || !strings.HasPrefix(logs[0], "debug: network recheck skipped") {
+		t.Fatalf("logs after the proxy change: %q", logs)
 	}
 }
