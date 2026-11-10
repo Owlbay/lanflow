@@ -25,6 +25,7 @@ import (
 type syncUI struct {
 	busy   bool
 	choice *syncChoice // the 合并 dialog, nil when closed
+	pass   *passDialog // the 同步口令 dialog, nil when closed
 }
 
 // syncChoice is a pending SetConfigSync that needs the user's choice.
@@ -88,9 +89,11 @@ func (p *Page) configSyncSection(c *ui.Context, t *ui.Theme) {
 				ui.Button(c, revealLabel(e)).OnClick(func() { mygo.Shell.ShowItemInFolder(st.Path) })
 			})
 		})
+		p.syncPassphraseRows(c, st, busy)
 		p.syncBanners(c, st, busy)
 	})
 	p.syncChoiceDialog(c, t)
+	p.passphraseDialog(c, t)
 }
 
 // syncStateText is the 同步文件 row's description.
@@ -140,7 +143,16 @@ func (p *Page) syncBanners(c *ui.Context, st model.ConfigSyncStatus, busy bool) 
 			ui.Button(c, i18n.T("前往订阅")).OnClick(func() { e.Navigate(env.Subs, "") })
 		})
 	}
-	if st.WebDAVPasswordMissing {
+	if st.Locked {
+		msg := i18n.Tf("输入同步口令以解锁订阅链接（同步文件中有 %d 项加密的链接或密码，本机还不能读取）。", st.LockedSecrets)
+		if st.PassphraseChanged {
+			msg = i18n.T("同步口令已在另一台设备上修改。输入新口令以解锁订阅链接；在此之前，本机已有的链接照常使用。")
+		}
+		e.Kit.Banner(c, "info", msg, func() {
+			ui.Button(c, i18n.T("输入口令…")).Disabled(busy).OnClick(func() { p.openPassDialog(passUnlock) })
+		})
+	}
+	if st.WebDAVPasswordMissing && !st.Locked {
 		e.Kit.Banner(c, "info", i18n.T("同步文件中设置了 WebDAV 密码，但本机钥匙串里没有；需要备份到 WebDAV 时请重新输入密码。"), nil)
 	}
 }

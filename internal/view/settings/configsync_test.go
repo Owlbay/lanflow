@@ -73,3 +73,103 @@ func TestSyncBanners(t *testing.T) {
 		t.Fatalf("confirms %q resolved %q", r.confirms, f.Sync().Resolved)
 	}
 }
+
+// TestSyncPassphraseSet: the switch opens the passphrase dialog; a short
+// or mismatched passphrase stays in the dialog, a good one turns sealing
+// on and closes it.
+func TestSyncPassphraseSet(t *testing.T) {
+	f := fake.NewInstant()
+	f.Sync().Status = &model.ConfigSyncStatus{Mode: model.SyncFolder, Dir: "/d", Path: "/d/lanflow.yaml", State: model.SyncStateOK}
+	e, r := testEnv(f)
+	p := New(e)
+	tt := ui.NewTester(p.View, 1000, 1600)
+	if !tt.HasText("用口令加密链接") || !strings.Contains(strings.Join(tt.Texts(), "\n"), "口令丢失后无法恢复") {
+		t.Fatalf("row or its warning missing: %q", tt.Texts())
+	}
+	clickRole(t, tt, ui.RoleSwitch, "用口令加密链接")
+	tt.Frame()
+	if !tt.HasText("设置同步口令") || !tt.HasText("再次输入口令") {
+		t.Fatalf("dialog not open: %q", tt.Texts())
+	}
+	try := func(pass, confirm string) {
+		p.mu.Lock()
+		p.sync.pass.pass, p.sync.pass.confirm = pass, confirm
+		p.mu.Unlock()
+		p.submitPass()
+		tt.Frame()
+	}
+	try("short", "short")
+	if !tt.HasText("同步口令至少需要 8 个字符。") || len(f.Sync().Calls) != 0 {
+		t.Fatalf("short passphrase: %q calls %q", tt.Texts(), f.Sync().Calls)
+	}
+	try("long enough one", "long enough two")
+	if !tt.HasText("两次输入的口令不一致。") || len(f.Sync().Calls) != 0 {
+		t.Fatalf("mismatch: %q", tt.Texts())
+	}
+	try("long enough one", "long enough one")
+	tt.Frame()
+	if c := f.Sync().Calls; len(c) != 1 || c[0] != "set" {
+		t.Fatalf("calls %q", c)
+	}
+	if tt.HasText("设置同步口令") {
+		t.Fatal("dialog still open after success")
+	}
+	if !strings.Contains(strings.Join(r.toasts, "\n"), "已用口令加密") {
+		t.Fatalf("toasts %q", r.toasts)
+	}
+	if !tt.HasText("修改口令…") || !tt.HasText("在本机忘记口令") {
+		t.Fatalf("change / forget not offered: %q", tt.Texts())
+	}
+	if err := tt.Click("在本机忘记口令"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if c := f.Sync().Calls; len(c) != 2 || c[1] != "forget" || len(r.confirms) != 1 {
+		t.Fatalf("forget: calls %q confirms %q", c, r.confirms)
+	}
+}
+
+// TestSyncPassphraseUnlock: a locked device shows the banner; a wrong
+// passphrase says so in the dialog, the right one unlocks.
+func TestSyncPassphraseUnlock(t *testing.T) {
+	f := fake.NewInstant()
+	f.Sync().Status = &model.ConfigSyncStatus{Mode: model.SyncFolder, Dir: "/d", Path: "/d/lanflow.yaml", State: model.SyncStateOK,
+		Encrypted: true, Locked: true, LockedSecrets: 2}
+	f.Sync().Passphrase = "the right one"
+	e, _ := testEnv(f)
+	p := New(e)
+	tt := ui.NewTester(p.View, 1000, 1600)
+	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "输入同步口令以解锁订阅链接") {
+		t.Fatalf("banner missing: %q", tt.Texts())
+	}
+	if tt.HasText("修改口令…") {
+		t.Fatal("change offered while locked")
+	}
+	if err := tt.Click("输入口令…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !tt.HasText("输入同步口令") || tt.HasText("再次输入口令") {
+		t.Fatalf("unlock dialog: %q", tt.Texts())
+	}
+	p.mu.Lock()
+	p.sync.pass.pass = "a wrong one"
+	p.mu.Unlock()
+	p.submitPass()
+	tt.Frame()
+	if !tt.HasText("同步口令不正确，请重新输入。") || !tt.HasText("输入同步口令") {
+		t.Fatalf("wrong passphrase not shown: %q", tt.Texts())
+	}
+	p.mu.Lock()
+	p.sync.pass.pass = "the right one"
+	p.mu.Unlock()
+	p.submitPass()
+	tt.Frame()
+	tt.Frame()
+	if tt.HasText("输入同步口令") || strings.Contains(strings.Join(tt.Texts(), "\n"), "解锁订阅链接（") {
+		t.Fatalf("still locked: %q", tt.Texts())
+	}
+	if !tt.HasText("修改口令…") {
+		t.Fatalf("unlocked state not shown: %q", tt.Texts())
+	}
+}

@@ -187,12 +187,16 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 		if st.Core == model.CoreMissing {
 			ui.Box(c).Padding(0, 12, 10, 12).Children(func() { p.missingBanner(c, st) })
 		}
-		// 配置同步 (docs/config-sync.md): a refused change or conflict
-		// copies need the user; the details are in 设置 › 常规.
-		if cs := p.e.API.ConfigSyncStatus(); cs.Error != "" || len(cs.Conflicts) > 0 {
+		// 配置同步 (docs/config-sync.md): a refused change, conflict
+		// copies or sealed links waiting for the passphrase need the user;
+		// the details are in 设置 › 常规.
+		if cs := p.e.API.ConfigSyncStatus(); cs.Error != "" || len(cs.Conflicts) > 0 || cs.Locked {
 			ui.Box(c).Padding(0, 12, 10, 12).Children(func() {
 				msg := i18n.Tf("同步文件有冲突副本（%s），请选择保留哪一个。", strings.Join(cs.Conflicts, i18n.T("、")))
 				kind := "warn"
+				if len(cs.Conflicts) == 0 {
+					msg, kind = i18n.T("输入同步口令以解锁订阅链接。"), "info"
+				}
 				if cs.Error != "" {
 					msg, kind = i18n.Tf("同步文件的修改没有加载，配置保持不变：%s", cs.Error), "error"
 				}
