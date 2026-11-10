@@ -41,6 +41,9 @@ const (
 	autoDelay  = 4 * time.Second
 	swayAmp    = 12.0
 	swayPeriod = 36 * time.Second
+	// swayStep is the step of the sway, in degrees: under a pixel at the
+	// globe's usual size.
+	swayStep = 0.25
 	// Inertia after a fling: the angular speed halves about every
 	// inertiaTau and stops under inertiaStop degrees a second.
 	inertiaTau  = 450 * time.Millisecond
@@ -549,7 +552,11 @@ func (v *viewState) shown(now time.Time, reduce bool) (globeFit, bool) {
 	v.swayOff = 0
 	if !v.swayHeld && !v.held && v.start.IsZero() && !v.lastInput.IsZero() {
 		if idle := now.Sub(v.lastInput) - autoDelay; idle > 0 {
-			v.swayOff = swayAmp * math.Sin(2*math.Pi*idle.Seconds()/swayPeriod.Seconds())
+			// In steps of swayStep: the ground's canvas is drawn again
+			// only when the globe turned a step, not every frame of a
+			// motion of two degrees a second.
+			off := swayAmp * math.Sin(2*math.Pi*idle.Seconds()/swayPeriod.Seconds())
+			v.swayOff = math.Round(off/swayStep) * swayStep
 			moving = true
 		}
 	}

@@ -960,11 +960,11 @@ func (p *Page) anyLive(rs []route) bool {
 }
 
 // Hidden is called by the shell when the window is hidden or minimized:
-// the globe's ground canvases and land dots are dropped, and drawn anew
-// when the page shows again.
+// the globe's ground canvas, a texture the size of the map, is dropped
+// and drawn anew when the page shows again. The land dots stay: they are
+// small vectors, and finding them again walks the whole land mask.
 func (p *Page) Hidden() {
 	p.ground.release()
-	p.land = landCache{}
 }
 
 func circle(cx, cy, r float32) ui.Rect { return ui.Rect{X: cx - r, Y: cy - r, W: 2 * r, H: 2 * r} }
