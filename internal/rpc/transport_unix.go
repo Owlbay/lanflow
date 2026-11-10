@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -104,8 +105,16 @@ func peerUID(conn net.Conn) (int, error) {
 	return uid, uerr
 }
 
-// currentUID is the uid peers must run as (a variable for tests).
-var currentUID = os.Getuid
+// uidOverride replaces the uid peers must run as, for tests; -1 = none.
+var uidOverride = func() *atomic.Int64 { var v atomic.Int64; v.Store(-1); return &v }()
+
+// currentUID is the uid peers must run as.
+func currentUID() int {
+	if v := uidOverride.Load(); v >= 0 {
+		return int(v)
+	}
+	return os.Getuid()
+}
 
 // verifyPeer requires the other end to run as the current user.
 func verifyPeer(conn net.Conn) error {

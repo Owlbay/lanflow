@@ -34,8 +34,8 @@ func TestPeerCheck(t *testing.T) {
 	}
 	c.Close()
 
-	currentUID = func() int { return os.Getuid() + 1 }
-	defer func() { currentUID = os.Getuid }()
+	uidOverride.Store(int64(os.Getuid() + 1))
+	defer uidOverride.Store(-1)
 	if _, err := Dial(context.Background(), DialOptions{DataDir: dir, Client: "ctl", Timeout: 2 * time.Second}); err == nil {
 		t.Fatal("a peer of another uid was accepted")
 	}
