@@ -428,9 +428,9 @@ func expiryText(expire, now time.Time, t *ui.Theme) (string, ui.Color) {
 	case expire.Before(now):
 		return i18n.T("已过期"), t.Danger
 	case expire.Sub(now) < 7*24*time.Hour:
-		return i18n.Tf("到期 %s", expire.Format("2006-01-02")), t.Warning
+		return i18n.Tf("到期 %s", env.FmtDate(expire)), t.Warning
 	default:
-		return i18n.Tf("到期 %s", expire.Format("2006-01-02")), t.TextMuted
+		return i18n.Tf("到期 %s", env.FmtDate(expire)), t.TextMuted
 	}
 }
 

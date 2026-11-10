@@ -79,7 +79,7 @@ func (p *Page) View(c *ui.Context) {
 	st := e.API.TrafficStats(rangeKeys[p.rng])
 	subtitle := ""
 	if p.rng == len(rangeKeys)-1 && !st.Since.IsZero() {
-		subtitle = i18n.Tf("自 %s 起", st.Since.Format("2006-01-02"))
+		subtitle = i18n.Tf("自 %s 起", env.FmtDate(st.Since))
 	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("统计"), subtitle, func() { p.tools(c) })
@@ -217,7 +217,7 @@ func tipTime(at time.Time, hourly bool) string {
 	if hourly {
 		return at.Format("15:00") + "–" + at.Add(time.Hour).Format("15:04")
 	}
-	return at.Format("2006-01-02")
+	return env.FmtDate(at)
 }
 
 func legend(c *ui.Context, t *ui.Theme, label string, col ui.Color) {

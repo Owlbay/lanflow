@@ -284,9 +284,9 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 		case s.Expire.Before(time.Now()):
 			ui.Text(c, i18n.T("已过期")).FontSize(12).TextColor(t.Danger)
 		case time.Until(s.Expire) < 7*24*time.Hour:
-			ui.Text(c, s.Expire.Format("2006-01-02")).FontSize(12).TextColor(t.Warning).FontFeatures("tnum")
+			ui.Text(c, env.FmtDate(s.Expire)).FontSize(12).TextColor(t.Warning).FontFeatures("tnum")
 		default:
-			ui.Text(c, s.Expire.Format("2006-01-02")).FontSize(12).FontFeatures("tnum")
+			ui.Text(c, env.FmtDate(s.Expire)).FontSize(12).FontFeatures("tnum")
 		}
 	case "updated":
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {

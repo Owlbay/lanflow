@@ -588,7 +588,7 @@ func providerMeta(pv model.ProxyProvider) string {
 		meta += i18n.Tf(" · 已用 %s / %s GB", env.FmtGB(pv.Upload+pv.Download), env.FmtGB(pv.Total))
 	}
 	if !pv.Expire.IsZero() {
-		meta += i18n.Tf(" · 到期 %s", pv.Expire.Format("2006-01-02"))
+		meta += i18n.Tf(" · 到期 %s", env.FmtDate(pv.Expire))
 	}
 	return meta
 }

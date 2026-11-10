@@ -100,7 +100,7 @@ func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, 
 	case hasActive && active.Bundled:
 		versionDesc = i18n.T("应用自带的内核")
 	case hasActive:
-		versionDesc = channelLabel(active.Channel) + " · " + i18n.Tf("安装于 %s", active.InstalledAt.Format("2006-01-02"))
+		versionDesc = channelLabel(active.Channel) + " · " + i18n.Tf("安装于 %s", env.FmtDate(active.InstalledAt))
 	case s.CorePath != "":
 		versionDesc = i18n.T("自定义内核文件")
 	}
@@ -181,7 +181,7 @@ func (p *Page) installedRow(c *ui.Context, t *ui.Theme, ic model.InstalledCore, 
 	case ic.Bundled:
 		desc = i18n.T("随应用安装")
 	default:
-		desc = channelLabel(ic.Channel) + " · " + ic.InstalledAt.Format("2006-01-02")
+		desc = channelLabel(ic.Channel) + " · " + env.FmtDate(ic.InstalledAt)
 	}
 	if ic.Size > 0 {
 		desc += " · " + env.FmtBytes(ic.Size)
@@ -387,7 +387,7 @@ func (p *Page) releaseRow(c *ui.Context, t *ui.Theme, r model.CoreRelease, downl
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, r.Version).FontSize(13).Bold().FontFeatures("tnum")
 				if !r.PublishedAt.IsZero() {
-					ui.Text(c, r.PublishedAt.Local().Format("2006-01-02")).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
+					ui.Text(c, env.FmtDate(r.PublishedAt.Local())).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
 				}
 				if r.Size > 0 {
 					ui.Text(c, env.FmtBytes(r.Size)).FontSize(11).TextColor(t.TextMuted)

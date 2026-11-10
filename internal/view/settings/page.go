@@ -688,9 +688,9 @@ func geoUpdatedText(info model.GeoDataInfo, manual time.Time) string {
 	case info.Files > 0 && info.Bundled:
 		return i18n.T("随应用附带")
 	case !info.UpdatedAt.IsZero():
-		return info.UpdatedAt.Local().Format("2006-01-02 15:04")
+		return env.FmtDateTime(info.UpdatedAt.Local())
 	case !manual.IsZero():
-		return manual.Format("2006-01-02")
+		return env.FmtDate(manual)
 	}
 	return "—"
 }

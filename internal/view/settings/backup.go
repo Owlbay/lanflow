@@ -38,7 +38,7 @@ func (p *Page) backupSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 		})
 		last := i18n.T("还没有备份过")
 		if !info.LastBackupAt.IsZero() {
-			last = i18n.Tf("上次备份：%s", info.LastBackupAt.Local().Format("2006-01-02 15:04"))
+			last = i18n.Tf("上次备份：%s", env.FmtDateTime(info.LastBackupAt.Local()))
 		}
 		if info.LastError != "" {
 			last = i18n.Tf("上次自动备份失败：%s", info.LastError)

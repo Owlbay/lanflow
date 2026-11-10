@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"lanflow/internal/app"
+	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 )
 
@@ -112,5 +113,18 @@ func TestUIStateSaver(t *testing.T) {
 	u := f.UIState()
 	if f.saves != 2 || u.LogLevel != "error" || !u.ProxyGrid || !u.OpenGroups["a"] {
 		t.Fatalf("saves %d, state %+v", f.saves, u)
+	}
+}
+
+// TestFmtDateByLanguage: dates follow the language shown.
+func TestFmtDateByLanguage(t *testing.T) {
+	t.Cleanup(func() { i18n.SetLang(i18n.ZH) })
+	d := time.Date(2026, 11, 1, 10, 21, 0, 0, time.Local)
+	if got := FmtDate(d); got != "2026-11-01" {
+		t.Errorf("zh %q", got)
+	}
+	i18n.SetLang(i18n.EN)
+	if got, gotT := FmtDate(d), FmtDateTime(d); got != "Nov 1, 2026" || gotT != "Nov 1, 2026 10:21" {
+		t.Errorf("en %q %q", got, gotT)
 	}
 }

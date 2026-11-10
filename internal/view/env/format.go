@@ -122,8 +122,23 @@ func FmtAgo(t time.Time) string {
 	case t.Year() == now.Year() && now.YearDay()-t.YearDay() == 1:
 		return i18n.T("昨天")
 	default:
-		return t.Format("2006-01-02")
+		return FmtDate(t)
 	}
+}
+
+// FmtDate formats a date in the language shown: "2026-11-01" in Chinese,
+// "Nov 1, 2026" in English.
+func FmtDate(t time.Time) string {
+	if i18n.Lang() == i18n.EN {
+		return t.Format("Jan 2, 2006")
+	}
+	return t.Format("2006-01-02")
+}
+
+// FmtDateTime is FmtDate with the time of day (24-hour, as everywhere in
+// the app): "2026-11-01 10:21", "Nov 1, 2026 10:21".
+func FmtDateTime(t time.Time) string {
+	return FmtDate(t) + " " + t.Format("15:04")
 }
 
 // RuleTypeName returns the Chinese name of a custom rule type.
