@@ -166,6 +166,10 @@ type Connection struct {
 	UpSpeed, DownSpeed int64  // bytes per second (computed from deltas)
 	Start              time.Time
 	ClosedAt           time.Time // zero for active
+	// CaptureLeg marks a leg of HTTPS decryption: the connection to the
+	// capture agent or the agent's connection back into the core. The
+	// 抓包 page lists the decrypted requests instead.
+	CaptureLeg bool `json:",omitempty"`
 }
 
 // LogEntry is one core log line.

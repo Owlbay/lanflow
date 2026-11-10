@@ -160,3 +160,45 @@ func hasCJK(s string) bool {
 	}
 	return false
 }
+
+// Every connection is listed, decrypted or not (as Surge's 最近请求); an
+// undecrypted one offers decrypting its host, which adds it to the
+// selection.
+func TestConnectionsListedAndDecryptFromRow(t *testing.T) {
+	api := fake.NewInstant()
+	api.ClearCaptureFlows()
+	arg := ""
+	e, _ := testEnv(api, &arg)
+	p := New(e)
+	tt := ui.NewTester(p.View, 1300, 800)
+	if !tt.HasText("slack.com") || !tt.HasText("未解密") {
+		t.Fatalf("connections not listed: %q", tt.Texts())
+	}
+	var slack model.CaptureFlow
+	for _, f := range p.rows() {
+		if f.Host == "slack.com" {
+			slack = f
+		}
+	}
+	if slack.ID >= 0 || slack.Port != 443 || slack.Process != "Slack" {
+		t.Fatalf("slack row = %+v", slack)
+	}
+	p.sel = slack.ID
+	tt.Frame()
+	if err := tt.Click("解密此主机"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if d := api.CaptureStatus().Settings.Domains; len(d) == 0 || d[len(d)-1] != "slack.com" {
+		t.Fatalf("selection = %v", d)
+	}
+	if !strings.Contains(strings.Join(tt.Texts(), "\n"), "已在解密选择中") || tt.HasText("解密此主机") {
+		t.Fatalf("detail does not show the host as chosen: %q", tt.Texts())
+	}
+	// 只看已解密 hides the connections
+	p.onlyDec = true
+	tt.Frame()
+	if tt.HasText("slack.com") {
+		t.Fatal("connection shown with 只看已解密")
+	}
+}

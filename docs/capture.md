@@ -240,6 +240,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 ### 7.2 界面
 
 - **入口**：连接页行菜单（`internal/view/conns/page.go` `rowMenu`，在「此域名始终走…」之后）加「解密此主机…」（M1）、「解密此程序…」（M2，`cn.Process == ""` 时禁用）。弹窗显示将生成的选择项、是否同时开启总开关；CA 未信任时先引导安装。
+- **默认看得到所有请求（参考 Surge「最近请求」）**：抓包页无论解密开关如何都列出内核看到的全部连接（主机、程序、规则、链路、流量，标「未解密」），不需要根证书；在行菜单或详情里点「解密此主机 / 解密此程序」加入选择（首次使用先看说明），之后该主机/程序的新请求以完整记录出现。解密两段腿（到 `LANFLOW-MITM-*` 的连接、`lanflow-mitm-up` 回流）由 `Connection.CaptureLeg` 标记并隐藏，由解密记录代替。「只看已解密」只显示记录。明文 HTTP 不额外解析（不改变未选中流量的路径）。
 - **抓包页** `internal/view/capture`：列表 + 右侧详情，交互同连接页（`list.CellMenu` / `HeaderMenu`）。列：时间、程序（`procicon`）、方法、状态、主机、路径、大小、耗时、标记。
 - **详情页签**：概要（URL、状态、归属与置信度、选择项、回流节点链路、TLS 版本/套件/ALPN/上游证书链指纹、ECH）｜请求头｜请求体｜响应头｜响应体｜时间线（accept、ClientHello、上游 dial、上游 TLS、下游 TLS、TTFB、结束）｜WebSocket（M3）。
 - **正文查看器**：M1 文本与 JSON；M2 表单、multipart、图片、十六进制。按 `Content-Encoding` 解压副本展示，超过 256 KiB 先渲染前段。

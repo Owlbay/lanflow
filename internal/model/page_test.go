@@ -24,6 +24,8 @@ func TestSameConnectionCoversEveryField(t *testing.T) {
 			fv.SetString("x")
 		case reflect.Int64:
 			fv.SetInt(7)
+		case reflect.Bool:
+			fv.SetBool(true)
 		case reflect.Slice:
 			fv.Set(reflect.ValueOf([]string{"b"}))
 		case reflect.Struct:

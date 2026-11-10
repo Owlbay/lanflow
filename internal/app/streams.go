@@ -7,6 +7,7 @@ import (
 
 	"lanflow/internal/controller"
 	"lanflow/internal/model"
+	"lanflow/internal/profile"
 )
 
 const (
@@ -350,8 +351,10 @@ func toConnection(rc controller.Connection) model.Connection {
 		host = joinHostPort(host, md.DestinationPort)
 	}
 	chains := make([]string, len(rc.Chains))
+	leg := md.InboundName == profile.CaptureUpListener
 	for i, c := range rc.Chains {
 		chains[len(rc.Chains)-1-i] = c
+		leg = leg || strings.HasPrefix(c, profile.CaptureOutboundPrefix)
 	}
 	return model.Connection{
 		ID:                rc.ID,
@@ -370,6 +373,7 @@ func toConnection(rc controller.Connection) model.Connection {
 		Upload:            rc.Upload,
 		Download:          rc.Download,
 		Start:             rc.Start,
+		CaptureLeg:        leg,
 	}
 }
 

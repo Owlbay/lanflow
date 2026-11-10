@@ -1,7 +1,11 @@
 // Package capture is the 抓包 page (docs/capture.md §7.2): the switch with
-// its timer, the root certificate, the selection, the list of recorded
-// requests and a read-only detail (headers, bodies, TLS, timing), masked
-// by default.
+// its timer, the root certificate, the selection, the list of requests and
+// a read-only detail (headers, bodies, TLS, timing), masked by default.
+//
+// Like Surge's 最近请求, the list shows every connection the core sees,
+// decryption on or off; HTTPS content is only visible for the hosts and
+// programs chosen for decryption, which is done from a row (解密此主机 /
+// 解密此程序). Decrypted requests replace their connection in the list.
 package capture
 
 import (
@@ -41,10 +45,15 @@ type Page struct {
 	sort     ui.SortOrder
 	list     ui.ListState
 	selected int
-	sel      int64
+	sel      int64 // selected row: a record ID, or a connection's negative ID
 	tab      int  // detail tab
 	reveal   bool // show masked values (never remembered)
 	icons    *procicon.Cache
+
+	// connections shown as rows get stable negative IDs
+	connIDs  map[string]int64
+	nextConn int64
+	conns    map[int64]model.Connection
 
 	det struct {
 		sync.Mutex
@@ -78,7 +87,7 @@ func New(e *env.Env) *Page {
 
 // Topics are the service topics the view reads.
 func (p *Page) Topics() []app.Topic {
-	return []app.Topic{app.TopicStatus, app.TopicCapture, app.TopicProcIcons}
+	return []app.Topic{app.TopicStatus, app.TopicCapture, app.TopicConns, app.TopicProcIcons}
 }
 
 var columns = []ui.TableColumn{
@@ -138,7 +147,7 @@ func (p *Page) View(c *ui.Context) {
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("抓包"), StatusText(st), func() { p.tools(c, st) })
 		ui.Column(c).Padding(0, 16).Gap(8).Shrink(0).Children(func() { p.banners(c, st) })
-		if p.editing || !st.Settings.Acknowledged {
+		if p.editing {
 			ui.Scroll(c).Grow(1).Padding(8, 16, 16, 16).Gap(14).Children(func() {
 				if !st.Settings.Acknowledged {
 					p.intro(c, t, st)
@@ -382,7 +391,9 @@ func (p *Page) save(prev model.CaptureSettings) {
 	save()
 }
 
-// handleArg: "add-host:<host>" or "add-app:<path>\n<name>" from the 连接 page.
+// handleArg: "add-host:<host>" or "add-app:<path>\n<name>", from the 连接
+// page or a row here. Before the first-run explanation is accepted the
+// selection editor opens with it after adding.
 func (p *Page) handleArg(a string, st model.CaptureStatus) {
 	e := p.e
 	enable := st.CA == model.CATrusted && st.Settings.Acknowledged
@@ -399,12 +410,14 @@ func (p *Page) handleArg(a string, st model.CaptureStatus) {
 		host := strings.TrimPrefix(a, "add-host:")
 		e.Confirm(i18n.Tf("解密 %s？", host), i18n.Tf("将添加选择项「%s」（只匹配这个主机名；要包含子域名请在选择中写成 +.%s）。", host, host)+tail, okLabel, false, func() {
 			e.Run(func() error { return e.API.AddCaptureDomain(host, enable) }, "")
+			p.afterAdd(st)
 		})
 	case strings.HasPrefix(a, "add-app:"):
 		path, name, _ := strings.Cut(strings.TrimPrefix(a, "add-app:"), "\n")
 		sel := app.CaptureAppFor(path, name)
 		e.Confirm(i18n.Tf("解密程序 %s？", sel.Name), i18n.Tf("将添加选择项「%s」：这个程序（及其辅助进程）访问的所有 HTTPS 主机都会解密，跳过列表除外。", sel.Match)+tail, okLabel, false, func() {
 			e.Run(func() error { return e.API.AddCaptureApp(path, name, enable) }, "")
+			p.afterAdd(st)
 		})
 	}
 }
@@ -436,6 +449,9 @@ func (p *Page) rows() []model.CaptureFlow {
 	all := p.e.API.CaptureFlows()
 	q := strings.ToLower(strings.TrimSpace(p.query))
 	out := make([]model.CaptureFlow, 0, len(all))
+	if !p.onlyDec {
+		all = append(all, p.connRows()...)
+	}
 	for _, f := range all {
 		if p.onlyDec && !f.Has(model.FlowDecrypted) {
 			continue
@@ -480,10 +496,10 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 		switch {
 		case strings.TrimSpace(p.query) != "":
 			e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的请求", strings.TrimSpace(p.query)), "", nil)
-		case !st.Enabled:
-			e.Kit.Empty(c, "conns", i18n.T("解密未开启"), i18n.T("在「连接」页右键一行选择「解密此主机…」，或点「选择…」添加域名，然后开启解密。记录只保存在内存中。"), nil)
+		case p.onlyDec:
+			e.Kit.Empty(c, "conns", i18n.T("还没有解密的请求"), i18n.T("在列表中右键一个请求选择「解密此主机」或「解密此程序」，之后的请求会显示完整内容。"), nil)
 		default:
-			e.Kit.Empty(c, "conns", i18n.T("等待请求"), i18n.T("选中的主机发出 HTTPS 请求后会出现在这里。"), nil)
+			e.Kit.Empty(c, "conns", i18n.T("等待请求"), i18n.T("本机发出的请求会出现在这里。选中一个可以解密它的主机或程序，查看 HTTPS 内容。"), nil)
 		}
 		return
 	}
@@ -495,7 +511,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 	}
 	p.list.Key = func(i int) any { return rows[i].ID }
 	p.list.Label = func(i int) string { return rows[i].Host + redact.Path(rows[i].Path) }
-	p.list.CellMenu = func(m *ui.Menu, row, col int) { p.rowMenu(c, m, rows[row]) }
+	p.list.CellMenu = func(m *ui.Menu, row, col int) { p.rowMenu(c, m, rows[row], st) }
 	cols := env.I18nColumns(columns)
 	ui.Row(c).Grow(1).AlignItems(ui.Stretch).Children(func() {
 		ui.Table(c.Key("table"), &p.list, cols, len(rows), func(row, col int) {
@@ -506,13 +522,20 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 		} else {
 			p.sel = 0
 		}
-		if p.sel != 0 {
+		switch {
+		case p.sel < 0:
+			p.connDetail(c, t, rows[p.selected], st)
+		case p.sel > 0:
 			p.detail(c, t, rows[p.selected])
 		}
 	})
 }
 
-func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, f model.CaptureFlow) {
+func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, f model.CaptureFlow, st model.CaptureStatus) {
+	if f.ID < 0 {
+		p.decryptItems(m, f, st)
+		m.Separator()
+	}
 	if m.Item(i18n.T("复制 URL")).Disabled(f.Method == "").Chosen() {
 		c.WriteClipboard(flowURL(f, true))
 		p.e.Toast(i18n.T("已复制（查询参数中的凭据已打码）"), false)
@@ -613,6 +636,8 @@ func flagText(fl string) (string, string) {
 		return i18n.T("非本机"), "red"
 	case model.FlowUnknown:
 		return i18n.T("未知协议"), "gray"
+	case flowConn:
+		return i18n.T("未解密"), "gray"
 	}
 	return "", ""
 }
@@ -673,9 +698,7 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, f model.CaptureFlow) {
 				}
 				ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted)
 			})
-			ui.Button(c, "").Label(i18n.T("关闭详情")).Tooltip(i18n.T("关闭")).Padding(0, 4).Children(func() {
-				ui.Text(c, "✕").FontSize(11)
-			}).OnClick(func() { p.sel = 0 })
+			p.closeButton(c)
 		})
 		tabs := []string{i18n.T("概要"), i18n.T("请求头"), i18n.T("请求体"), i18n.T("响应头"), i18n.T("响应体")}
 		if len(d.WSFrames) > 0 {
