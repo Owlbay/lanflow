@@ -438,8 +438,8 @@ func TestGlobalShortcutWithoutWindow(t *testing.T) {
 	if err := s.Env().SetGlobalShortcut("CmdOrCtrl+Alt+P"); err != nil {
 		t.Fatal(err)
 	}
-	if s.hotkey != "CmdOrCtrl+Alt+P" {
-		t.Fatalf("hotkey = %q", s.hotkey)
+	if got := s.keys.get(model.ShortcutSystemProxy); got != "CmdOrCtrl+Alt+P" {
+		t.Fatalf("hotkey = %q", got)
 	}
 	click(t, tt, "设置")
 	if !tt.HasText("⇧⌘S") {

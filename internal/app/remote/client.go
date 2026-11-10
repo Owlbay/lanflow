@@ -4,8 +4,8 @@
 // use.
 //
 // client_gen.go holds the generated methods; OnChange, UpdateUIState and
-// the window process's extras (read cache, incremental lists) are
-// written here and in cache.go and mirror.go.
+// the window process's extras (read cache, incremental lists, reconnect,
+// window ops) are written here and in cache.go, mirror.go and window.go.
 package remote
 
 //go:generate go run ./apigen/gen
@@ -21,7 +21,8 @@ import (
 	"lanflow/internal/rpc"
 )
 
-// ErrDisconnected is returned once the connection is gone.
+// ErrDisconnected is returned while the connection is down and being
+// re-established (Options.Reconnect).
 var ErrDisconnected = errors.New("与澜流后台服务的连接已断开，正在重新连接")
 
 // Client implements app.API by calling a running Lanflow.
@@ -62,6 +63,10 @@ type Options struct {
 	// Incremental serves Connections, ClosedConnections, Logs and AppLogs
 	// from a copy kept current with the …Since methods (mirror.go).
 	Incremental bool
+	// OnUI receives the service's window commands (rpc.UICommand).
+	OnUI func(rpc.UICommand)
+	// Reconnect, when set, re-establishes a lost connection (window.go).
+	Reconnect *Reconnect
 }
 
 // Dial connects to the running Lanflow. rpc.ErrNotRunning means it is not
@@ -79,12 +84,15 @@ func Dial(ctx context.Context, o Options) (*Client, error) {
 		return nil, err
 	}
 	c.conn = conn
+	if o.Reconnect != nil {
+		go c.watch(conn)
+	}
 	return c, nil
 }
 
 func (cl *Client) dial(ctx context.Context) (*rpc.Conn, error) {
 	return rpc.Dial(ctx, rpc.DialOptions{DataDir: cl.o.DataDir, Client: cl.o.Client, Version: cl.o.Version, Reveal: cl.o.Reveal,
-		OnEvent: cl.event})
+		OnEvent: cl.event, OnUI: cl.o.OnUI})
 }
 
 // Conn is the underlying connection, for the methods outside app.API

@@ -21,6 +21,7 @@ type Conn struct {
 	next    int64
 	pending map[string]chan message
 	onEvent func(topic string)
+	onUI    func(UICommand)
 	closed  chan struct{}
 	err     error // why the connection ended
 	welcome Welcome
@@ -35,6 +36,9 @@ type DialOptions struct {
 	// OnEvent receives "changed" notifications after Subscribe; it runs on
 	// the reading goroutine and must be quick.
 	OnEvent func(topic string)
+	// OnUI receives the service's "ui" commands (the window process,
+	// AttachUI); it runs on the reading goroutine and must be quick.
+	OnUI    func(UICommand)
 	Timeout time.Duration // dial and handshake, default 3 s
 }
 
@@ -54,7 +58,7 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 		_ = nc.Close()
 		return nil, err
 	}
-	c := NewConn(nc, o.OnEvent)
+	c := newConn(nc, o.OnEvent, o.OnUI)
 	var w Welcome
 	if err := c.Call(dctx, "hello", Hello{Protocol: ProtocolVersion, Version: o.Version, Client: o.Client, Reveal: o.Reveal}, &w); err != nil {
 		_ = c.Close()
@@ -65,8 +69,10 @@ func Dial(ctx context.Context, o DialOptions) (*Conn, error) {
 }
 
 // NewConn wraps an established connection without a handshake (tests).
-func NewConn(nc net.Conn, onEvent func(string)) *Conn {
-	c := &Conn{c: nc, pending: map[string]chan message{}, onEvent: onEvent, closed: make(chan struct{})}
+func NewConn(nc net.Conn, onEvent func(string)) *Conn { return newConn(nc, onEvent, nil) }
+
+func newConn(nc net.Conn, onEvent func(string), onUI func(UICommand)) *Conn {
+	c := &Conn{c: nc, pending: map[string]chan message{}, onEvent: onEvent, onUI: onUI, closed: make(chan struct{})}
 	go c.read()
 	return c
 }
@@ -80,6 +86,13 @@ func (c *Conn) Done() <-chan struct{} { return c.closed }
 // Close ends the connection.
 func (c *Conn) Close() error { return c.c.Close() }
 
+// Err is why the connection ended (nil while it is open).
+func (c *Conn) Err() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.err
+}
+
 func (c *Conn) read() {
 	sc := bufio.NewScanner(c.c)
 	sc.Buffer(make([]byte, 64<<10), maxLine)
@@ -89,10 +102,16 @@ func (c *Conn) read() {
 			continue
 		}
 		if m.Method != "" && len(m.ID) == 0 {
-			if m.Method == "changed" && c.onEvent != nil {
+			switch {
+			case m.Method == "changed" && c.onEvent != nil:
 				var ch Changed
 				if json.Unmarshal(m.Params, &ch) == nil {
 					c.onEvent(ch.Topic)
+				}
+			case m.Method == "ui" && c.onUI != nil:
+				var u UICommand
+				if json.Unmarshal(m.Params, &u) == nil {
+					c.onUI(u)
 				}
 			}
 			continue

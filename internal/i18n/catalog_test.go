@@ -41,7 +41,7 @@ func hasCJK(s string) bool {
 
 // sourceKeys collects every Chinese string literal of the user-facing
 // packages: internal/view/**, internal/app (not the fake backend, whose
-// Chinese is sample data), internal/syncfile (lanflow.yaml's errors), the
+// Chinese is sample data), internal/syncfile (lanflow.yaml's errors), internal/split, the
 // main package, and the path notes of
 // internal/locate/analyze.go and direct.go (the rest of locate holds ISP
 // names: data).
@@ -49,7 +49,7 @@ func sourceKeys(t *testing.T) map[string][]string {
 	t.Helper()
 	root := filepath.Join("..", "..")
 	var files []string
-	for _, dir := range []string{"internal/view", "internal/app", "internal/syncfile"} {
+	for _, dir := range []string{"internal/view", "internal/app", "internal/syncfile", "internal/split"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err

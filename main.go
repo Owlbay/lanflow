@@ -18,6 +18,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/app/fake"
 	"lanflow/internal/i18n"
+	"lanflow/internal/split"
 	"lanflow/internal/view"
 	"lanflow/internal/view/env"
 )
@@ -41,14 +42,32 @@ func main() {
 	if code, ok := runSubcommand(os.Args[1:]); ok {
 		os.Exit(code)
 	}
-	if !mygo.App.RequestSingleInstanceLock() {
-		return // the running instance takes over
-	}
 	mygo.App.SetName("Lanflow")
 	// The app is written in Chinese and English (docs/design.md §5.8 语言);
 	// a first run follows the system's language, afterwards the setting
 	// rules, for the app's own texts (i18n) and MyGo's (SetLocale).
 	mygo.App.SetLanguages("zh-Hans", "en")
+	// Two processes (docs/service-split.md S2): `Lanflow --service` holds
+	// the service, the tray and the shortcuts; a plain launch is the
+	// window, a client of the service. LANFLOW_SINGLE=1 (or the marker
+	// file <DataDir>/single-process) keeps the single process.
+	args := split.ParseArgs(os.Args[1:])
+	switch {
+	case split.SingleProcess(app.DefaultOptions("Lanflow").DataDir):
+		runSingle()
+	case args.Service:
+		runService(args)
+	default:
+		runWindow(args)
+	}
+}
+
+// runSingle is Lanflow in one process, as before the split: the service,
+// the window, the tray and the shortcuts together.
+func runSingle() {
+	if !mygo.App.RequestSingleInstanceLock() {
+		return // the running instance takes over
+	}
 	api := backend(i18n.FromSystem(mygo.App.PreferredLanguages()))
 	// A panic on the main goroutine (UI callbacks run here) is recorded in
 	// errors.jsonl, then raised again (internal/app/errlog.go).
@@ -63,7 +82,7 @@ func main() {
 	view.ApplyLanguage(api.Settings().Language)
 	view.ApplyAppearance(api.Settings().Appearance)
 	shell := view.New(api, view.Options{Mac: runtime.GOOS == "darwin"})
-	stopLocalAPI := startLocalAPI(api, agentPrompt(shell))
+	stopLocalAPI := startLocalAPI(api, agentPrompt(shell), singleHost{shell})
 	if p := os.Getenv("LANFLOW_PAGE"); p != "" && os.Getenv("LANFLOW_FAKE") == "1" {
 		// Development aid: open on a page, e.g. "subs" or "subs:import-url".
 		page, arg, _ := strings.Cut(p, ":")
@@ -136,27 +155,7 @@ func main() {
 
 	mygo.App.WhenReady(func() {
 		settings := api.Settings()
-		// The default size fits the pages without page-level scrolling
-		// (docs/design.md §4); on a first launch it is clamped to the
-		// primary display's work area. StateKey restores the size and
-		// position of the last run over these.
-		width, height := view.FitWorkArea(mygo.Screen.PrimaryDisplay().WorkArea)
-		opts := mygo.WindowOptions{
-			Title:     i18n.T("澜流 Lanflow"),
-			Width:     width,
-			Height:    height,
-			MinWidth:  view.MinWidth,
-			MinHeight: view.MinHeight,
-			StateKey:  "main",
-			Hidden:    settings.SilentStart,
-			Content:   ui.View(shell.View),
-		}
-		if runtime.GOOS == "darwin" {
-			opts.TitleBarStyle = mygo.TitleBarHiddenInset
-			opts.Vibrancy = mygo.VibrancySidebar
-		}
-		win = mygo.NewWindow(opts)
-		shell.Attach(win)
+		win = newMainWindow(shell, settings.SilentStart)
 		win.OnClose(func(e *mygo.CloseEvent) {
 			if quitting {
 				return
@@ -179,14 +178,54 @@ func main() {
 			log.Printf("lanflow: shortcut %s: %v", action, err)
 		}
 		shell.CheckUpdatesAtLaunch()
-		if runtime.GOOS != "darwin" {
-			// Portable builds have no installer to register the scheme.
-			if err := mygo.App.RegisterURLScheme("lanflow"); err != nil {
-				log.Printf("lanflow: url scheme: %v", err)
-			}
-		}
+		registerURLScheme()
 	})
 	if err := mygo.App.Run(); err != nil {
 		log.Fatal(err)
+	}
+}
+
+// newMainWindow creates the main window over shell.
+func newMainWindow(shell *view.Shell, hidden bool) *mygo.Window {
+	// The default size fits the pages without page-level scrolling
+	// (docs/design.md §4); on a first launch it is clamped to the
+	// primary display's work area. StateKey restores the size and
+	// position of the last run over these.
+	width, height := view.FitWorkArea(mygo.Screen.PrimaryDisplay().WorkArea)
+	opts := mygo.WindowOptions{
+		Title:     i18n.T("澜流 Lanflow"),
+		Width:     width,
+		Height:    height,
+		MinWidth:  view.MinWidth,
+		MinHeight: view.MinHeight,
+		StateKey:  "main",
+		Hidden:    hidden,
+		Content:   ui.View(shell.View),
+	}
+	if runtime.GOOS == "darwin" {
+		opts.TitleBarStyle = mygo.TitleBarHiddenInset
+		opts.Vibrancy = mygo.VibrancySidebar
+	}
+	win := mygo.NewWindow(opts)
+	shell.Attach(win)
+	return win
+}
+
+// registerURLScheme registers lanflow:// on Windows and Linux, where
+// portable builds have no installer to do it.
+func registerURLScheme() {
+	if runtime.GOOS == "darwin" {
+		return
+	}
+	if err := mygo.App.RegisterURLScheme("lanflow"); err != nil {
+		log.Printf("lanflow: url scheme: %v", err)
+	}
+}
+
+// setupLogging sends Lanflow's own log.Printf lines also to lanflow.log
+// (internal/applog) when api keeps it.
+func setupLogging(api app.API) {
+	if w, ok := api.(interface{ AppLogWriter() io.Writer }); ok {
+		log.SetOutput(io.MultiWriter(os.Stderr, w.AppLogWriter()))
 	}
 }

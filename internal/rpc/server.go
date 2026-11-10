@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"reflect"
 	"sync"
 
@@ -25,6 +26,10 @@ type Options struct {
 	// Prompt asks the user to allow an agent's write or sensitive read
 	// (the window's dialog). Nil: such calls are refused with a hint.
 	Prompt PromptFunc
+	// Host is the serving process's side of the window ops (windowops.go):
+	// the service process of the split app, or the single process. Nil:
+	// the window ops are refused.
+	Host Host
 }
 
 // Server serves app.API on the local interface.
@@ -39,6 +44,7 @@ type Server struct {
 	ls    []net.Listener
 	conns map[*session]struct{}
 	done  bool
+	ui    *session // the window process that attached (AttachUI), nil when none
 }
 
 // NewServer returns a server for o.API; call Serve with a listener.
@@ -145,6 +151,7 @@ func (s *Server) serveConn(c net.Conn) {
 		s.mu.Lock()
 		delete(s.conns, ss)
 		s.mu.Unlock()
+		s.detachUI(ss)
 		_ = c.Close()
 	}()
 	sc := bufio.NewScanner(c)
@@ -237,7 +244,7 @@ func (s *Server) hello(ss *session, params json.RawMessage) (any, error) {
 	if h.Version != "" && s.o.Version != "" && h.Version != s.o.Version {
 		log.Printf("lanflow: local api: %s is version %s, Lanflow is %s", id, h.Version, s.o.Version)
 	}
-	return Welcome{Protocol: ProtocolVersion, Version: s.o.Version, Client: id.String()}, nil
+	return Welcome{Protocol: ProtocolVersion, Version: s.o.Version, Client: id.String(), PID: os.Getpid()}, nil
 }
 
 // dispatch runs one request after the handshake.
@@ -412,3 +419,5 @@ func (s *Server) subscribe(ss *session, params json.RawMessage) error {
 	ss.mu.Unlock()
 	return nil
 }
+
+func pid() int { return os.Getpid() }

@@ -5,7 +5,6 @@
 package view
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -21,7 +20,6 @@ import (
 	"lanflow/internal/model"
 	"lanflow/internal/view/conns"
 	"lanflow/internal/view/env"
-	"lanflow/internal/view/hotkey"
 	"lanflow/internal/view/logs"
 	"lanflow/internal/view/netpage"
 	"lanflow/internal/view/overview"
@@ -65,6 +63,12 @@ type Options struct {
 	Mac bool
 	// Sync runs Env.Run jobs on the calling thread, for tests.
 	Sync bool
+	// Remote: the window runs in its own process and the service process
+	// holds the tray, the global shortcuts, the login item and the system
+	// notifications (docs/service-split.md S2). SetShortcut registers a
+	// global shortcut there.
+	Remote      bool
+	SetShortcut func(action, acc string) error
 }
 
 // pageView is what every page package exports.
@@ -127,8 +131,8 @@ type Shell struct {
 	hiddenFlag  string // file that records the tray notice was shown (ConfigDir); "" = memory only
 	updateStamp string // file that records the last launch-time update check; "" = check every launch
 
-	hkMu   sync.Mutex
-	hotkey string // the global shortcut registered with the system; "" = none
+	keys        *keys  // global shortcuts registered by this process (keys.go)
+	closeWindow func() // Remote: close the window, ending its process (SetCloseWindow)
 
 	// Frames for data changes are rate-limited (redrawData): the streams
 	// tick several times a second, a frame rebuilds the whole page.
@@ -147,6 +151,7 @@ type Shell struct {
 // New builds the shell and all pages over api.
 func New(api app.API, opts Options) *Shell {
 	s := &Shell{api: api, opts: opts, page: env.Overview, args: map[env.Page]string{}}
+	s.keys = newKeys(s)
 	s.env = &env.Env{
 		API:      api,
 		Navigate: s.navigate,
@@ -342,7 +347,7 @@ func (s *Shell) onChange(t app.Topic) {
 			s.mu.Unlock()
 		}
 		for _, n := range ns {
-			if n.System {
+			if n.System && !s.opts.Remote { // the service process notifies itself
 				// Core crashes and failed auto-updates reach the user while
 				// the window is hidden (docs/design.md §9); the toast above
 				// still shows when the window is visible.
@@ -361,13 +366,12 @@ func (s *Shell) onChange(t app.Topic) {
 			ApplyAppearance(set.Appearance)
 			ApplyLanguage(set.Language)
 			s.win.SetTitle(i18n.T("澜流 Lanflow"))
+		}
+		if s.win != nil && !s.opts.Remote {
 			ApplyOpenAtLogin(set.OpenAtLogin)
 			// Settings changed behind the settings page (an import, another
 			// window): follow the stored shortcut.
-			s.hkMu.Lock()
-			cur := s.hotkey
-			s.hkMu.Unlock()
-			if set.GlobalShortcut != cur {
+			if set.GlobalShortcut != s.keys.get(model.ShortcutSystemProxy) {
 				if err := s.SetGlobalShortcut(set.GlobalShortcut); err != nil {
 					log.Printf("lanflow: global shortcut: %v", err)
 				}
@@ -447,6 +451,10 @@ func (s *Shell) takeArg(p env.Page) string {
 	return a
 }
 
+// SetCloseWindow gives the shell the way to close the window (Remote:
+// the window shortcut closes it, which ends the window's process).
+func (s *Shell) SetCloseWindow(fn func()) { s.closeWindow = fn }
+
 // ShowWindow shows and focuses the main window.
 func (s *Shell) ShowWindow() {
 	if s.win == nil {
@@ -522,66 +530,6 @@ func (s *Shell) systemNotice(n app.Notice) {
 			s.post(func() { s.navigate(env.Logs, "") })
 		}
 	})
-}
-
-// RegisterGlobalShortcut binds the system-proxy hotkey of the settings
-// app-wide (docs/design.md §9, default ⌘⇧S / Ctrl+Shift+S, 可修改); call it
-// once the app is ready. Registration fails when another app holds the keys.
-func (s *Shell) RegisterGlobalShortcut() error {
-	return s.SetGlobalShortcut(s.api.Settings().GlobalShortcut)
-}
-
-// SetGlobalShortcut is Env.SetGlobalShortcut: it replaces the registered
-// shortcut with acc ("" = none). When the system refuses acc the previous
-// shortcut is registered again and the error says so in Chinese. Before
-// Attach (tests, no running app) it only remembers acc.
-func (s *Shell) SetGlobalShortcut(acc string) error {
-	// The lock only guards the field: mygo's calls wait for the main
-	// thread, which may itself be calling here.
-	s.hkMu.Lock()
-	prev := s.hotkey
-	s.hkMu.Unlock()
-	set := func(v string) {
-		s.hkMu.Lock()
-		s.hotkey = v
-		s.hkMu.Unlock()
-	}
-	if s.win == nil {
-		set(acc)
-		return nil
-	}
-	if acc == prev && (acc == "" || mygo.GlobalShortcut.IsRegistered(acc)) {
-		return nil
-	}
-	if prev != "" {
-		mygo.GlobalShortcut.Unregister(prev)
-	}
-	set("")
-	if acc == "" {
-		return nil
-	}
-	if err := mygo.GlobalShortcut.Register(acc, s.ToggleSystemProxy); err != nil {
-		log.Printf("lanflow: global shortcut %q: %v", acc, err)
-		kept := i18n.T("全局快捷键保持关闭。")
-		if prev != "" && mygo.GlobalShortcut.Register(prev, s.ToggleSystemProxy) == nil {
-			set(prev)
-			kept = i18n.Tf("仍使用原来的快捷键 %s。", hotkey.Display(prev, s.opts.Mac))
-		}
-		return fmt.Errorf(i18n.T("无法注册快捷键 %s：可能已被其他应用占用。%s可以换一个组合键再试。"), hotkey.Display(acc, s.opts.Mac), kept)
-	}
-	set(acc)
-	return nil
-}
-
-// ToggleSystemProxy flips the system proxy (tray, hotkey).
-func (s *Shell) ToggleSystemProxy() {
-	st := s.api.Status()
-	on := !(st.Core == model.CoreRunning && st.SystemProxy)
-	msg := i18n.T("系统代理已关闭")
-	if on {
-		msg = i18n.T("系统代理已开启")
-	}
-	s.run(func() error { return s.api.SetSystemProxy(on) }, msg)
 }
 
 // ApplyAppearance applies the appearance setting ("system", "light", "dark").

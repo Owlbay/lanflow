@@ -154,7 +154,25 @@ type Welcome struct {
 	Protocol int    `json:"protocol"`
 	Version  string `json:"version"` // the server's Lanflow version
 	Client   string `json:"client"`  // the identity as understood
+	// PID is the serving process, for restarting a service that no longer
+	// answers (docs/service-split.md S3); 0 from older versions.
+	PID int `json:"pid,omitempty"`
 }
+
+// UICommand is the params of the "ui" notification: the service process
+// asks the window process to act (docs/service-split.md S2, windowops.go).
+type UICommand struct {
+	Cmd string `json:"cmd"` // UIShow, UIToggle, UIAskQuit, UIQuit
+	Arg string `json:"arg,omitempty"`
+}
+
+// UI commands.
+const (
+	UIShow    = "show"     // bring the window up; Arg: "" or what to open (OpenArg)
+	UIToggle  = "toggle"   // the window shortcut: close the window when it is in front, else show it
+	UIAskQuit = "ask-quit" // the tray's 退出澜流 while the system proxy is on: confirm in the window
+	UIQuit    = "quit"     // the service is quitting: close the window without asking
+)
 
 // Changed is the params of the "changed" notification.
 type Changed struct {

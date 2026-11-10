@@ -46,20 +46,20 @@ func TestShortcutActionsRun(t *testing.T) {
 	if err := hotkey.Register(model.ShortcutTUN, "CmdOrCtrl+Alt+T"); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.shortcutReg().bound[model.ShortcutTUN]; got != "CmdOrCtrl+Alt+T" {
+	if got := s.keys.get(model.ShortcutTUN); got != "CmdOrCtrl+Alt+T" {
 		t.Fatalf("bound = %q", got)
 	}
 	set := api.Settings().WithShortcut(model.ShortcutWindow, "CmdOrCtrl+Alt+L")
 	if err := api.SaveSettings(set); err != nil {
 		t.Fatal(err)
 	}
-	if got := s.shortcutReg().bound[model.ShortcutWindow]; got != "CmdOrCtrl+Alt+L" {
+	if got := s.keys.get(model.ShortcutWindow); got != "CmdOrCtrl+Alt+L" {
 		t.Fatalf("not followed: %q", got)
 	}
 	if err := api.SaveSettings(api.Settings().WithShortcut(model.ShortcutWindow, "")); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := s.shortcutReg().bound[model.ShortcutWindow]; ok {
+	if s.keys.get(model.ShortcutWindow) != "" {
 		t.Fatal("not unbound")
 	}
 }

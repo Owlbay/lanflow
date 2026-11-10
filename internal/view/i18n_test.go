@@ -239,7 +239,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	c.frame("core crash toast", tt)
 
 	// The tray menu and status line in every core state.
-	tr := &tray{s: s}
+	tr := &tray{h: s}
 	st := api.Status()
 	for _, core := range []model.CoreState{model.CoreRunning, model.CoreStarting, model.CoreError, model.CoreMissing, model.CoreStopped} {
 		st.Core = core
@@ -247,7 +247,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	}
 	px := api.Proxies()
 	g, ok := mainGroup(px, st)
-	c.menu("tray menu", tr.build(st, px, api.Subscriptions(), g, ok, "CmdOrCtrl+Shift+S").Items())
+	c.menu("tray menu", tr.build(st, px, api.Subscriptions(), g, ok, "CmdOrCtrl+Shift+S", nil).Items())
 
 	// Formatting helpers and titles.
 	for _, p := range env.Order {

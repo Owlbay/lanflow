@@ -76,7 +76,7 @@ func (tr *tray) menuIcon(ref string) *mygo.MenuIcon {
 		return ic
 	}
 	tr.mu.Unlock()
-	data, ok := tr.s.api.IconData(ref)
+	data, ok := tr.h.hostAPI().IconData(ref)
 	if !ok {
 		return nil
 	}
