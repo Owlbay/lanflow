@@ -16,6 +16,11 @@ func init() {
 		"密钥派生参数超出允许范围":                                    "the key derivation parameters are out of range",
 		"有加密的值，但文件缺少 encryption（口令参数）":                    "there are encrypted values, but the file has no encryption block (passphrase parameters)",
 		"订阅链接应为 keychain:<id> 引用、enc:v1: 加密值或 http(s) 链接": "the subscription link should be a keychain:<id> reference, an enc:v1: encrypted value or an http(s) link",
+		// internal/app/configseal.go
+		"同步文件中没有用口令加密的链接。":          "The sync file has no links encrypted with a passphrase.",
+		"同步文件无效：%v":                 "The sync file is invalid: %v",
+		"本机没有可用的钥匙串，无法保存同步口令派生的密钥。": "This machine has no keychain to keep the key derived from the sync passphrase.",
+		"请先输入当前的同步口令解锁，再修改口令。":      "Enter the current sync passphrase to unlock first, then change it.",
 	} {
 		en[k] = v
 	}

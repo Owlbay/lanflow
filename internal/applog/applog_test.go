@@ -16,6 +16,7 @@ func TestRedact(t *testing.T) {
 		"token=abc&x=1 secret: s3cr3t password=\"hunter2\"": "token=***&x=1 secret: *** password=\"***\"",
 		"版本 v1.19.33 在 127.0.0.1:7890":                      "版本 v1.19.33 在 127.0.0.1:7890",
 		"monkey=banana":                                     "monkey=banana",
+		"url: enc:v1:q83vEjRWeJA+/w== 已加载":                  "url: enc:v1:*** 已加载",
 	}
 	for in, want := range cases {
 		if got := Redact(in); got != want {

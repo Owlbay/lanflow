@@ -88,7 +88,8 @@ func (s *Service) planDoc(doc syncfile.Doc) (*applyPlan, error) {
 		if !had || !subEqual(old, sub) {
 			p.put = append(p.put, sub)
 		}
-		if !had && sub.URL != "" {
+		if (!had || old.URL == "") && sub.URL != "" {
+			// new, or its link just arrived (entered, or unsealed): download
 			p.fresh = append(p.fresh, sub.ID)
 		}
 		next.subs = append(next.subs, sub)
@@ -418,7 +419,8 @@ func (s *Service) ApplyConfigFile(path string, dryRun bool) (res model.ConfigApp
 	}
 	s.cs.runMu.Lock()
 	defer s.cs.runMu.Unlock()
-	res, err = s.applyDoc(doc, dryRun)
+	plain, webdav := s.unsealDoc(doc)
+	res, err = s.applyDoc(plain, dryRun)
 	if err != nil {
 		var de *docError
 		if errors.As(err, &de) {
@@ -431,6 +433,8 @@ func (s *Service) ApplyConfigFile(path string, dryRun bool) (res model.ConfigApp
 	if !dryRun && path == syncPath {
 		// loaded: the poller must not load it again
 		s.rememberHash(path, syncfile.Hash(data))
+		s.primeSeal(doc)
+		s.adoptWebDAVPassword(webdav)
 		s.cs.mu.Lock()
 		s.cs.canon, s.cs.dirty = syncfile.Encode(doc), true
 		s.cs.mu.Unlock()

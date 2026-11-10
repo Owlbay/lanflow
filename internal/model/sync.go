@@ -63,6 +63,16 @@ type ConfigSyncStatus struct {
 	// WebDAVPasswordMissing: the file says a WebDAV password is set, and
 	// this machine's keychain has none.
 	WebDAVPasswordMissing bool
+
+	// Encrypted: the file seals its secrets with the sync passphrase
+	// (API.SetSyncPassphrase). Locked: this machine has no key that opens
+	// them; LockedSecrets of them wait for API.UnlockSync.
+	// PassphraseChanged: this machine had a key, and the file was sealed
+	// again with another passphrase (changed on another device).
+	Encrypted         bool
+	Locked            bool
+	PassphraseChanged bool
+	LockedSecrets     int
 }
 
 // Answers to the choice when sync is turned on beside an existing file

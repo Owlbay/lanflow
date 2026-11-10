@@ -247,6 +247,8 @@ func (w stdWriter) Write(p []byte) (int, error) {
 var (
 	urlRe    = regexp.MustCompile(`(?i)\b((?:https?|wss?)://)([^/\s"'<>?#]+)([^\s"'<>]*)`)
 	secretRe = regexp.MustCompile(`(?i)\b(token|access_token|key|secret|password|passwd|pass|auth|uuid|psk|sid)(\s*[=:]\s*)("?)([^\s&"',;]+)`)
+	// sealedRe: secrets sealed with the sync passphrase (lanflow.yaml)
+	sealedRe = regexp.MustCompile(`\benc:v1:[A-Za-z0-9+/=]+`)
 )
 
 // Redact masks what must not end up in a log or a bug report.
@@ -262,5 +264,6 @@ func Redact(s string) string {
 		}
 		return sub[1] + host + "/***"
 	})
+	s = sealedRe.ReplaceAllString(s, "enc:v1:***")
 	return secretRe.ReplaceAllString(s, "$1$2$3***")
 }

@@ -58,6 +58,7 @@ type configSyncState struct {
 	// secrets replaces Secrets for this service (tests); nil = Secrets.
 	secrets SecretStore
 	links   linkSecrets // links this run put into the keychain (configsecrets.go)
+	seal    sealState   // secrets sealed with the sync passphrase (configseal.go)
 
 	// test hooks: home replaces the user's home directory, download the
 	// iCloud download request, debounce the stable time (0 = syncDebounce).
@@ -217,6 +218,12 @@ func (s *Service) syncStep() {
 	s.cs.runMu.Lock()
 	defer s.cs.runMu.Unlock()
 	path := filepath.Join(dir, syncfile.FileName)
+	s.cs.mu.Lock()
+	moved := s.cs.snapDir != "" && s.cs.snapDir != dir
+	s.cs.mu.Unlock()
+	if moved {
+		s.resetSeal() // another folder: its file says whether it is sealed
+	}
 	now := s.d.now()
 	snap := syncfile.Look(dir)
 
@@ -250,8 +257,14 @@ func (s *Service) syncStep() {
 			s.loadExternal(path, data, h)
 			return
 		}
+		// this machine's own file: learn whether it is sealed before
+		// writing over it (the first step after a start)
+		s.ensureSealPrimed(data)
 	default:
 		dirty = true // no file (deleted, or never written): write this machine's
+		if !s.sealPrimed() {
+			s.markSealedPrimed()
+		}
 	}
 	if dirty {
 		s.writeSyncFile(dir)
@@ -277,7 +290,8 @@ func (s *Service) loadExternal(path string, data []byte, hash string) {
 	for _, w := range warns {
 		s.alog.Warnf("config sync: %s: %v", path, w)
 	}
-	res, err := s.applyDoc(doc, false)
+	plain, webdav := s.unsealDoc(doc)
+	res, err := s.applyDoc(plain, false)
 	s.rememberHash(path, hash)
 	if err != nil {
 		line := 0
@@ -288,6 +302,8 @@ func (s *Service) loadExternal(path string, data []byte, hash string) {
 		s.syncFailed(path, hash, err, line)
 		return
 	}
+	s.primeSeal(doc)
+	s.adoptWebDAVPassword(webdav)
 	now := s.d.now()
 	missing := s.missingSecrets(doc)
 	s.cs.mu.Lock()
@@ -358,6 +374,13 @@ func (s *Service) writeSyncFile(dir string) {
 	doc := buildDoc(st, linksKeychain)
 	if s.WebDAVInfo().HasPassword {
 		doc.WebDAVPassword = syncfile.WebDAVPasswordRef
+	}
+	if s.sealOn() {
+		pw := ""
+		if doc.WebDAVPassword != "" {
+			pw, _ = s.loadPassword()
+		}
+		s.sealDoc(&doc, st.subs, pw)
 	}
 	data := syncfile.Encode(doc)
 	s.cs.mu.Lock()
@@ -500,6 +523,7 @@ func (s *Service) ConfigSyncStatus() model.ConfigSyncStatus {
 	if st.State == "" {
 		st.State = model.SyncStateOK
 	}
+	s.sealStatus(&st)
 	return st
 }
 
@@ -514,6 +538,7 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 	switch mode {
 	case model.SyncOff:
 		err := s.updateSettings(func(set *model.Settings) { set.Sync = model.ConfigSyncSettings{} })
+		s.resetSeal()
 		s.setSyncStatus(func(st *model.ConfigSyncStatus) { *st = model.ConfigSyncStatus{} })
 		s.em.emit(TopicSettings)
 		return err
@@ -553,16 +578,18 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 		}
 		var derr error
 		fileDoc, derr = syncfile.Decode(fileData, defaultSettings())
-		same := derr == nil && bytes.Equal(syncfile.Encode(stripPassword(fileDoc)), syncfile.Encode(localDoc))
+		same := derr == nil && bytes.Equal(syncfile.Encode(stripPassword(refsOnly(fileDoc))), syncfile.Encode(localDoc))
 		switch {
 		case same:
 			choice = model.SyncUseFile // nothing to merge
 		case choice == model.SyncUseFile && derr != nil:
 			return fmt.Errorf(i18n.T("同步文件无效，无法使用：%v"), derr)
 		case choice == model.SyncUseFile:
-			if _, err := s.applyDoc(fileDoc, false); err != nil {
+			plain, webdav := s.unsealDoc(fileDoc)
+			if _, err := s.applyDoc(plain, false); err != nil {
 				return fmt.Errorf(i18n.T("同步文件中的配置未能加载：%v"), err)
 			}
+			s.adoptWebDAVPassword(webdav)
 		case choice == model.SyncUseLocal:
 			if err := s.backupSyncFile(path, fileData); err != nil {
 				return err
@@ -573,6 +600,12 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 	}
 	if err := s.updateSettings(func(set *model.Settings) { set.Sync = want }); err != nil {
 		return err
+	}
+	if snap.Exists && choice == model.SyncUseFile {
+		s.primeSeal(fileDoc) // the file's encryption (and this machine's key for it)
+	} else {
+		s.resetSeal() // this machine's configuration wins: written with keychain references
+		s.markSealedPrimed()
 	}
 	s.cs.mu.Lock()
 	s.cs.snap, s.cs.snapDir, s.cs.changedAt = snap, target, time.Time{}
@@ -599,6 +632,19 @@ func (s *Service) SetConfigSync(mode, dir, choice string) (err error) {
 }
 
 func stripPassword(d syncfile.Doc) syncfile.Doc { d.WebDAVPassword = ""; return d }
+
+// refsOnly is d with sealed links written as keychain references, to
+// compare a sealed file with this machine's configuration.
+func refsOnly(d syncfile.Doc) syncfile.Doc {
+	d.Encryption = nil
+	d.Subscriptions = append([]syncfile.Subscription(nil), d.Subscriptions...)
+	for i, sub := range d.Subscriptions {
+		if syncfile.IsSealed(sub.URL) {
+			d.Subscriptions[i].URL = syncfile.SubscriptionRef(sub.ID)
+		}
+	}
+	return d
+}
 
 // backupSyncFile keeps a copy of a file about to be replaced by the
 // user's explicit choice in <DataDir>/sync-backups.
@@ -639,9 +685,12 @@ func (s *Service) ResolveConfigConflict(name string, keepCopy bool) (err error) 
 		if err != nil {
 			return fmt.Errorf(i18n.T("冲突副本无效：%v"), err)
 		}
-		if _, err := s.applyDoc(doc, false); err != nil {
+		plain, webdav := s.unsealDoc(doc)
+		if _, err := s.applyDoc(plain, false); err != nil {
 			return fmt.Errorf(i18n.T("冲突副本中的配置未能加载：%v"), err)
 		}
+		s.primeSeal(doc)
+		s.adoptWebDAVPassword(webdav)
 		cur, err := os.ReadFile(path)
 		if err == nil {
 			if err := s.backupSyncFile(path, cur); err != nil {
