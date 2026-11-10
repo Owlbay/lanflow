@@ -120,6 +120,8 @@ type Shell struct {
 	invalidOpen bool
 	recovery    bool
 	recoveryHit bool
+	consents    []*consentReq // agents waiting for the user (agents.go)
+	consentOpen bool
 	hiddenOnce  bool
 	hiddenFlag  string // file that records the tray notice was shown (ConfigDir); "" = memory only
 	updateStamp string // file that records the last launch-time update check; "" = check every launch

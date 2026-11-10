@@ -55,7 +55,7 @@ func main() {
 	view.ApplyLanguage(api.Settings().Language)
 	view.ApplyAppearance(api.Settings().Appearance)
 	shell := view.New(api, view.Options{Mac: runtime.GOOS == "darwin"})
-	stopLocalAPI := startLocalAPI(api, nil)
+	stopLocalAPI := startLocalAPI(api, agentPrompt(shell))
 	if p := os.Getenv("LANFLOW_PAGE"); p != "" && os.Getenv("LANFLOW_FAKE") == "1" {
 		// Development aid: open on a page, e.g. "subs" or "subs:import-url".
 		page, arg, _ := strings.Cut(p, ":")
