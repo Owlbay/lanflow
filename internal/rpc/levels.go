@@ -177,5 +177,26 @@ var methodLevels = map[string]Level{
 	"SendFeedback":     LevelUI,
 	"SaveFeedback":     LevelWrite,
 
+	// ---- HTTPS 选择性解密 (docs/capture.md §10) ----
+	// Agents read the state, the record summaries (sensitive: asked per
+	// connection) and one record's structure (headers masked, bodies as
+	// keys / types / lengths, never values); they cannot turn decryption
+	// on, change the selection or touch the root: danger (MCP refused,
+	// ctl confirmed every time) or window only.
+	"CaptureStatus":       LevelRead,
+	"CaptureFlows":        LevelSensitive,
+	"CaptureFlow":         LevelSensitive,
+	"SetCapture":          LevelDanger,
+	"ExtendCapture":       LevelDanger,
+	"SaveCaptureSettings": LevelDanger,
+	"AddCaptureDomain":    LevelDanger,
+	"AddCaptureApp":       LevelDanger,
+	"ClearCaptureFlows":   LevelWrite,
+	"InstallCACert":       LevelDanger,
+	"RegenerateCA":        LevelDanger,
+	"RemoveCACert":        LevelDanger,
+	"ExportCACert":        LevelUI,
+	"ExportHAR":           LevelUI,
+
 	"Shutdown": LevelDanger,
 }

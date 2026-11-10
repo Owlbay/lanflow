@@ -334,6 +334,21 @@ func scrubCaptureRefs(c *composer) []string {
 	return warns
 }
 
+// captureFindProcess keeps the kernel able to tell programs apart while a
+// program selection is active (docs/capture.md §4.1): find-process-mode
+// "off" (from 高级 or an override) becomes "strict", with a warning.
+func captureFindProcess(c *composer, cp Capture) []string {
+	if !cp.active() || len(cp.Apps) == 0 {
+		return nil
+	}
+	if v := deref(mapGet(c.root, "find-process-mode")); v != nil && strings.EqualFold(v.Value, "off") {
+		c.layer = layerCapture
+		c.set("find-process-mode", strNode("strict"))
+		return []string{layerCapture + "：按程序解密需要识别进程，find-process-mode 已由 off 临时改为 strict"}
+	}
+	return nil
+}
+
 func truthy(n *yaml.Node) bool {
 	n = deref(n)
 	return n != nil && n.Kind == yaml.ScalarNode && (n.Value == "true" || n.Value == "True" || n.Value == "yes")

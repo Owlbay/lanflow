@@ -149,6 +149,9 @@ func (s *Service) diagFiles(feedback, withLog bool) []diagFile {
 				continue
 			}
 		}
+		if l.core {
+			data = dropCaptureLines(data) // capture.go
+		}
 		add(l.name, []byte(applog.Redact(string(data))))
 	}
 
@@ -299,6 +302,7 @@ func redactConfig(data []byte) []byte {
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
 		return []byte(applog.Redact(string(data)))
 	}
+	redactCaptureLayer(&doc) // capture.go: only whether it is on and how many items
 	var walk func(n *yaml.Node, inProxy bool)
 	walk = func(n *yaml.Node, inProxy bool) {
 		switch n.Kind {

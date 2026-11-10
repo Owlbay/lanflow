@@ -633,6 +633,76 @@ func (cl *Client) SaveFeedback(id string, path string) (err error) {
 	return
 }
 
+func (cl *Client) CaptureStatus() (res0 model.CaptureStatus) {
+	_ = cl.call("CaptureStatus", nil, &res0)
+	return
+}
+
+func (cl *Client) CaptureFlows() (res0 []model.CaptureFlow) {
+	_ = cl.call("CaptureFlows", nil, &res0)
+	return
+}
+
+func (cl *Client) CaptureFlow(id int64) (res0 model.CaptureFlowDetail, err error) {
+	err = cl.call("CaptureFlow", []any{id}, &res0)
+	return
+}
+
+func (cl *Client) SetCapture(on bool) (err error) {
+	err = cl.call("SetCapture", []any{on})
+	return
+}
+
+func (cl *Client) ExtendCapture() (err error) {
+	err = cl.call("ExtendCapture", nil)
+	return
+}
+
+func (cl *Client) SaveCaptureSettings(s model.CaptureSettings) (err error) {
+	err = cl.call("SaveCaptureSettings", []any{s})
+	return
+}
+
+func (cl *Client) AddCaptureDomain(host string, enable bool) (err error) {
+	err = cl.call("AddCaptureDomain", []any{host, enable})
+	return
+}
+
+func (cl *Client) AddCaptureApp(processPath string, process string, enable bool) (err error) {
+	err = cl.call("AddCaptureApp", []any{processPath, process, enable})
+	return
+}
+
+func (cl *Client) ClearCaptureFlows() (err error) {
+	err = cl.call("ClearCaptureFlows", nil)
+	return
+}
+
+func (cl *Client) InstallCACert() (err error) {
+	err = cl.call("InstallCACert", nil)
+	return
+}
+
+func (cl *Client) RegenerateCA() (err error) {
+	err = cl.call("RegenerateCA", nil)
+	return
+}
+
+func (cl *Client) RemoveCACert() (err error) {
+	err = cl.call("RemoveCACert", nil)
+	return
+}
+
+func (cl *Client) ExportCACert(path string) (err error) {
+	err = cl.call("ExportCACert", []any{path})
+	return
+}
+
+func (cl *Client) ExportHAR(path string, withBodies bool) (err error) {
+	err = cl.call("ExportHAR", []any{path, withBodies})
+	return
+}
+
 func (cl *Client) Shutdown() {
 	_ = cl.call("Shutdown", nil)
 }

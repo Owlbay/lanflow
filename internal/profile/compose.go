@@ -253,7 +253,7 @@ func compose(in Input) (Output, error) {
 	applyCapture(c, in.Capture)
 	applyAdvanced(c, in.Advanced)
 	applyCoexist(c, in.Coexist, m.TUN)
-	warns := scrubCaptureRefs(c)
+	warns := append(scrubCaptureRefs(c), captureFindProcess(c, in.Capture)...)
 	c.layer = layerLanflow
 
 	for _, k := range strippedKeys {

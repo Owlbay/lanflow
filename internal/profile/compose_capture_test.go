@@ -228,3 +228,20 @@ func checkWithCore(t *testing.T, y []byte) {
 		t.Fatalf("mihomo -t: %v\n%s\n%s", err, out, y)
 	}
 }
+
+func TestComposeCaptureForcesFindProcess(t *testing.T) {
+	in := captureInput()
+	in.Advanced.FindProcessMode = "off"
+	out, err := compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out.YAML), "find-process-mode: strict") {
+		t.Fatal("find-process-mode off kept with a program selection")
+	}
+	in.Capture.Apps = nil
+	out, _ = compose(in)
+	if !strings.Contains(string(out.YAML), "find-process-mode: \"off\"") && !strings.Contains(string(out.YAML), "find-process-mode: off") {
+		t.Fatalf("find-process-mode changed without a program selection:\n%s", out.YAML)
+	}
+}

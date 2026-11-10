@@ -357,6 +357,43 @@ type API interface {
 	// sending by hand.
 	SaveFeedback(id, path string) error
 
+	// ---- HTTPS 选择性解密 (capture.go, docs/capture.md) ----
+	// CaptureStatus is a cheap read: switch, auto-off time, root
+	// certificate state, selection (TopicCapture).
+	CaptureStatus() model.CaptureStatus
+	// CaptureFlows is a cheap read of the records (no headers or bodies),
+	// oldest first; at most 5000.
+	CaptureFlows() []model.CaptureFlow
+	// CaptureFlow fetches one record with headers and bodies from the
+	// capture agent.
+	CaptureFlow(id int64) (model.CaptureFlowDetail, error)
+	// SetCapture turns decryption on (needs a trusted root, a selection and
+	// the first-run acknowledgement) or off; off reloads the core and
+	// closes the decrypted connections.
+	SetCapture(on bool) error
+	// ExtendCapture pushes the automatic turn-off 30 minutes further.
+	ExtendCapture() error
+	// SaveCaptureSettings stores the selection; a running capture follows.
+	SaveCaptureSettings(s model.CaptureSettings) error
+	// AddCaptureDomain adds a host to the selection (and turns on).
+	AddCaptureDomain(host string, enable bool) error
+	// AddCaptureApp adds the program behind a connection (and turns on).
+	AddCaptureApp(processPath, process string, enable bool) error
+	ClearCaptureFlows() error
+	// InstallCACert creates the root if needed and asks the system to
+	// trust it (the system shows its own prompt).
+	InstallCACert() error
+	// RegenerateCA replaces the root: new root trusted, old one removed.
+	RegenerateCA() error
+	// RemoveCACert turns decryption off and removes the root's trust,
+	// key and certificate.
+	RemoveCACert() error
+	// ExportCACert writes the root certificate (never the key) as PEM.
+	ExportCACert(path string) error
+	// ExportHAR writes the records as HAR 1.2; bodies only with withBodies,
+	// credentials masked either way (docs/capture.md §7.4).
+	ExportHAR(path string, withBodies bool) error
+
 	// Shutdown restores the system proxy if Lanflow set it and stops the
 	// core. Called once when the app quits.
 	Shutdown()

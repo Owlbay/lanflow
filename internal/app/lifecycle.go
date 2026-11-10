@@ -104,6 +104,7 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 		Advanced: set.Advanced,
 	}
 	in.Coexist = coexistInput(co, set, sysDNS)
+	in.Capture = s.captureInput(set) // capture.go
 	if a.useRules {
 		in.CustomRules = a.custom
 	}
@@ -151,6 +152,9 @@ func (s *Service) prepare(a composeArgs) (prepared, error) {
 	out, err := s.d.prof.Compose(in)
 	if err != nil {
 		return prepared{}, err
+	}
+	for _, w := range out.Warnings {
+		s.alog.Infof("compose: %s", w)
 	}
 	s.mu.Lock()
 	bin := s.state.coreBin
@@ -530,6 +534,7 @@ func (s *Service) afterConfigChange() {
 	s.refreshRules()
 	s.refreshProviders()
 	s.rebuildRoutes()
+	s.captureAfterReload() // capture.go
 }
 
 func (s *Service) running() bool {
