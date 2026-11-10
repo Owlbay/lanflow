@@ -115,6 +115,11 @@ type Metadata struct {
 	Process           string `json:"process"`
 	ProcessPath       string `json:"processPath"`
 	RemoteDestination string `json:"remoteDestination"`
+	// Inbound fields (verified on v1.19.33, docs/capture.md §9).
+	InboundIP   string `json:"inboundIP"`
+	InboundPort string `json:"inboundPort"`
+	InboundName string `json:"inboundName"`
+	InboundUser string `json:"inboundUser"`
 }
 
 // Connection is an entry of the connections snapshot.
