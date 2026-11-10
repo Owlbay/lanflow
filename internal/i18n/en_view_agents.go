@@ -25,6 +25,10 @@ func init() {
 		"已拒绝修改配置 · %s":      "Refused changing the configuration · %s",
 		"撤销":                "Revoke",
 		"已撤销「%s」的授权":        "Revoked the permission of \"%s\"",
+		"MCP 配置":            "MCP configuration",
+		"复制后粘贴到 Claude Desktop 的 claude_desktop_config.json 或项目的 .mcp.json；也可以复制 claude mcp add 命令在终端运行": "Paste it into Claude Desktop's claude_desktop_config.json or a project's .mcp.json, or copy the claude mcp add command to run in a terminal",
+		"复制命令":      "Copy command",
+		"复制 MCP 配置": "Copy MCP config",
 	} {
 		en[k] = v
 	}

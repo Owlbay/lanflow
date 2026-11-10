@@ -4,6 +4,7 @@ import (
 	"github.com/egoist/mygo"
 
 	"lanflow/internal/ctl"
+	"lanflow/internal/mcp"
 )
 
 // runSubcommand handles `lanflow ctl …` and `lanflow mcp`: clients of the
@@ -17,6 +18,8 @@ func runSubcommand(args []string) (code int, ok bool) {
 	switch args[0] {
 	case "ctl":
 		return ctl.Main(args[1:], ctl.Env{Version: mygo.App.Version()}), true
+	case "mcp":
+		return mcp.Main(mygo.App.Version()), true
 	}
 	return 0, false
 }

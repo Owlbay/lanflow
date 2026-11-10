@@ -148,7 +148,14 @@ func fieldParams(fl *ast.FieldList, prefix string) []param {
 func docOf(f *ast.Field) string {
 	var s string
 	if f.Doc != nil {
-		s = f.Doc.Text()
+		// Section headings ("// ---- rules ----") belong to no method.
+		var lines []string
+		for _, c := range f.Doc.List {
+			if t := strings.TrimSpace(strings.TrimPrefix(c.Text, "//")); !strings.HasPrefix(t, "----") {
+				lines = append(lines, t)
+			}
+		}
+		s = strings.Join(lines, " ")
 	}
 	if f.Comment != nil {
 		s = strings.TrimSpace(s + " " + f.Comment.Text())
