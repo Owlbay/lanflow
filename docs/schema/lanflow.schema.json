@@ -602,6 +602,18 @@
             "null"
           ]
         },
+        "feedback": {
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
         "geo": {
           "additionalProperties": false,
           "properties": {

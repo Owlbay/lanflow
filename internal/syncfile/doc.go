@@ -118,6 +118,7 @@ var Excluded = []ExcludedItem{
 	{"settings.geo.updatedAt", "a record of what ran"},
 	{"settings.webDAV.lastBackupAt", "a record of what ran"},
 	{"settings.agentGrants", "this machine's answers to agents"},
+	{"settings.feedback.autoReport", "consent to send error reports, given on this machine"},
 	{"settings.sync", "the sync setting itself"},
 	{"settings.advanced.tunDevice", "an interface name of this machine"},
 	{"settings.advanced.tunIncludeInterface", "an interface name of this machine"},

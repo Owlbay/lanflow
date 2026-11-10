@@ -88,6 +88,7 @@ webdavPassword: keychain:webdav-password   # 设置了 WebDAV 密码时才有
 | `settings.coreVersion` | 本机安装的内核版本 |
 | `settings.geo.updatedAt`、`settings.webDAV.lastBackupAt` | 运行记录 |
 | `settings.agentGrants` | 本机对 agent 的授权；放进同步文件等于让能写文件的程序给自己授权 |
+| `settings.feedback.autoReport` | 「出错时自动上报」是在这台机器上给出的同意，不随文件带到别的设备；上报地址会同步，token 在钥匙串里不同步 |
 | `settings.sync` | 同步方式本身 |
 | `settings.advanced.tunDevice`、`tunIncludeInterface`、`tunExcludeInterface`、`interfaceName` | 本机网卡名 |
 

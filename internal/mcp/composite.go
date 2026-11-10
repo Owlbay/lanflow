@@ -26,7 +26,9 @@ func obj(props map[string]any, required ...string) map[string]any {
 
 func str(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 
-func boolean(desc string) map[string]any { return map[string]any{"type": "boolean", "description": desc} }
+func boolean(desc string) map[string]any {
+	return map[string]any{"type": "boolean", "description": desc}
+}
 
 func compositeTools() []tool {
 	return []tool{
