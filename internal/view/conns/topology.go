@@ -34,6 +34,9 @@ const (
 	// topoSettle is the weight change, as a share of the total, under
 	// which the animation is done.
 	topoSettle = 0.002
+	// topoFPS is the frame rate of the width animation: bands easing
+	// over a third of a second look as smooth at 60 as at 120.
+	topoFPS = 60
 )
 
 // topoRouteColors colour the routes after the main one, as the exit map
@@ -93,7 +96,6 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 	g := BuildGraph(conns, o)
 	tp.graph = g
 	reduce := c.Preferences().ReduceMotion
-	nodeW, linkW, moving := tp.smooth(g, time.Now(), reduce)
 
 	m := ui.Box(c.Key("topology")).Grow(1).FillWidth().Clip().Label(i18n.T("网络拓扑")).Description(topoDescription(g))
 	// Hover and click use the geometry of the last paint.
@@ -118,10 +120,14 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 			m.Tooltip(g.Nodes[l.From].Label + " → " + g.Nodes[l.To].Label + " · " + topoStats(l.Count, l.UpSpeed, l.DownSpeed, l.Upload+l.Download))
 		}
 	}
+	// The widths ease in the paint, from the frame's time: an animation
+	// frame paints again without building the view, so easing here keeps
+	// moving between builds.
 	m.Draw(func(pt *ui.Painter, r ui.Rect) {
+		nodeW, linkW, moving := tp.smooth(g, pt.Now(), reduce)
 		tp.draw(pt, r, t, g, nodeW, linkW)
 		if moving {
-			pt.AnimationFrame()
+			pt.AnimationFrameRate(topoFPS)
 		}
 	})
 }
