@@ -39,7 +39,7 @@ const (
 	Settings Page = "settings"
 )
 
-// Order is the sidebar order (⌘1…⌘7 map to the first seven).
+// Order is the sidebar order (⌘1…⌘9 map to the first nine).
 var Order = []Page{Overview, Proxies, Subs, Conns, Logs, Rules, Net, Stats, Probe, Settings}
 
 // ImportURLPrefix starts the Subs navigation arg that opens the

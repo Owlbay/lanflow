@@ -975,9 +975,10 @@ func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 	}
 }
 
-// shortcuts are ⌘1–⌘7 for the first seven pages and ⌘, for settings.
+// shortcuts are ⌘1–⌘9 for the nine pages of the sidebar's groups and ⌘,
+// for settings.
 func (s *Shell) shortcuts(c *ui.Context) {
-	for i, p := range env.Order[:7] {
+	for i, p := range env.Order[:9] {
 		if c.Shortcut(ui.Cmd, ui.Key1+ui.Key(i)) {
 			s.navigate(p, "")
 		}

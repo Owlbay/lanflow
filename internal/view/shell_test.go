@@ -48,6 +48,14 @@ func TestSidebarNavigation(t *testing.T) {
 	if s.Page() != env.Subs || !tt.HasText("我的机场") {
 		t.Fatalf("after ⌘3: page %s", s.Page())
 	}
+	tt.Key(ui.Cmd, ui.Key8)
+	if s.Page() != env.Stats {
+		t.Fatalf("after ⌘8: page %s", s.Page())
+	}
+	tt.Key(ui.Cmd, ui.Key9)
+	if s.Page() != env.Probe {
+		t.Fatalf("after ⌘9: page %s", s.Page())
+	}
 	tt.Key(ui.Cmd, ui.KeyComma)
 	if s.Page() != env.Settings {
 		t.Fatalf("after ⌘,: page %s", s.Page())
