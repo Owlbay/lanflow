@@ -84,7 +84,7 @@ func TestValidateAccepts(t *testing.T) {
 
 	// Allowed env passes through.
 	s = f.spec
-	s.Env = []string{"SAFE_PATHS=/x", "CLASH_FOO=1"}
+	s.Env = []string{"GOGC=50", "DISABLE_LOOPBACK_DETECTOR=1"}
 	if out, err = f.policy.Validate(s); err != nil || len(out.Env) != 2 {
 		t.Fatalf("env: %v %v", err, out.Env)
 	}
@@ -199,11 +199,12 @@ func TestValidateRefusesSymlinkEscapes(t *testing.T) {
 }
 
 func TestFilterEnv(t *testing.T) {
-	ok, err := FilterEnv([]string{"SAFE_PATHS=/a:/b", "SKIP_SAFE_PATH_CHECK=1", "CLASH_X=1", "GOGC=50"})
-	if err != nil || len(ok) != 4 {
+	ok, err := FilterEnv([]string{"DISABLE_LOOPBACK_DETECTOR=1", "GOMEMLIMIT=64MiB", "GOGC=50"})
+	if err != nil || len(ok) != 3 {
 		t.Fatalf("%v %v", ok, err)
 	}
-	for _, bad := range []string{"PATH=/x", "LD_PRELOAD=/x", "GODEBUG=x", "CLASH_HOME_DIR=/", "CLASH_CONFIG_STRING=x", "HOME=/root"} {
+	for _, bad := range []string{"PATH=/x", "LD_PRELOAD=/x", "GODEBUG=x", "CLASH_HOME_DIR=/", "CLASH_CONFIG_STRING=x", "HOME=/root",
+		"SAFE_PATHS=/", "SKIP_SAFE_PATH_CHECK=1", "CLASH_X=1", "CLASH_POST_UP=/x", "CLASH_OVERRIDE_SECRET=", "gogc=1", "DYLD_INSERT_LIBRARIES=/x"} {
 		if _, err := FilterEnv([]string{bad}); err == nil {
 			t.Errorf("%s accepted", bad)
 		}
