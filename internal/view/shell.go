@@ -184,6 +184,11 @@ func New(api app.API, opts Options) *Shell {
 
 		SetGlobalShortcut: s.SetGlobalShortcut,
 	}
+	if !opts.Sync {
+		// Tests (Sync) save at once; the app saves half a second after
+		// the last change, through one writer.
+		s.env.UIState = env.NewUIStateSaver(api, uiStateDelay)
+	}
 	if dir := api.ConfigDir(); filepath.IsAbs(dir) {
 		s.hiddenFlag = filepath.Join(dir, "tray-notice-shown")
 		s.updateStamp = filepath.Join(dir, "update-check")
@@ -265,10 +270,18 @@ func (s *Shell) setBackground(hidden bool) {
 	}
 }
 
-// Close unregisters the shell from the API.
+// uiStateDelay is how long the UI state waits for more changes before
+// it is saved.
+const uiStateDelay = 500 * time.Millisecond
+
+// Close unregisters the shell from the API and saves what the pages
+// still had to remember.
 func (s *Shell) Close() {
 	if s.off != nil {
 		s.off()
+	}
+	if s.env.UIState != nil {
+		s.env.UIState.Close()
 	}
 	s.rdMu.Lock()
 	if s.rdTimer != nil {

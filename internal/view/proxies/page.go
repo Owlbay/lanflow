@@ -88,11 +88,9 @@ func (p *Page) persist() {
 		open[name] = o
 	}
 	grid := p.view == viewGrid
-	p.e.Run(func() error {
-		u := p.e.API.UIState()
+	p.e.SaveUIState("proxies", func(u *model.UIState) {
 		u.OpenGroups, u.ProxyGrid = open, grid
-		return p.e.API.SaveUIState(u)
-	}, "")
+	})
 }
 
 // View draws the whole content area including the header.

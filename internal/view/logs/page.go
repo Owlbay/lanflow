@@ -86,11 +86,9 @@ func (p *Page) persist() {
 	if p.isApp() {
 		source = "app"
 	}
-	p.e.Run(func() error {
-		u := p.e.API.UIState()
+	p.e.SaveUIState("logs", func(u *model.UIState) {
 		u.LogLevel, u.LogSource = level, source
-		return p.e.API.SaveUIState(u)
-	}, "")
+	})
 }
 
 // levelOptions are the level select's texts, 「级别：信息」, in the language

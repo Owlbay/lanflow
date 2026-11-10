@@ -128,6 +128,11 @@ type Env struct {
 
 	// Kit draws shared components so all pages look alike.
 	Kit Kit
+
+	// UIState saves the remembered presentation state through one
+	// debounced writer (SaveUIState); nil in Env values without a shell
+	// (tests), which then save at once.
+	UIState *UIStateSaver
 }
 
 // Kit draws the shared, native-looking building blocks (see docs/design.md §3).
