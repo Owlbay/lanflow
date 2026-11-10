@@ -44,8 +44,9 @@ func TestFilterAndSort(t *testing.T) {
 	}
 	p.query, p.sort = "", sortDelay
 	n := p.filterNodes(g, px)
-	// Untested entries (the group 自动选择 and 英国 01) sort last, in order.
-	if n[0] != "东京 03" || n[len(n)-2] != "自动选择" || n[len(n)-1] != "英国 01" {
+	// The group 自动选择 shows (and sorts by) its fastest node, 东京 03;
+	// the untested 英国 01 sorts last.
+	if px.Proxies["自动选择"].Delay != px.Proxies["东京 03"].Delay || n[0] != "自动选择" || n[1] != "东京 03" || n[len(n)-1] != "英国 01" {
 		t.Errorf("sort by delay: %v", n)
 	}
 	p.hideTimeout = true

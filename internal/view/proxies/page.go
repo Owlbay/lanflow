@@ -493,7 +493,7 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
-	proto, isGroup, builtin := memberKind(n, px, names)
+	proto, _, builtin := memberKind(n, px, names)
 	cur := n == now
 	var tile ui.Element
 	if selectable {
@@ -535,7 +535,7 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 				ui.Text(c, proto).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1)
 			}
 			ui.Spacer(c)
-			if isGroup || builtin {
+			if builtin {
 				ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 				return
 			}
@@ -663,7 +663,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
-	proto, isGroup, builtin := memberKind(n, px, names)
+	proto, _, builtin := memberKind(n, px, names)
 	cur := n == now
 	var row ui.Element
 	if selectable {
@@ -703,7 +703,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 			ui.Text(c, proto).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(0)
 		}
 		ui.Spacer(c)
-		if isGroup || builtin {
+		if builtin {
 			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 			return
 		}

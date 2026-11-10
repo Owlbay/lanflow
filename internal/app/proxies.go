@@ -129,6 +129,7 @@ func buildSnapshot(raw map[string]controller.Proxy, testing map[string]bool, mai
 		snap.Groups = append(snap.Groups, g)
 	}
 	snap.MainGroup = pickMainGroup(snap.Groups, mainPref)
+	snap.ApplyGroupDelays()
 	return snap
 }
 
@@ -296,24 +297,6 @@ func (s *Service) flushSnapshot() {
 	s.em.emit(TopicProxies)
 }
 
-// testableMembers keeps the members of a group that a delay test can say
-// something about: nodes, not nested groups (the UI shows "—" for those)
-// and not DIRECT/REJECT.
-func testableMembers(snap model.ProxySnapshot, members []string) []string {
-	groups := make(map[string]bool, len(snap.Groups))
-	for _, g := range snap.Groups {
-		groups[g.Name] = true
-	}
-	var out []string
-	for _, m := range members {
-		if groups[m] || m == "DIRECT" || m == "REJECT" {
-			continue
-		}
-		out = append(out, m)
-	}
-	return out
-}
-
 // SelectProxy selects name in group.
 func (s *Service) SelectProxy(group, name string) error {
 	if !s.running() {
@@ -364,7 +347,8 @@ func (s *Service) disconnectGroup(group string) {
 	s.alog.Infof("closed %d connection(s) of %q after switching its node", closed, group)
 }
 
-// TestGroupDelay tests every node of group, one by one, so results appear
+// TestGroupDelay tests every node of group, nested groups' nodes included
+// (a group shows its fastest node's delay), one by one, so results appear
 // progressively; it returns when all are done. A node that fails or times
 // out shows 超时 rather than failing the action.
 func (s *Service) TestGroupDelay(group string) error {
@@ -377,7 +361,7 @@ func (s *Service) TestGroupDelay(group string) error {
 	for _, g := range s.state.proxies.Groups {
 		if g.Name == group {
 			found = true
-			members = testableMembers(s.state.proxies, g.All)
+			members = s.state.proxies.GroupNodes(group)
 		}
 	}
 	s.mu.Unlock()
@@ -388,13 +372,20 @@ func (s *Service) TestGroupDelay(group string) error {
 	return nil
 }
 
-// TestProxyDelay tests one node (or a group's current node).
+// TestProxyDelay tests one node; for a group it tests all the group's
+// nodes, since a group shows its fastest node's delay.
 func (s *Service) TestProxyDelay(name string) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
+	s.mu.Lock()
+	names := s.state.proxies.GroupNodes(name)
+	s.mu.Unlock()
+	if len(names) == 0 { // DIRECT / REJECT
+		names = []string{name}
+	}
 	// A timeout is reported by the delay (超时), not as an action failure.
-	s.testNodes([]string{name})
+	s.testNodes(names)
 	return nil
 }
 

@@ -317,6 +317,7 @@ func (f *Fake) Proxies() model.ProxySnapshot {
 	for k, v := range f.px.Proxies {
 		s.Proxies[k] = v
 	}
+	s.ApplyGroupDelays()
 	return s
 }
 func (f *Fake) Subscriptions() []model.Subscription {
@@ -771,14 +772,11 @@ func (f *Fake) testNames(names []string) error {
 	return nil
 }
 func (f *Fake) TestGroupDelay(group string) error {
-	for _, g := range f.Proxies().Groups {
-		if g.Name == group {
-			return f.testNames(g.All)
-		}
-	}
-	return nil
+	return f.testNames(f.Proxies().GroupNodes(group))
 }
-func (f *Fake) TestProxyDelay(name string) error { return f.testNames([]string{name}) }
+func (f *Fake) TestProxyDelay(name string) error {
+	return f.testNames(f.Proxies().GroupNodes(name))
+}
 func (f *Fake) TestAllDelays() error             { return f.testNames(nodes) }
 func (f *Fake) pprov(name string) *model.ProxyProvider {
 	for i := range f.pprovs {
