@@ -131,6 +131,8 @@ Windows：`scripts/prepare-resources.sh windows amd64` 后在 Windows 上执行 
 
 ## 许可
 
+澜流本身以 [MIT 许可证](LICENSE) 发布。
+
 Mihomo 为 GPL-3.0，随包分发时附带其许可证与源码信息。地图陆地数据来自 Natural Earth（公有领域）；ASN 数据库来自 MaxMind GeoLite2，需注明出处。
 
 参考：[MyGo](https://github.com/egoist/mygo)、[Mihomo](https://github.com/MetaCubeX/mihomo)、[Mihomo API](https://wiki.metacubex.one/api/)。
