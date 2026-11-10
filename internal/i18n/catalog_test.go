@@ -39,7 +39,8 @@ func hasCJK(s string) bool {
 // sourceKeys collects every Chinese string literal of the user-facing
 // packages: internal/view/**, internal/app (not the fake backend, whose
 // Chinese is sample data), the main package, and the path notes of
-// internal/locate/analyze.go (the rest of locate holds ISP names: data).
+// internal/locate/analyze.go and direct.go (the rest of locate holds ISP
+// names: data).
 func sourceKeys(t *testing.T) map[string][]string {
 	t.Helper()
 	root := filepath.Join("..", "..")
@@ -64,7 +65,7 @@ func sourceKeys(t *testing.T) map[string][]string {
 			t.Fatal(err)
 		}
 	}
-	for _, f := range []string{"main.go", "main_service.go", filepath.Join("internal", "locate", "analyze.go")} {
+	for _, f := range []string{"main.go", "main_service.go", filepath.Join("internal", "locate", "analyze.go"), filepath.Join("internal", "locate", "direct.go")} {
 		if _, err := os.Stat(filepath.Join(root, f)); err == nil {
 			files = append(files, filepath.Join(root, f))
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,8 @@ import (
 
 	"lanflow/internal/geo"
 	"lanflow/internal/model"
+	"lanflow/internal/netx"
+	"lanflow/internal/platform/netinfo"
 )
 
 // traceServer serves a Cloudflare-style trace body; the body can be swapped.
@@ -70,7 +73,7 @@ func newTestLocator(t *testing.T, ts *traceServer, cachePath string) (*Locator, 
 		port = p
 		return ts.Client()
 	}
-	l.l.directClient = func(timeout time.Duration) *http.Client { return ts.Client() }
+	l.l.directClient = func(context.Context, time.Duration) (*http.Client, string, error) { return ts.Client(), "en0", nil }
 	return l, &now, &port
 }
 
@@ -242,7 +245,7 @@ func TestDirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ep.IP != "198.51.100.7" || ep.Place == nil || ep.Place.City != "东京" {
+	if ep.IP != "198.51.100.7" || ep.Place == nil || ep.Place.City != "东京" || ep.BoundIface != "en0" {
 		t.Errorf("Direct = %+v", ep)
 	}
 	// Mainland users are served by PoPs abroad: trust loc over colo.
@@ -259,6 +262,31 @@ func TestDirect(t *testing.T) {
 		t.Errorf("Direct error = %v", err)
 	}
 }
+
+// Without a physical interface, or when binding fails, Direct reports an
+// error and never measures through an unbound client.
+func TestDirectNoFallback(t *testing.T) {
+	ts := newTraceServer(t, traceBody("198.51.100.7", "JP", "NRT"))
+	l, _, _ := newTestLocator(t, ts, "")
+	l.l.directClient = func(context.Context, time.Duration) (*http.Client, string, error) {
+		return nil, "", netinfo.ErrNoPhysical
+	}
+	if ep, err := l.Direct(context.Background()); err == nil || !strings.Contains(err.Error(), "物理网卡") || ep.IP != "" {
+		t.Errorf("Direct without interface = %+v, %v", ep, err)
+	}
+	failing := ts.Client()
+	failing.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("dial: %w: EPERM", netx.ErrBind)
+	})
+	l.l.directClient = func(context.Context, time.Duration) (*http.Client, string, error) { return failing, "en0", nil }
+	if ep, err := l.Direct(context.Background()); err == nil || !strings.Contains(err.Error(), "无法绑定物理网卡 en0") || ep.IP != "" {
+		t.Errorf("Direct with bind failure = %+v, %v", ep, err)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestLookupWithoutDatabases(t *testing.T) {
 	l := New("", filepath.Join(t.TempDir(), "missing.metadb"), "")

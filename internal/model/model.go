@@ -278,6 +278,11 @@ type EndpointInfo struct {
 	Place *Place
 	ISP   string // organisation from the ASN database
 	ASN   string // e.g. "AS4812"
+	// BoundIface is the physical interface (e.g. "en0") the user's own
+	// endpoint was measured over, the socket bound to it so a TUN could not
+	// capture the request. Empty for anything not measured that way: only
+	// then is the endpoint "your location".
+	BoundIface string `json:",omitempty"`
 }
 
 // ExitInfo is where a node really exits.

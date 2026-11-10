@@ -66,28 +66,6 @@ func (l *locator) probe(ctx context.Context, sel SelectFunc, probePort int, node
 	return info, nil
 }
 
-// direct fetches the trace without any proxy: the user's own public endpoint.
-func (l *locator) direct(ctx context.Context) (model.EndpointInfo, error) {
-	tr, err := l.fetchTrace(ctx, l.directClient(probeTimeout))
-	if err != nil {
-		return model.EndpointInfo{}, fmt.Errorf("获取本机出口信息失败：%w", err)
-	}
-	ep := l.resolve(tr.IP)
-	// For the user's own location the colo is only trusted when it is in the
-	// same country as the IP: traffic from places without a nearby PoP is
-	// served from abroad (e.g. mainland China → LAX/HKG).
-	if p, ok := geo.FromTrace(tr.Loc, tr.Colo); ok {
-		if strings.EqualFold(p.Country, tr.Loc) || tr.Loc == "" {
-			ep.Place = &p
-		} else if ep.Place == nil {
-			if c, ok := geo.Country(tr.Loc); ok {
-				ep.Place = &c
-			}
-		}
-	}
-	return ep, nil
-}
-
 // fetchTrace GETs the trace URL with client and parses the key=value body.
 func (l *locator) fetchTrace(ctx context.Context, client *http.Client) (trace, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.traceURL, nil)
