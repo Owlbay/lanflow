@@ -80,6 +80,8 @@ type configSyncState struct {
 	notified  string    // the error last shown as a notice
 	conflicts string    // the conflict set last shown as a notice
 	st        model.ConfigSyncStatus
+	icloudDir string    // iCloudDir's cached answer
+	icloudAt  time.Time // when it was looked up
 }
 
 // ---- folders ----
@@ -93,16 +95,29 @@ func (s *Service) syncHome() string {
 }
 
 // iCloudDir is the folder of the iCloud mode, "" when iCloud Drive is
-// not available here (not macOS, or no iCloud Drive folder).
+// not available here (not macOS, or no iCloud Drive folder). The answer
+// is cached for a few seconds: views read it on every frame.
 func (s *Service) iCloudDir() string {
 	if runtime.GOOS != "darwin" && s.cs.home == "" {
 		return ""
 	}
-	drive := syncfile.ICloudDrive(s.syncHome())
-	if fi, err := os.Stat(drive); err != nil || !fi.IsDir() {
-		return ""
+	now := time.Now()
+	s.cs.mu.Lock()
+	if !s.cs.icloudAt.IsZero() && now.Sub(s.cs.icloudAt) < 5*time.Second {
+		d := s.cs.icloudDir
+		s.cs.mu.Unlock()
+		return d
 	}
-	return filepath.Join(drive, syncfile.ICloudSubdir)
+	s.cs.mu.Unlock()
+	dir := ""
+	drive := syncfile.ICloudDrive(s.syncHome())
+	if fi, err := os.Stat(drive); err == nil && fi.IsDir() {
+		dir = filepath.Join(drive, syncfile.ICloudSubdir)
+	}
+	s.cs.mu.Lock()
+	s.cs.icloudDir, s.cs.icloudAt = dir, now
+	s.cs.mu.Unlock()
+	return dir
 }
 
 // syncDir is the folder set syncs to, "" when off or unavailable.
