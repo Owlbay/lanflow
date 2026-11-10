@@ -4,6 +4,8 @@ import (
 	"math"
 
 	"github.com/egoist/mygo/ui"
+
+	"lanflow/internal/model"
 )
 
 // Drawing helpers of the globe: great-circle arcs sampled to screen
@@ -34,6 +36,50 @@ type globeBuffers struct {
 	line   [][2]float32
 	labels []ui.Rect
 	dest   arc
+
+	// What drawMap gathers each frame, emptied and refilled.
+	fit, fitDests []model.Place
+	fitMemo       fitMemo
+	exits         []exitDraw
+	seen          map[string]int
+	cities        map[string]bool
+	destMarks     []destMark
+	arrivals      []arrival
+	speeds        []speedLabel
+	speedIn       map[string]string
+}
+
+// reset empties the per-frame gatherings, keeping their memory.
+func (b *globeBuffers) reset() {
+	b.fit, b.fitDests, b.exits = b.fit[:0], b.fitDests[:0], b.exits[:0]
+	b.destMarks, b.arrivals, b.speeds = b.destMarks[:0], b.arrivals[:0], b.speeds[:0]
+	if b.seen == nil {
+		b.seen, b.cities, b.speedIn = map[string]int{}, map[string]bool{}, map[string]string{}
+	}
+	clear(b.seen)
+	clear(b.cities)
+	clear(b.speedIn)
+}
+
+// destMark is a destination country's marker on the screen.
+type destMark struct {
+	x, y, vis float32
+	city      string
+	group     string
+	live      bool
+}
+
+// arrival is a request arriving at its exit this frame.
+type arrival struct {
+	group string
+	o, fp float32
+}
+
+// speedLabel is a route's speed beside the middle of its arc.
+type speedLabel struct {
+	x, y, nx, ny, w, vis float32
+	txt                  string
+	col                  ui.Color
 }
 
 // arc is a great circle from one place to another, lifted above the

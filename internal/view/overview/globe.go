@@ -1,8 +1,8 @@
 package overview
 
 import (
-	"fmt"
 	"math"
+	"slices"
 	"time"
 
 	"lanflow/internal/geo"
@@ -217,8 +217,35 @@ type globeFit struct {
 	zoom        float64
 }
 
-func (f globeFit) key() string {
-	return fmt.Sprintf("%.1f|%.1f|%.0f|%.0f|%.0f", f.lat, f.lon, f.R, f.W, f.H)
+// fitKey is a framing rounded to what shows: a tenth of a degree, a
+// whole DIP.
+type fitKey struct{ lat, lon, R, W, H int64 }
+
+func (f globeFit) key() fitKey {
+	r := func(x float64, by float64) int64 { return int64(math.Round(x * by)) }
+	return fitKey{r(f.lat, 10), r(f.lon, 10), r(f.R, 1), r(float64(f.W), 1), r(float64(f.H), 1)}
+}
+
+// fitMemo keeps the last fitGlobe, which only changes with its inputs:
+// the places and the box, not the frame.
+type fitMemo struct {
+	you          model.Place
+	exits, dests []model.Place
+	W, H         float32
+	out          globeFit
+	ok           bool
+}
+
+// fit is fitGlobe, computed again only when an input changed.
+func (m *fitMemo) fit(you model.Place, exits, dests []model.Place, W, H float32) globeFit {
+	if m.ok && m.you == you && m.W == W && m.H == H && slices.Equal(m.exits, exits) && slices.Equal(m.dests, dests) {
+		return m.out
+	}
+	m.out = fitGlobe(you, exits, dests, W, H)
+	m.you, m.W, m.H, m.ok = you, W, H, true
+	m.exits = append(m.exits[:0], exits...)
+	m.dests = append(m.dests[:0], dests...)
+	return m.out
 }
 
 // globeRadius is the radius that shows the whole sphere in a box of W×H.

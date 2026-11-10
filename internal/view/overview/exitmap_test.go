@@ -153,3 +153,23 @@ func TestSpeedEaseByTime(t *testing.T) {
 		t.Fatalf("speed %v, want %v", a.speed, want)
 	}
 }
+
+// TestFitMemo: the framing is computed again only when its inputs change.
+func TestFitMemo(t *testing.T) {
+	var m fitMemo
+	you := model.Place{City: "上海", Lat: 31.2, Lon: 121.5}
+	exits := []model.Place{{City: "东京", Lat: 35.7, Lon: 139.7}}
+	a := m.fit(you, exits, nil, 400, 300)
+	exits[0].Lat = 0 // the memo keeps its own copy
+	exits[0].Lat = 35.7
+	if b := m.fit(you, exits, nil, 400, 300); b != a {
+		t.Fatalf("same inputs, new framing: %+v vs %+v", a, b)
+	}
+	if want := fitGlobe(you, exits, nil, 400, 300); a != want {
+		t.Fatalf("memo %+v, fitGlobe %+v", a, want)
+	}
+	exits = append(exits, model.Place{City: "香港", Lat: 22.3, Lon: 114.2})
+	if c := m.fit(you, exits, nil, 400, 300); c == a || c != fitGlobe(you, exits, nil, 400, 300) {
+		t.Fatalf("a new exit must frame again: %+v", c)
+	}
+}

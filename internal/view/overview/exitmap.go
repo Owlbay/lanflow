@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -20,12 +21,12 @@ const (
 	// cardHeight is the whole 出口地图 card (docs/design.md §5.1: 「出口地图卡高
 	// 200，右侧路由列表宽 220」); the drawing takes what remains under the
 	// card's padding and title row.
-	cardHeight  = 200
-	listWidth   = 196
-	fadeDur     = 520 * time.Millisecond
-	rippleFrom  = 5.0
-	rippleTo    = 20.0
-	arcSamples  = 48
+	cardHeight = 200
+	listWidth  = 196
+	fadeDur    = 520 * time.Millisecond
+	rippleFrom = 5.0
+	rippleTo   = 20.0
+	arcSamples = 48
 	// speedTau is the time constant over which a route's shown speed
 	// follows the measured one, whatever the build rate.
 	speedTau = time.Second
@@ -204,11 +205,20 @@ func (p *Page) youPlace() (*model.Place, bool) {
 	// Before a measurement 「你」 sits at the system time zone's city,
 	// marked 「推测」 (docs/design.md §5.1 页面状态); geo.LocalZone knows
 	// where each OS keeps the zone, Windows registry included.
-	if pl, ok := geo.FromTimeZone(geo.LocalZone()); ok {
-		return &pl, true
+	if pl := localPlace(); pl != nil {
+		return pl, true
 	}
 	return nil, true
 }
+
+// localPlace is the city of the system time zone, nil if unknown; looked
+// up once, as finding the zone reads files (and on Windows the registry).
+var localPlace = sync.OnceValue(func() *model.Place {
+	if pl, ok := geo.FromTimeZone(geo.LocalZone()); ok {
+		return &pl
+	}
+	return nil
+})
 
 // routes collects the exit routes with their places and colors, and
 // eases the smoothed speeds towards the measured ones by the time since
@@ -636,10 +646,10 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 		}
 		now := pt.Now()
 		animating := false
+		b := &p.view.buf
+		b.reset()
 		// Exits glide to their new city; the view is framed around where
 		// they are going, plus the destination countries.
-		var fit, fitDests []model.Place
-		var exits []exitDraw
 		for _, rt := range rs {
 			f := p.flows[rt.Group]
 			if f == nil {
@@ -650,25 +660,25 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 				f.hasAt = false
 				continue
 			}
-			fit = append(fit, *rt.place)
+			b.fit = append(b.fit, *rt.place)
 			for _, d := range dests[rt.Group] {
-				fitDests = append(fitDests, d.place)
+				b.fitDests = append(b.fitDests, d.place)
 			}
 			pl, moving := f.place(*rt.place, now, reduce)
 			animating = animating || moving
-			exits = append(exits, exitDraw{r: rt, place: pl, f: f, vec: placeVec(pl)})
+			b.exits = append(b.exits, exitDraw{r: rt, place: pl, f: f, vec: placeVec(pl)})
 		}
+		exits := b.exits
 		center := model.Place{Lat: 30, Lon: 120}
 		if you != nil {
 			center = *you
-		} else if len(fit) > 0 {
-			center = fit[0]
+		} else if len(b.fit) > 0 {
+			center = b.fit[0]
 		}
-		_, moving := p.view.fit(fitGlobe(center, fit, fitDests, r.W, r.H), now, reduce)
+		_, moving := p.view.fit(b.fitMemo.fit(center, b.fit, b.fitDests, r.W, r.H), now, reduce)
 		animating = animating || moving
 		view, idle := p.view.shown(now, reduce)
 		g := newGlobeProj(view.lat, view.lon, r.X+r.W/2, r.Y+r.H/2, float32(p.view.radius()))
-		b := &p.view.buf
 		b.labels = b.labels[:0]
 
 		pt.Clip(r, 0, func() {
@@ -699,8 +709,7 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 					b.reserve(yx, yy, 6)
 				}
 			}
-			seen := map[string]int{}
-			cities := map[string]bool{}
+			seen, cities := b.seen, b.cities
 			for i := range exits {
 				ed := &exits[i]
 				ed.x, ed.y, ed.vis = g.project(ed.vec)
@@ -718,13 +727,7 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			// Destination countries: a thin dashed great circle from the
 			// exit to the country's representative city, fainter once no
 			// connection is left; drawn under the request animation.
-			type mark struct {
-				x, y, vis float32
-				city      string
-				group     string
-				live      bool
-			}
-			var destMarks []mark
+			destMarks := b.destMarks
 			for _, ed := range exits {
 				col := routeColor(ed.r, t)
 				for _, d := range dests[ed.r.Group] {
@@ -740,7 +743,7 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 					b.dest.dashed(pt, b, 1, col.Alpha(alpha))
 					if dx, dy, vis := g.project(dv); vis > 0 && !cities[d.place.City] {
 						cities[d.place.City] = true
-						destMarks = append(destMarks, mark{dx, dy, vis, d.place.City, ed.r.Group, d.conns > 0})
+						destMarks = append(destMarks, destMark{dx, dy, vis, d.place.City, ed.r.Group, d.conns > 0})
 						b.reserve(dx, dy, 4)
 					}
 				}
@@ -754,18 +757,7 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			// solid in its colour, requests travelling over it as glowing
 			// dots (more at once on a busy route), a ring spreading at the
 			// exit and at the route's destinations as one arrives.
-			type arrival struct {
-				group string
-				o, fp float32
-			}
-			type speedLabel struct {
-				x, y, nx, ny, w, vis float32
-				txt                  string
-				col                  ui.Color
-			}
-			var arrivals []arrival
-			var speeds []speedLabel
-			speedIn := map[string]string{}
+			arrivals, speeds, speedIn := b.arrivals, b.speeds, b.speedIn
 			for i := range exits {
 				ed := &exits[i]
 				if !ed.hasArc {
@@ -936,6 +928,8 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			for _, m := range destMarks {
 				placeLabel(pt, b, r, m.x, m.y, 8, m.city, t.TextMuted.Alpha(0.4+0.6*m.vis), back, destSize, false, false)
 			}
+			// Keep what the appends grew for the next frame.
+			b.destMarks, b.arrivals, b.speeds = destMarks, arrivals, speeds
 		})
 		switch {
 		case animating && focused:
