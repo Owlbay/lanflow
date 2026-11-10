@@ -368,6 +368,9 @@ func (a *Agent) handle(c net.Conn) {
 			a.passthrough(c, br, cfg, req, base, why, flags...)
 			return
 		}
+		if sel.Kind != "app" {
+			base.Selector = cfg.domains.match(ch.sni) // the pattern that selected it
+		}
 		a.mitm(c, br, cfg, sel, req, ch, base)
 	case !looksHTTP(br):
 		base.Proto = "tcp"
@@ -382,6 +385,9 @@ func (a *Agent) handle(c net.Conn) {
 		if why != "" {
 			a.passthrough(c, br, cfg, req, base, why, flags...)
 			return
+		}
+		if sel.Kind != "app" {
+			base.Selector = cfg.domains.match(req.host)
 		}
 		a.plain(c, br, cfg, sel, req, base)
 	}
