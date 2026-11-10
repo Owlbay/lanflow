@@ -28,7 +28,6 @@ func init() {
 		"订阅 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）": "a subscription ID may only hold letters, digits, - and _ (at most 64 characters)",
 		"订阅 ID 重复": "duplicate subscription ID",
 		"订阅名称不能为空": "the subscription name cannot be empty",
-		"订阅链接应为 keychain:<id> 引用或 http(s) 链接": "the subscription link should be a keychain:<id> reference or an http(s) link",
 		"keychain: 后面缺少名称":                    "the name after keychain: is missing",
 		"自动更新间隔和超时不能为负数":                      "the update interval and timeout cannot be negative",
 		"覆写 ID 只能由字母、数字、- 和 _ 组成（最多 64 个字符）":  "an override ID may only hold letters, digits, - and _ (at most 64 characters)",

@@ -30,11 +30,14 @@ var enums = map[string][]string{
 
 // patterns constrain some strings further.
 var patterns = map[string]string{
-	"subscriptions[].url": `^$|^keychain:.+$|^https?://`,
+	"subscriptions[].url": `^$|^keychain:.+$|^enc:v1:[A-Za-z0-9+/=]+$|^https?://`,
 	"subscriptions[].id":  `^[A-Za-z0-9_-]{1,64}$`,
 	"overrides[].id":      `^[A-Za-z0-9_-]{1,64}$`,
 	"overrides[].url":     `^https?://`,
-	"webdavPassword":      `^keychain:.+$`,
+	"webdavPassword":      `^keychain:.+$|^enc:v1:[A-Za-z0-9+/=]+$`,
+	"encryption.kdf":      `^argon2id$`,
+	"encryption.salt":     `^[A-Za-z0-9+/=]+$`,
+	"encryption.check":    `^enc:v1:[A-Za-z0-9+/=]+$`,
 }
 
 // descriptions explain the top-level keys.
@@ -44,8 +47,9 @@ var descriptions = map[string]string{
 	"settings":       "Settings, without the machine-local items (docs/config-sync.md). A missing key means the default value",
 	"overrides":      "The override list, in the order the overrides apply",
 	"customRules":    "Custom rules, in matching order, before the subscription's rules",
-	"subscriptions":  "Subscriptions with a link; the link is a keychain:<id> reference (a plain http(s) link is accepted too)",
-	"webdavPassword": "keychain:webdav-password when a WebDAV password is set; the password itself stays in the keychain",
+	"subscriptions":  "Subscriptions with a link; the link is a keychain:<id> reference, or an enc:v1: value sealed with the sync passphrase (a plain http(s) link is accepted too)",
+	"webdavPassword": "keychain:webdav-password when a WebDAV password is set (the password stays in the keychain), or the password sealed with the sync passphrase (enc:v1:)",
+	"encryption":     "Present when secrets are sealed with the sync passphrase: Argon2id parameters, the salt and a check value; each secret is AES-256-GCM bound to its field path",
 }
 
 // Schema returns the JSON Schema (draft 2020-12) of lanflow.yaml,

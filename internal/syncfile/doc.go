@@ -37,6 +37,10 @@ const (
 // Doc is lanflow.yaml.
 type Doc struct {
 	Format int `sync:"format"`
+	// Encryption is set when the secrets are sealed with the sync
+	// passphrase (seal.go): subscription links and the WebDAV password are
+	// then enc:v1:<base64> values instead of keychain references.
+	Encryption *Encryption `sync:"encryption,omitempty"`
 	// Settings are model.Settings without the machine-local items of
 	// Excluded.
 	Settings      model.Settings `sync:"settings"`
@@ -44,7 +48,8 @@ type Doc struct {
 	CustomRules   []Rule         `sync:"customRules"`
 	Subscriptions []Subscription `sync:"subscriptions"`
 	// WebDAVPassword is WebDAVPasswordRef when a password is set: the
-	// password itself stays in the keychain.
+	// password itself stays in the keychain. With Encryption it is the
+	// sealed password (enc:v1:…).
 	WebDAVPassword string `sync:"webdavPassword,omitempty"`
 }
 
@@ -74,9 +79,10 @@ type Subscription struct {
 	// rules keep pointing at it.
 	ID   string `sync:"id"`
 	Name string `sync:"name"`
-	// URL is "keychain:sub-<id>" as this app writes it; a plain http(s)
-	// link is accepted too (an agent or person editing the file) and moved
-	// into the keychain on the next write. "" = no link known.
+	// URL is "keychain:sub-<id>" as this app writes it, or the sealed link
+	// (enc:v1:…) when Encryption is set; a plain http(s) link is accepted
+	// too (an agent or person editing the file) and moved into the
+	// keychain on the next write. "" = no link known.
 	URL             string   `sync:"url"`
 	UserAgent       string   `sync:"userAgent,omitempty"`
 	ViaProxy        bool     `sync:"viaProxy,omitempty"`
@@ -166,7 +172,8 @@ func copyExcluded(dst, src reflect.Value, path string) {
 // reading: the file is rewritten from the configuration).
 const header = `# Lanflow configuration (docs/config-sync.md), schema: docs/schema/lanflow.schema.json
 # Lanflow validates and loads changes to this file; an invalid change is refused
-# and the settings show where. Secrets are keychain:<id> references only.
+# and the settings show where. Secrets are keychain:<id> references, or
+# enc:v1: values sealed with the sync passphrase.
 `
 
 // Encode writes doc as lanflow.yaml. The output is canonical: the same
@@ -272,14 +279,30 @@ func validate(doc Doc, top *yaml.Node) error {
 		if strings.TrimSpace(s.Name) == "" {
 			return errAt(NodeAt(top, p), p+".name", i18n.T("订阅名称不能为空"))
 		}
-		if s.URL != "" && !strings.HasPrefix(s.URL, KeychainPrefix) && !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
-			return errAt(NodeAt(top, p+".url"), p+".url", i18n.T("订阅链接应为 keychain:<id> 引用或 http(s) 链接"))
+		if s.URL != "" && !IsSealed(s.URL) && !strings.HasPrefix(s.URL, KeychainPrefix) && !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
+			return errAt(NodeAt(top, p+".url"), p+".url", i18n.T("订阅链接应为 keychain:<id> 引用、enc:v1: 加密值或 http(s) 链接"))
+		}
+		if err := validateSealed(doc, top, p+".url", s.URL); err != nil {
+			return err
 		}
 		if _, ok := KeychainKey(s.URL); strings.HasPrefix(s.URL, KeychainPrefix) && !ok {
 			return errAt(NodeAt(top, p+".url"), p+".url", i18n.T("keychain: 后面缺少名称"))
 		}
 		if s.AutoUpdateHours < 0 || s.TimeoutSec < 0 {
 			return errAt(NodeAt(top, p), p, i18n.T("自动更新间隔和超时不能为负数"))
+		}
+	}
+	if doc.Encryption != nil {
+		if err := doc.Encryption.Validate(); err != nil {
+			return errAt(NodeAt(top, "encryption"), "encryption", err.Error())
+		}
+	}
+	if w := doc.WebDAVPassword; w != "" {
+		if !IsSealed(w) && !strings.HasPrefix(w, KeychainPrefix) {
+			return errAt(NodeAt(top, "webdavPassword"), "webdavPassword", i18n.T("webdavPassword 应为 keychain:<id> 引用或 enc:v1: 加密值"))
+		}
+		if err := validateSealed(doc, top, "webdavPassword", w); err != nil {
+			return err
 		}
 	}
 	ovs := map[string]bool{}
@@ -314,6 +337,21 @@ func validate(doc Doc, top *yaml.Node) error {
 		if strings.TrimSpace(r.Type) == "" || strings.TrimSpace(r.Payload) == "" || strings.TrimSpace(r.Target) == "" {
 			return errAt(NodeAt(top, p), p, i18n.T("自定义规则需要 type、payload 和 target"))
 		}
+	}
+	return nil
+}
+
+// validateSealed checks a sealed value's form, and that the file has the
+// encryption block that says how to open it.
+func validateSealed(doc Doc, top *yaml.Node, path, v string) error {
+	if !IsSealed(v) {
+		return nil
+	}
+	if doc.Encryption == nil {
+		return errAt(NodeAt(top, path), path, i18n.T("有加密的值，但文件缺少 encryption（口令参数）"))
+	}
+	if err := checkSealedFormat(v); err != nil {
+		return errAt(NodeAt(top, path), path, err.Error())
 	}
 	return nil
 }

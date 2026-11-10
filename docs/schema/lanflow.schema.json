@@ -34,6 +34,43 @@
         "null"
       ]
     },
+    "encryption": {
+      "additionalProperties": false,
+      "description": "Present when secrets are sealed with the sync passphrase: Argon2id parameters, the salt and a check value; each secret is AES-256-GCM bound to its field path",
+      "properties": {
+        "check": {
+          "pattern": "^enc:v1:[A-Za-z0-9+/=]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kdf": {
+          "pattern": "^argon2id$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memoryKiB": {
+          "type": "integer"
+        },
+        "salt": {
+          "pattern": "^[A-Za-z0-9+/=]+$",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "threads": {
+          "type": "integer"
+        },
+        "time": {
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
     "format": {
       "const": 1,
       "description": "File format version; this version writes and reads 1"
@@ -933,7 +970,7 @@
       "type": "object"
     },
     "subscriptions": {
-      "description": "Subscriptions with a link; the link is a keychain:\u003cid\u003e reference (a plain http(s) link is accepted too)",
+      "description": "Subscriptions with a link; the link is a keychain:\u003cid\u003e reference, or an enc:v1: value sealed with the sync passphrase (a plain http(s) link is accepted too)",
       "items": {
         "additionalProperties": false,
         "properties": {
@@ -969,7 +1006,7 @@
             "type": "integer"
           },
           "url": {
-            "pattern": "^$|^keychain:.+$|^https?://",
+            "pattern": "^$|^keychain:.+$|^enc:v1:[A-Za-z0-9+/=]+$|^https?://",
             "type": [
               "string",
               "null"
@@ -993,8 +1030,8 @@
       ]
     },
     "webdavPassword": {
-      "description": "keychain:webdav-password when a WebDAV password is set; the password itself stays in the keychain",
-      "pattern": "^keychain:.+$",
+      "description": "keychain:webdav-password when a WebDAV password is set (the password stays in the keychain), or the password sealed with the sync passphrase (enc:v1:)",
+      "pattern": "^keychain:.+$|^enc:v1:[A-Za-z0-9+/=]+$",
       "type": [
         "string",
         "null"
