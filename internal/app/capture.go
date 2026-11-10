@@ -972,6 +972,12 @@ func (s *Service) captureTick() {
 	if r != nil {
 		s.capturePoll(r)
 	}
+	c.mu.Lock()
+	ticking := c.enabled && !c.until.IsZero()
+	c.mu.Unlock()
+	if ticking {
+		s.em.emit(TopicCapture) // the countdown shown by the window and the tray
+	}
 }
 
 func (s *Service) capRecheckTrust() {
