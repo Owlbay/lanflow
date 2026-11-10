@@ -205,6 +205,7 @@ func TestDNSQueryAppAnswers(t *testing.T) {
 	// A listener in the running config: query it.
 	h.s.mu.Lock()
 	h.s.state.runtimeYAML = []byte("dns:\n  enable: true\n  listen: 0.0.0.0:1053\n  enhanced-mode: fake-ip\n  fake-ip-range: 28.0.0.1/8\n")
+	h.s.state.runtimeDNS = parseRuntimeDNS(h.s.state.runtimeYAML)
 	h.s.mu.Unlock()
 	r, err = h.s.DNSQuery("example.com", "A")
 	if err != nil {
@@ -221,6 +222,7 @@ func TestDNSQueryAppAnswers(t *testing.T) {
 	// TUN on, no listener: the hijacked system resolver.
 	h.s.mu.Lock()
 	h.s.state.runtimeYAML = []byte("dns:\n  enhanced-mode: fake-ip\n")
+	h.s.state.runtimeDNS = parseRuntimeDNS(h.s.state.runtimeYAML)
 	h.s.state.st.TUN = true
 	h.s.mu.Unlock()
 	h.s.d.appDNS = func(_ context.Context, server, _, _ string) ([]string, error) {

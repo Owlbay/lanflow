@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -48,21 +49,41 @@ func mapRules(raw []controller.Rule, customCount int) []model.Rule {
 	return out
 }
 
-// refreshRules reloads GET /rules.
+// refreshRules reloads GET /rules, emitting only when they changed. It
+// runs after every config change and on demand (Rules, when the list is
+// older than refreshInterval): a long rule list is not worth fetching
+// every 10 s while nobody looks at it.
 func (s *Service) refreshRules() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	raw, err := s.d.ctrl.Rules(ctx)
 	cancel()
+	s.mu.Lock()
+	s.state.rulesBusy = false
 	if err != nil {
+		s.mu.Unlock()
 		return
 	}
-	s.mu.Lock()
-	s.state.rules = mapRules(raw, len(s.state.custom))
+	rules := mapRules(raw, len(s.state.custom))
+	changed := !reflect.DeepEqual(rules, s.state.rules)
+	s.state.rules = rules
+	s.state.rulesAt = s.d.now()
 	s.mu.Unlock()
-	s.em.emit(TopicRules)
+	if changed {
+		s.em.emit(TopicRules)
+	}
+}
+
+// refreshRulesIfStaleLocked starts a background refreshRules when the
+// rules (hit counts) are older than refreshInterval; call with mu held.
+func (s *Service) refreshRulesIfStaleLocked() {
+	if s.state.st.Core != model.CoreRunning || s.state.rulesBusy || s.d.now().Sub(s.state.rulesAt) < refreshInterval {
+		return
+	}
+	s.state.rulesBusy = true
+	s.goBackground(s.refreshRules)
 }
 
 // refreshProviders reloads GET /providers/rules.
@@ -70,7 +91,7 @@ func (s *Service) refreshProviders() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	raw, err := s.d.ctrl.RuleProviders(ctx)
 	cancel()
 	if err != nil {
@@ -82,9 +103,12 @@ func (s *Service) refreshProviders() {
 	}
 	sort.Slice(provs, func(i, j int) bool { return provs[i].Name < provs[j].Name })
 	s.mu.Lock()
+	changed := !reflect.DeepEqual(provs, s.state.provs)
 	s.state.provs = provs
 	s.mu.Unlock()
-	s.em.emit(TopicRules)
+	if changed {
+		s.em.emit(TopicRules)
+	}
 }
 
 // validateCustomRule checks a rule the user typed.

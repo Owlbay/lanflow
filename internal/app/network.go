@@ -271,7 +271,7 @@ func (s *Service) DNSQuery(name, qtype string) (model.DNSResult, error) {
 	}
 
 	s.mu.Lock()
-	rd := parseRuntimeDNS(s.state.runtimeYAML)
+	rd := s.state.runtimeDNS
 	tun := s.state.st.TUN
 	s.mu.Unlock()
 	server, source := "", ""

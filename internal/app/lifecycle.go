@@ -200,9 +200,11 @@ func (s *Service) commit(p prepared) error {
 		return fmt.Errorf(i18n.T("写入运行时配置失败：%v"), err)
 	}
 	icons := groupIconsOf(p.out.YAML)
+	rd := parseRuntimeDNS(p.out.YAML)
 	s.mu.Lock()
 	s.state.runtimeYAML = p.out.YAML
-	s.state.runtimeLines = p.out.Lines
+	s.state.runtimeDNS = rd
+	s.state.runtimeLines = nil // annotated on demand (RuntimeConfig): one entry per line adds up
 	s.state.groupIcons = icons
 	s.mu.Unlock()
 	return nil
@@ -480,7 +482,7 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 	}
 	defer func() { s.logOp("reload config", err) }()
 	s.mu.Lock()
-	prevYAML, prevLines := s.state.runtimeYAML, s.state.runtimeLines
+	prevYAML := s.state.runtimeYAML
 	s.mu.Unlock()
 	if err := s.commit(p); err != nil {
 		return err
@@ -492,9 +494,10 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 		if rerr := s.rollback(); rerr != nil {
 			s.alog.Errorf("reload config: %v", rerr)
 		}
+		icons, rd := groupIconsOf(prevYAML), parseRuntimeDNS(prevYAML)
 		s.mu.Lock()
-		s.state.runtimeYAML, s.state.runtimeLines = prevYAML, prevLines
-		s.state.groupIcons = groupIconsOf(prevYAML)
+		s.state.runtimeYAML, s.state.runtimeLines = prevYAML, nil
+		s.state.runtimeDNS, s.state.groupIcons = rd, icons
 		s.mu.Unlock()
 		return fmt.Errorf(i18n.T("内核重新加载配置失败：%v。仍在使用之前的配置。"), err)
 	}
@@ -515,6 +518,7 @@ func (s *Service) reloadPrepared(p prepared) (err error) {
 // start or reload.
 func (s *Service) afterConfigChange() {
 	s.refreshProxies()
+	s.pruneExits()
 	s.refreshRules()
 	s.refreshProviders()
 	s.rebuildRoutes()

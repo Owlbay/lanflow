@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -92,9 +93,10 @@ type state struct {
 	totalUp  int64 // last connections snapshot totals
 	totalDn  int64
 
-	proxies  model.ProxySnapshot
-	rawProxy map[string]controller.Proxy
-	testing  map[string]bool
+	proxies     model.ProxySnapshot
+	rawProxy    map[string]controller.Proxy
+	testing     map[string]bool
+	snapPending bool // delay results wait for flushSnapshot (proxies.go)
 
 	pprovs    []model.ProxyProvider // proxy-providers, sorted by name (proxies.go)
 	pprovBusy map[string]string     // provider → "update" | "check" while an action runs
@@ -109,6 +111,8 @@ type state struct {
 	logs ring[model.LogEntry] // the newest logRing core log lines
 
 	rules        []model.Rule
+	rulesAt      time.Time // when rules were fetched (refreshed on demand, rules.go)
+	rulesBusy    bool      // a refreshRules runs
 	custom       []model.CustomRule
 	provs        []model.RuleProvider
 	provUpdating map[string]bool
@@ -129,11 +133,14 @@ type state struct {
 	effDNS model.EffectiveDNS
 	effSnf model.EffectiveSniffer
 
+	effKey [sha256.Size]byte // what effDNS / effSnf were parsed from (effective.go)
+
 	geoInfo   model.GeoDataInfo // geo file times (geoinfo.go), re-read when geoInfoAt is stale
 	geoInfoAt time.Time
 
 	overrides    model.Overrides
 	runtimeYAML  []byte
+	runtimeDNS   runtimeDNS // the dns keys of runtimeYAML, parsed once per commit (network.go)
 	runtimeLines []model.RuntimeLine
 	groupIcons   map[string]string // proxy-group name → icon reference of the runtime config (icons.go)
 	icons        *iconCache        // decoded / downloaded icons (icons.go), allocated lazily
@@ -272,8 +279,9 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 	}
 	s.migrateLegacyCore()
 	s.resolveBinaryLocked()
-	s.reloadStoreLocked()
-	s.state.effDNS, s.state.effSnf = s.subscriptionSections(s.d.store.Current())
+	v := s.readStore()
+	s.applyStoreLocked(v)
+	s.state.effDNS, s.state.effSnf = s.subscriptionSections(v)
 	s.detectRecovery()
 	s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
 	s.stats = newStatsStore(filepath.Join(o.DataDir, "stats"), d.now, s.statsCountry)
@@ -409,11 +417,27 @@ func coreMissingText(custom string, err error) string {
 	return i18n.T("未找到 Mihomo 内核。请在设置 › 内核中选择内核文件，或重新安装澜流。")
 }
 
-// reloadStoreLocked refreshes the cached subscription list, overrides and
-// custom rules from the store; call with mu held or before run.
-func (s *Service) reloadStoreLocked() {
-	subs := s.d.store.List()
-	cur, hasCur := s.d.store.Current()
+// storeView is what the service caches from the store, read in one go
+// without mu (the store has its own lock and may wait for a disk write).
+type storeView struct {
+	subs   []model.Subscription
+	cur    model.Subscription
+	hasCur bool
+	ovs    []model.Override
+	custom []model.CustomRule
+}
+
+// readStore reads the store's lists; call without mu.
+func (s *Service) readStore() storeView {
+	v := storeView{subs: s.d.store.List(), ovs: s.d.store.Overrides(), custom: s.d.store.CustomRules()}
+	v.cur, v.hasCur = s.d.store.Current()
+	return v
+}
+
+// applyStoreLocked refreshes the cached subscription list, overrides and
+// custom rules from v; call with mu held or before run.
+func (s *Service) applyStoreLocked(v storeView) {
+	subs, cur, hasCur := v.subs, v.cur, v.hasCur
 	for i := range subs {
 		subs[i].Current = hasCur && subs[i].ID == cur.ID
 		subs[i].Updating = s.state.subsUpdating[subs[i].ID]
@@ -424,17 +448,18 @@ func (s *Service) reloadStoreLocked() {
 	if hasCur {
 		s.state.st.CurrentSubscription = cur.ID
 	}
-	s.state.overrides = overridesSnapshot(s.d.store.Overrides(), subs)
-	s.state.custom = s.d.store.CustomRules()
+	s.state.overrides = overridesSnapshot(v.ovs, subs)
+	s.state.custom = v.custom
 }
 
-// refreshStore reloads the store caches under the lock and emits. The
-// effective dns / sniffer sections (effective.go) are read from disk first,
-// outside the lock.
+// refreshStore reloads the store caches and emits. The store and the
+// effective dns / sniffer sections (effective.go, cached by content) are
+// read first, outside mu; only the assignment happens under it.
 func (s *Service) refreshStore(topics ...Topic) {
-	dns, snf := s.subscriptionSections(s.d.store.Current())
+	v := s.readStore()
+	dns, snf := s.subscriptionSections(v)
 	s.mu.Lock()
-	s.reloadStoreLocked()
+	s.applyStoreLocked(v)
 	s.state.effDNS, s.state.effSnf = dns, snf
 	s.mu.Unlock()
 	s.em.emit(append(topics, TopicStatus)...)
@@ -632,6 +657,7 @@ func (s *Service) Logs() []model.LogEntry {
 func (s *Service) Rules() []model.Rule {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshRulesIfStaleLocked() // the fresh list arrives with TopicRules
 	return append([]model.Rule(nil), s.state.rules...)
 }
 

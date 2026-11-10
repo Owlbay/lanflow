@@ -175,8 +175,9 @@ func (s *Service) stopStreams() {
 	s.streamWG.Wait()
 }
 
-// refreshLoop refreshes proxies and rules every 10 s while running, every
-// minute in the background.
+// refreshLoop refreshes the proxies every 10 s while running, every minute
+// in the background, within the streams' context. The rules are fetched
+// after config changes and when read (Rules), not here.
 func (s *Service) refreshLoop(ctx context.Context) {
 	t := time.NewTicker(refreshInterval)
 	defer t.Stop()
@@ -190,8 +191,7 @@ func (s *Service) refreshLoop(ctx context.Context) {
 			if s.background.Load() && ticks%refreshTicksHidden != 0 {
 				continue
 			}
-			s.refreshProxies()
-			s.refreshRules()
+			s.refreshProxiesCtx(ctx)
 		}
 	}
 }
@@ -254,6 +254,7 @@ func (s *Service) onLog(l controller.Log) {
 func (s *Service) onConnections(c controller.Connections) {
 	now := s.d.now()
 	s.mu.Lock()
+	hadConns := len(s.state.conns) > 0
 	active, closed := s.state.tracker.update(c, now)
 	s.state.conns = active
 	for i := len(closed) - 1; i >= 0; i-- { // closed is newest first
@@ -269,7 +270,11 @@ func (s *Service) onConnections(c controller.Connections) {
 	if s.stats.record(active, now) {
 		s.em.emit(TopicStats)
 	}
-	s.rebuildRoutes()
+	if hadConns || len(active) > 0 {
+		// Idle (no connections before or now): the routes only change with
+		// the proxies, the mode or an exit, whose own paths rebuild them.
+		s.rebuildRoutes()
+	}
 }
 
 // ClearLogs empties the log ring.

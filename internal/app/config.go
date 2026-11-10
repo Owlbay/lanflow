@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -301,6 +302,8 @@ func (s *Service) currentYAML(subID string) ([]byte, error) {
 }
 
 // RuntimeConfig returns the last composed runtime config, annotated by layer.
+// The annotation is composed on demand (and kept until the next commit)
+// rather than with every start and reload: most runs never show it.
 func (s *Service) RuntimeConfig() ([]model.RuntimeLine, error) {
 	s.mu.Lock()
 	lines := s.state.runtimeLines
@@ -316,7 +319,12 @@ func (s *Service) RuntimeConfig() ([]model.RuntimeLine, error) {
 	if err != nil {
 		return nil, err
 	}
-	return out.Lines, nil
+	s.mu.Lock()
+	if s.state.runtimeYAML != nil && bytes.Equal(out.YAML, s.state.runtimeYAML) {
+		s.state.runtimeLines = out.Lines // the running config: keep it
+	}
+	s.mu.Unlock()
+	return append([]model.RuntimeLine(nil), out.Lines...), nil
 }
 
 // UpdateGeoData asks the running core to download the geo databases.

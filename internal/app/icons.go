@@ -54,19 +54,72 @@ func groupIconsOf(yamlText []byte) map[string]string {
 	return out
 }
 
+// Bounds of the in-memory icon cache: the icons of the configs used in one
+// run are a few dozen, but a config can name any number of URLs.
+const (
+	maxIconsMem    = 8 << 20          // bytes of decoded icons kept in memory
+	maxIconsFailed = 512              // failed references remembered
+	iconRetryAfter = 30 * time.Minute // a failed URL is tried again after this
+)
+
 // iconCache holds the icons already loaded and those being fetched.
 type iconCache struct {
 	mu      sync.Mutex
-	data    map[string][]byte // reference → bytes
-	failed  map[string]bool   // reference → could not be loaded
-	pending map[string]bool   // reference → a download runs
+	data    map[string][]byte    // reference → bytes
+	order   []string             // data's keys, oldest first (eviction order)
+	size    int                  // bytes in data
+	failed  map[string]time.Time // reference → when it could not be loaded
+	pending map[string]bool      // reference → a download runs
 }
 
 func (s *Service) iconsLocked() *iconCache {
 	if s.state.icons == nil {
-		s.state.icons = &iconCache{data: map[string][]byte{}, failed: map[string]bool{}, pending: map[string]bool{}}
+		s.state.icons = &iconCache{data: map[string][]byte{}, failed: map[string]time.Time{}, pending: map[string]bool{}}
 	}
 	return s.state.icons
+}
+
+// putLocked stores an icon, evicting the oldest ones beyond maxIconsMem.
+func (c *iconCache) putLocked(ref string, d []byte) {
+	if old, ok := c.data[ref]; ok {
+		c.size -= len(old)
+	} else {
+		c.order = append(c.order, ref)
+	}
+	c.data[ref] = d
+	c.size += len(d)
+	for c.size > maxIconsMem && len(c.order) > 1 {
+		victim := c.order[0]
+		c.order = c.order[1:]
+		c.size -= len(c.data[victim])
+		delete(c.data, victim)
+	}
+}
+
+// failLocked remembers a failed reference, forgetting the oldest beyond
+// maxIconsFailed.
+func (c *iconCache) failLocked(ref string, now time.Time) {
+	if len(c.failed) >= maxIconsFailed {
+		oldest, at := "", now
+		for r, t := range c.failed {
+			if t.Before(at) || oldest == "" {
+				oldest, at = r, t
+			}
+		}
+		delete(c.failed, oldest)
+	}
+	c.failed[ref] = now
+}
+
+// failedLocked reports a reference that failed recently; an old failure is
+// forgotten so the icon is tried again.
+func (c *iconCache) failedLocked(ref string, now time.Time) bool {
+	t, ok := c.failed[ref]
+	if ok && now.Sub(t) >= iconRetryAfter {
+		delete(c.failed, ref)
+		return false
+	}
+	return ok
 }
 
 // IconData implements API.IconData.
@@ -83,7 +136,7 @@ func (s *Service) IconData(ref string) ([]byte, bool) {
 		c.mu.Unlock()
 		return d, true
 	}
-	if c.failed[ref] || c.pending[ref] {
+	if c.failedLocked(ref, time.Now()) || c.pending[ref] {
 		c.mu.Unlock()
 		return nil, false
 	}
@@ -91,19 +144,19 @@ func (s *Service) IconData(ref string) ([]byte, bool) {
 
 	if d, ok := decodeInlineIcon(ref); ok {
 		c.mu.Lock()
-		c.data[ref] = d
+		c.putLocked(ref, d)
 		c.mu.Unlock()
 		return d, true
 	}
 	if !strings.HasPrefix(ref, "http://") && !strings.HasPrefix(ref, "https://") {
 		c.mu.Lock()
-		c.failed[ref] = true
+		c.failLocked(ref, time.Now())
 		c.mu.Unlock()
 		return nil, false
 	}
 	if d, err := os.ReadFile(s.iconPath(ref)); err == nil && len(d) > 0 {
 		c.mu.Lock()
-		c.data[ref] = d
+		c.putLocked(ref, d)
 		c.mu.Unlock()
 		return d, true
 	}
@@ -161,9 +214,9 @@ func (s *Service) fetchIcon(c *iconCache, ref string) {
 	c.mu.Lock()
 	delete(c.pending, ref)
 	if err != nil {
-		c.failed[ref] = true
+		c.failLocked(ref, time.Now())
 	} else {
-		c.data[ref] = data
+		c.putLocked(ref, data)
 	}
 	c.mu.Unlock()
 	if err != nil {

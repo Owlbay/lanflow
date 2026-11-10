@@ -59,6 +59,13 @@ type coresState struct {
 	installed []model.InstalledCore // managed versions, newest first; nil = not scanned yet
 	bundled   string                // version of the bundled core, "" until known
 	bundleBin string                // path of the bundled core, "" when none
+	// bundleStat caches the bundled binary's size and time (it ships with
+	// the app and does not change while it runs) for InstalledCores.
+	bundleStat struct {
+		path string
+		size int64
+		mod  time.Time
+	}
 	releases  map[string]releaseCache
 	lastCheck time.Time // last update check (coreUpdateLoop)
 }
@@ -314,8 +321,11 @@ func (s *Service) InstalledCores() []model.InstalledCore {
 	out := make([]model.InstalledCore, 0, len(managed)+1)
 	if bundleBin != "" {
 		b := model.InstalledCore{Version: bundleVer, Bundled: true, Active: active == "" && !custom, Path: bundleBin, Source: "bundled"}
-		if fi, err := os.Stat(bundleBin); err == nil {
-			b.Size, b.InstalledAt = fi.Size(), fi.ModTime()
+		if st := &s.cores.bundleStat; st.path == bundleBin {
+			b.Size, b.InstalledAt = st.size, st.mod
+		} else if fi, err := os.Stat(bundleBin); err == nil {
+			st.path, st.size, st.mod = bundleBin, fi.Size(), fi.ModTime()
+			b.Size, b.InstalledAt = st.size, st.mod
 		}
 		if b.Version == "" && b.Active {
 			b.Version = stVersion

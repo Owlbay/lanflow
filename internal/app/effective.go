@@ -1,6 +1,7 @@
 package app
 
 import (
+	"crypto/sha256"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -20,8 +21,7 @@ func (s *Service) EffectiveDNS() model.EffectiveDNS {
 	defer s.mu.Unlock()
 	if s.state.settings.DNS.TakeOver {
 		set := copySettings(s.state.settings)
-		rd := parseRuntimeDNS(s.state.runtimeYAML)
-		return model.EffectiveDNS{Settings: set.DNS, Source: model.EffectiveLanflow, Enabled: true, Listen: rd.Listen}
+		return model.EffectiveDNS{Settings: set.DNS, Source: model.EffectiveLanflow, Enabled: true, Listen: s.state.runtimeDNS.Listen}
 	}
 	return copyEffectiveDNS(s.state.effDNS)
 }
@@ -43,16 +43,37 @@ func (s *Service) EffectiveSniffer() model.EffectiveSniffer {
 // subscriptionSections reads the current subscription's dns and sniffer
 // sections after the overrides. It reads the store (disk) and must not be
 // called with mu held. Without a subscription, or when it cannot be read,
-// both fall back to Mihomo's defaults.
-func (s *Service) subscriptionSections(cur model.Subscription, hasCur bool) (model.EffectiveDNS, model.EffectiveSniffer) {
-	if !hasCur {
+// both fall back to Mihomo's defaults. The result is cached by the
+// subscription, its content and the override texts that apply (a hash):
+// the store refreshes on every subscription or override action, and the
+// merge + parse of a large subscription is the expensive part.
+func (s *Service) subscriptionSections(v storeView) (model.EffectiveDNS, model.EffectiveSniffer) {
+	if !v.hasCur {
 		return defaultEffectiveDNS(), defaultEffectiveSniffer()
 	}
-	data, err := s.d.store.Content(cur.ID)
+	data, err := s.d.store.Content(v.cur.ID)
 	if err != nil {
 		return defaultEffectiveDNS(), defaultEffectiveSniffer()
 	}
-	for _, l := range profile.Layers(s.d.store.Overrides(), cur) {
+	layers := profile.Layers(v.ovs, v.cur)
+	h := sha256.New()
+	h.Write([]byte(v.cur.ID))
+	h.Write([]byte{0})
+	h.Write(data)
+	for _, l := range layers {
+		h.Write([]byte{0})
+		h.Write([]byte(l.Text))
+	}
+	var key [sha256.Size]byte
+	h.Sum(key[:0])
+	s.mu.Lock()
+	if key == s.state.effKey {
+		dns, snf := copyEffectiveDNS(s.state.effDNS), copyEffectiveSniffer(s.state.effSnf)
+		s.mu.Unlock()
+		return dns, snf
+	}
+	s.mu.Unlock()
+	for _, l := range layers {
 		ov := l.Text
 		if strings.TrimSpace(ov) == "" {
 			continue
@@ -61,7 +82,11 @@ func (s *Service) subscriptionSections(cur model.Subscription, hasCur bool) (mod
 			data = merged
 		}
 	}
-	return parseEffectiveSections(data)
+	dns, snf := parseEffectiveSections(data)
+	s.mu.Lock()
+	s.state.effKey = key
+	s.mu.Unlock()
+	return dns, snf
 }
 
 // defaultEffectiveDNS is what the core runs without a dns section: its
