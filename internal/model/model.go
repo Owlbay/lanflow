@@ -141,6 +141,10 @@ type Subscription struct {
 	// Overrides lists the IDs of the overrides (model.Override) this
 	// subscription applies, besides the global ones; see API.OverrideList.
 	Overrides []string
+	// NeedsURL: a URL subscription without its link, which came from
+	// lanflow.yaml as a keychain reference this machine's keychain does
+	// not have; the user enters the link again (EditSubscription).
+	NeedsURL bool
 }
 
 // Connection is one tracked connection.
@@ -547,6 +551,10 @@ type Settings struct {
 	// change the configuration through the local interface
 	// (docs/service-split.md §4); revoked in 设置 › 高级.
 	AgentGrants []AgentGrant `json:",omitempty"`
+
+	// Sync is where this machine syncs lanflow.yaml (model/sync.go);
+	// machine-local, never in the file itself.
+	Sync ConfigSyncSettings `json:",omitempty"`
 }
 
 // AgentGrant is the standing answer for one agent: Allow lets its writes

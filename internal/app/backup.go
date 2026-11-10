@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -19,8 +18,10 @@ import (
 )
 
 // WebDAV backup and restore (Settings.WebDAV). A backup is the settings
-// export with the subscriptions included (settingsio.go) uploaded as
-// lanflow-backup-YYYYMMDD-HHMMSS.json into the remote directory; restore
+// export with the subscriptions included (lanflow.yaml, settingsio.go)
+// uploaded as lanflow-backup-YYYYMMDD-HHMMSS.yaml into the remote
+// directory (backups of earlier versions end in .json and still restore,
+// ImportSettings reads both); restore
 // downloads one and imports it through ImportSettings, so every part is
 // validated like a manual import. The password lives in the system
 // keychain through Secrets (wired by main) and, where the system has
@@ -28,7 +29,8 @@ import (
 
 const (
 	backupPrefix     = "lanflow-backup-"
-	backupSuffix     = ".json"
+	backupSuffix     = ".yaml"
+	backupSuffixJSON = ".json" // backups of earlier versions
 	backupTimeLayout = "20060102-150405"
 	webdavSecretKey  = "webdav-password"
 	webdavSecretFile = "webdav.secret"
@@ -288,20 +290,9 @@ func (s *Service) webdavCtx() (context.Context, context.CancelFunc) {
 	return s.ctrlCtx(nil, 5*time.Minute)
 }
 
-// backupDocument is the JSON of a backup: the export with subscriptions.
+// backupDocument is a backup: the export with the subscription links.
 func (s *Service) backupDocument() ([]byte, error) {
-	s.mu.Lock()
-	set := copySettings(s.state.settings)
-	rules := append([]model.CustomRule(nil), s.state.custom...)
-	subs := append([]model.Subscription(nil), s.state.subs...)
-	s.mu.Unlock()
-	ex := buildExport(set, s.Overrides(), rules, subs, true)
-	ex.ExportedAt = s.d.now()
-	data, err := json.MarshalIndent(ex, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf(i18n.T("导出设置失败：%v"), err)
-	}
-	return append(data, '\n'), nil
+	return s.encodeExport(true), nil
 }
 
 // backupName is the file name of a backup taken at t.
@@ -309,9 +300,20 @@ func backupName(t time.Time) string {
 	return backupPrefix + t.Format(backupTimeLayout) + backupSuffix
 }
 
-// isBackupName reports whether name is one of ours.
+// isBackupName reports whether name is one of ours (.yaml, or .json
+// from earlier versions).
 func isBackupName(name string) bool {
-	return strings.HasPrefix(name, backupPrefix) && strings.HasSuffix(name, backupSuffix) && len(name) == len(backupPrefix)+len(backupTimeLayout)+len(backupSuffix)
+	return backupStem(name) != ""
+}
+
+// backupStem returns the time part of a backup name, "" for other names.
+func backupStem(name string) string {
+	for _, suf := range []string{backupSuffix, backupSuffixJSON} {
+		if strings.HasPrefix(name, backupPrefix) && strings.HasSuffix(name, suf) && len(name) == len(backupPrefix)+len(backupTimeLayout)+len(suf) {
+			return strings.TrimSuffix(strings.TrimPrefix(name, backupPrefix), suf)
+		}
+	}
+	return ""
 }
 
 // BackupNow implements API.BackupNow.
@@ -389,7 +391,7 @@ func (s *Service) prune(ctx context.Context, c *webdavClient, dir string, keep i
 			names = append(names, e.Name)
 		}
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names))) // newest first (the name carries the time)
+	sort.SliceStable(names, func(i, j int) bool { return backupStem(names[i]) > backupStem(names[j]) }) // newest first (the name carries the time)
 	n := 0
 	for _, name := range names[min(keep, len(names)):] {
 		if err := c.delete(ctx, dir+"/"+name); err != nil {
@@ -426,12 +428,12 @@ func (s *Service) ListBackups() (out []model.WebDAVBackup, err error) {
 			continue
 		}
 		b := model.WebDAVBackup{Name: e.Name, Size: e.Size, Modified: e.Modified}
-		if t, err := time.ParseInLocation(backupTimeLayout, strings.TrimSuffix(strings.TrimPrefix(e.Name, backupPrefix), backupSuffix), time.Local); err == nil {
+		if t, err := time.ParseInLocation(backupTimeLayout, backupStem(e.Name), time.Local); err == nil {
 			b.Modified = t
 		}
 		out = append(out, b)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Name > out[j].Name })
+	sort.Slice(out, func(i, j int) bool { return backupStem(out[i].Name) > backupStem(out[j].Name) })
 	return out, nil
 }
 

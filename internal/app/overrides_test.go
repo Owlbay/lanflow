@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -215,27 +214,19 @@ func TestOverrideListExportImport(t *testing.T) {
 	if _, err := src.s.SaveOverrideEntry(model.Override{Name: "extra", Enabled: true, Text: "ipv6: true\n"}); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "export.json")
+	path := filepath.Join(t.TempDir(), "lanflow.yaml")
 	if err := src.s.ExportSettings(path, false); err != nil {
 		t.Fatal(err)
 	}
-	data, _ := os.ReadFile(path)
-	var ex model.SettingsExport
-	if err := json.Unmarshal(data, &ex); err != nil {
-		t.Fatal(err)
-	}
-	if ex.Overrides.Global != "log-level: warning\n" || len(ex.Overrides.PerSub) != 0 {
-		t.Fatalf("legacy views: %+v", ex.Overrides)
-	}
-	if len(ex.Overrides.List) != 2 {
-		t.Fatalf("the subscription's entry must stay home without its subscription: %+v", ex.Overrides.List)
+	ex := readDoc(t, path)
+	if len(ex.Overrides) != 2 || ex.Overrides[0].ID != "global" || ex.Overrides[0].Text != "log-level: warning\n" || len(ex.Subscriptions) != 0 {
+		t.Fatalf("the subscription's entry must stay home without its subscription: %+v", ex.Overrides)
 	}
 	if err := src.s.ExportSettings(path, true); err != nil {
 		t.Fatal(err)
 	}
-	data, _ = os.ReadFile(path)
-	_ = json.Unmarshal(data, &ex)
-	if len(ex.Overrides.List) != 3 || len(ex.Overrides.PerSub) != 1 {
+	ex = readDoc(t, path)
+	if len(ex.Overrides) != 3 || len(ex.Subscriptions) != 1 {
 		t.Fatalf("with subscriptions: %+v", ex.Overrides)
 	}
 

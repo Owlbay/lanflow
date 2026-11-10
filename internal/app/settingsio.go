@@ -10,62 +10,23 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/syncfile"
 )
 
-// Settings export / import (docs/design.md:485, P2). The file is JSON
-// (model.SettingsExport). Subscription URLs carry access tokens, so they
-// are written only when the user asks for them; the machine-specific core
-// path is never written and the local TUN choice is never overwritten.
+// Settings export / import (docs/design.md:485, P2). The file is
+// lanflow.yaml (package syncfile, configdoc.go), the format configuration
+// sync uses; the JSON export of earlier versions (model.SettingsExport)
+// is still read. Subscription URLs carry access tokens, so they are
+// written only when the user asks for them; machine-local items
+// (syncfile.Excluded: the core path, the TUN choice, agent grants…) are
+// never written and never overwritten by an import.
 
 const (
 	exportApp    = "lanflow"
 	exportFormat = 1
 )
 
-// buildExport assembles the export document.
-func buildExport(set model.Settings, ov model.Overrides, rules []model.CustomRule, subs []model.Subscription, includeSubs bool) model.SettingsExport {
-	set = copySettings(set)
-	set.CorePath = ""
-	if ov.PerSub == nil {
-		ov.PerSub = map[string]string{}
-	}
-	// The list carries the per-subscription entries only when their
-	// subscriptions travel too (their IDs mean nothing elsewhere); the
-	// legacy views stay for older versions reading the file.
-	if !includeSubs {
-		ids := map[string]bool{}
-		for _, s := range subs {
-			ids[s.ID] = true
-		}
-		var kept []model.Override
-		for _, o := range ov.List {
-			if !ids[o.ID] {
-				kept = append(kept, o)
-			}
-		}
-		ov.List = kept
-		ov.PerSub = map[string]string{}
-	}
-	ex := model.SettingsExport{
-		App:         exportApp,
-		Format:      exportFormat,
-		Settings:    &set,
-		Overrides:   &ov,
-		CustomRules: append([]model.CustomRule(nil), rules...),
-	}
-	if includeSubs {
-		for _, s := range subs {
-			if s.Source == urlSubscriptionK && s.URL != "" {
-				ex.Subscriptions = append(ex.Subscriptions, model.ExportedSubscription{
-					Name: s.Name, URL: s.URL, UserAgent: s.UserAgent, ViaProxy: s.ViaProxy, AutoUpdateHours: s.AutoUpdateHours,
-				})
-			}
-		}
-	}
-	return ex
-}
-
-// parseExport validates an export file.
+// parseExport validates a JSON export of an earlier version.
 func parseExport(data []byte) (model.SettingsExport, error) {
 	var ex model.SettingsExport
 	if err := json.Unmarshal(data, &ex); err != nil {
@@ -98,20 +59,8 @@ func (s *Service) ExportSettings(path string, includeSubs bool) error {
 	if strings.TrimSpace(path) == "" {
 		return errors.New(i18n.T("没有选择保存位置。"))
 	}
-	s.mu.Lock()
-	set := copySettings(s.state.settings)
-	rules := append([]model.CustomRule(nil), s.state.custom...)
-	subs := append([]model.Subscription(nil), s.state.subs...)
-	s.mu.Unlock()
-	ov := s.Overrides()
-
-	ex := buildExport(set, ov, rules, subs, includeSubs)
-	ex.ExportedAt = s.d.now()
-	data, err := json.MarshalIndent(ex, "", "  ")
-	if err != nil {
-		return fmt.Errorf(i18n.T("导出设置失败：%v"), err)
-	}
-	if err := writeFileAtomic(path, append(data, '\n'), 0o600); err != nil {
+	data := s.encodeExport(includeSubs)
+	if err := writeFileAtomic(path, data, 0o600); err != nil {
 		return fmt.Errorf(i18n.T("写入 %s 失败：%v"), path, err)
 	}
 	return nil
@@ -131,19 +80,18 @@ func (s *Service) ImportSettings(path string) (summary string, err error) {
 	if len(data) > 8<<20 {
 		return "", errors.New(i18n.T("文件过大，不像是澜流的设置文件。"))
 	}
-	ex, err := parseExport(data)
+	ex, notes, err := s.parseImport(data)
 	if err != nil {
 		return "", err
 	}
 
 	var done, skipped []string
+	skipped = append(skipped, notes...)
 
 	if ex.Settings != nil {
 		cur := s.Settings()
-		in := copySettings(*ex.Settings)
 		// machine-local choices stay as they are
-		in.CorePath = cur.CorePath
-		in.TUN = cur.TUN
+		in := syncfile.KeepLocal(copySettings(*ex.Settings), cur)
 		if err := s.SaveSettings(in); err != nil {
 			skipped = append(skipped, i18n.Tf("设置（%s）", err.Error()))
 		} else {

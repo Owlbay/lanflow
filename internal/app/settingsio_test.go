@@ -1,13 +1,13 @@
 package app
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"lanflow/internal/model"
+	"lanflow/internal/syncfile"
 )
 
 func TestExportSettingsExcludesSecretsByDefault(t *testing.T) {
@@ -25,7 +25,7 @@ func TestExportSettingsExcludesSecretsByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path := filepath.Join(t.TempDir(), "lanflow.json")
+	path := filepath.Join(t.TempDir(), "lanflow.yaml")
 	if err := h.s.ExportSettings(path, false); err != nil {
 		t.Fatalf("ExportSettings: %v", err)
 	}
@@ -33,20 +33,14 @@ func TestExportSettingsExcludesSecretsByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "example.com/sub") {
-		t.Fatal("subscription URL must not be exported by default")
+	if strings.Contains(string(data), "example.com/sub") || strings.Contains(string(data), "/opt/mihomo") {
+		t.Fatal("subscription URL or core path exported by default")
 	}
-	var ex model.SettingsExport
-	if err := json.Unmarshal(data, &ex); err != nil {
-		t.Fatal(err)
-	}
-	if ex.App != "lanflow" || ex.Format != 1 || ex.Settings == nil || ex.Overrides == nil {
-		t.Fatalf("bad export header: %+v", ex)
-	}
-	if ex.Settings.CorePath != "" || ex.Settings.MixedPort != 7899 {
+	ex := readDoc(t, path)
+	if ex.Format != 1 || ex.Settings.MixedPort != 7899 || ex.Settings.CorePath != "" {
 		t.Fatalf("settings not exported as expected: %+v", ex.Settings)
 	}
-	if ex.Overrides.Global != "log-level: warning\n" || len(ex.CustomRules) != 1 || ex.CustomRules[0].Payload != "openai.com" {
+	if len(ex.Overrides) != 1 || ex.Overrides[0].Text != "log-level: warning\n" || len(ex.CustomRules) != 1 || ex.CustomRules[0].Payload != "openai.com" {
 		t.Fatalf("overrides/rules missing: %+v %+v", ex.Overrides, ex.CustomRules)
 	}
 	if len(ex.Subscriptions) != 0 {
@@ -56,10 +50,56 @@ func TestExportSettingsExcludesSecretsByDefault(t *testing.T) {
 	if err := h.s.ExportSettings(path, true); err != nil {
 		t.Fatal(err)
 	}
-	data, _ = os.ReadFile(path)
-	_ = json.Unmarshal(data, &ex)
+	ex = readDoc(t, path)
 	if len(ex.Subscriptions) != 1 || ex.Subscriptions[0].URL != "https://example.com/sub" || ex.Subscriptions[0].Name != "测试机场" {
 		t.Fatalf("subscriptions not exported with opt-in: %+v", ex.Subscriptions)
+	}
+}
+
+// readDoc reads an exported lanflow.yaml.
+func readDoc(t *testing.T, path string) syncfile.Doc {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := syncfile.Decode(data, defaultSettings())
+	if err != nil {
+		t.Fatalf("export is not a valid lanflow.yaml: %v\n%s", err, data)
+	}
+	return doc
+}
+
+// TestImportLegacyJSONExport: files exported by earlier versions (JSON)
+// still import, and machine-local items in them (agent grants, the TUN
+// choice) never reach this machine.
+func TestImportLegacyJSONExport(t *testing.T) {
+	h := newHarness(t, nil)
+	legacy := `{
+  "app": "lanflow",
+  "format": 1,
+  "exportedAt": "2026-01-02T03:04:05Z",
+  "settings": {"MixedPort": 7911, "AllowLAN": true, "Mode": "global", "TUN": true, "CorePath": "/evil",
+               "AgentGrants": [{"Agent": "evil", "Allow": true}]},
+  "overrides": {"Global": "log-level: error\n", "PerSub": {}},
+  "customRules": [{"ID": "x", "Type": "DOMAIN", "Payload": "a.example", "Target": "DIRECT"}]
+}`
+	path := filepath.Join(t.TempDir(), "old.json")
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.s.ImportSettings(path); err != nil {
+		t.Fatalf("import legacy: %v", err)
+	}
+	got := h.s.Settings()
+	if got.MixedPort != 7911 || !got.AllowLAN || got.Mode != model.ModeGlobal {
+		t.Fatalf("legacy settings not applied: %+v", got)
+	}
+	if got.TUN || got.CorePath != "" || len(got.AgentGrants) != 0 {
+		t.Fatalf("machine-local items imported: TUN %v core %q grants %v", got.TUN, got.CorePath, got.AgentGrants)
+	}
+	if h.s.Overrides().Global != "log-level: error\n" || len(h.s.CustomRules()) != 1 {
+		t.Fatalf("legacy overrides/rules: %+v %+v", h.s.Overrides(), h.s.CustomRules())
 	}
 }
 
@@ -76,7 +116,7 @@ func TestImportSettingsAppliesAndKeepsLocalChoices(t *testing.T) {
 	if _, err := src.s.SaveCustomRule(model.CustomRule{Type: "DOMAIN-SUFFIX", Payload: "openai.com", Target: "DIRECT"}); err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "export.json")
+	path := filepath.Join(t.TempDir(), "lanflow.yaml")
 	if err := src.s.ExportSettings(path, false); err != nil {
 		t.Fatal(err)
 	}

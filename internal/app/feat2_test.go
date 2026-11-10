@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"lanflow/internal/model"
+	"lanflow/internal/syncfile"
 )
 
 // ---- a tiny in-memory WebDAV server ----
@@ -224,21 +224,21 @@ func TestWebDAVBackupListRestoreDelete(t *testing.T) {
 		now = now.Add(time.Hour)
 	}
 	// Keep: 2 → the oldest was pruned.
-	if got := dav.names(); len(got) != 2 || got[0] != "/dav/lanflow/lanflow-backup-20261110-100000.json" || got[1] != "/dav/lanflow/lanflow-backup-20261110-110000.json" {
+	if got := dav.names(); len(got) != 2 || got[0] != "/dav/lanflow/lanflow-backup-20261110-100000.yaml" || got[1] != "/dav/lanflow/lanflow-backup-20261110-110000.yaml" {
 		t.Fatalf("remote files = %q", got)
 	}
 	if last := h.s.Settings().WebDAV.LastBackupAt; !last.Equal(time.Date(2026, 11, 10, 11, 0, 0, 0, time.Local)) {
 		t.Fatalf("LastBackupAt = %v", last)
 	}
 	// The upload is the export with the subscriptions.
-	var ex model.SettingsExport
-	if err := json.Unmarshal(dav.files["/dav/lanflow/lanflow-backup-20261110-110000.json"], &ex); err != nil {
+	ex, err := syncfile.Decode(dav.files["/dav/lanflow/lanflow-backup-20261110-110000.yaml"], defaultSettings())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if ex.App != exportApp || len(ex.Subscriptions) != 1 || ex.Subscriptions[0].URL != "https://example.com/sub" || ex.Settings == nil {
+	if len(ex.Subscriptions) != 1 || ex.Subscriptions[0].URL != "https://example.com/sub" || ex.Settings.MixedPort != 7890 {
 		t.Fatalf("backup document = %+v", ex)
 	}
-	if strings.Contains(string(dav.files["/dav/lanflow/lanflow-backup-20261110-110000.json"]), "s3cret") {
+	if strings.Contains(string(dav.files["/dav/lanflow/lanflow-backup-20261110-110000.yaml"]), "s3cret") {
 		t.Fatal("backup carries the password")
 	}
 
@@ -246,7 +246,7 @@ func TestWebDAVBackupListRestoreDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 || list[0].Name != "lanflow-backup-20261110-110000.json" || list[1].Name != "lanflow-backup-20261110-100000.json" || list[0].Size == 0 {
+	if len(list) != 2 || list[0].Name != "lanflow-backup-20261110-110000.yaml" || list[1].Name != "lanflow-backup-20261110-100000.yaml" || list[0].Size == 0 {
 		t.Fatalf("list = %+v", list)
 	}
 	if !list[0].Modified.Equal(time.Date(2026, 11, 10, 11, 0, 0, 0, time.Local)) {

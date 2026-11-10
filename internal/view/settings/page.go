@@ -333,7 +333,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 			e.Kit.Row(c, i18n.T("配置文件夹"), e.API.ConfigDir(), func() {
 				ui.Button(c, revealLabel(e)).OnClick(func() { mygo.Shell.ShowItemInFolder(e.API.ConfigDir()) })
 			})
-			e.Kit.Row(c, i18n.T("导出 / 导入设置"), i18n.T("设置、覆写与自定义规则保存为 JSON 文件；导入会按文件内容应用"), func() {
+			e.Kit.Row(c, i18n.T("导出 / 导入设置"), i18n.T("设置、覆写与自定义规则保存为 lanflow.yaml；导入会按文件内容应用"), func() {
 				ui.Row(c).Gap(8).Children(func() {
 					if ui.Button(c, i18n.T("导出…")).Clicked() {
 						p.export.open, p.export.subs = true, false

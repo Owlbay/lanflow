@@ -275,7 +275,7 @@ func init() {
 		"选择位置并导出…": "Choose Location and Export…",
 		"导出澜流设置":   "Export Lanflow Settings",
 		"导入澜流设置":   "Import Lanflow Settings",
-		"选择之前用「导出…」保存的 JSON 文件。导入会应用其中的设置、覆写和自定义规则。": "Choose a JSON file saved earlier with “Export…”. Its settings, overrides and custom rules are applied.",
+		"选择之前用「导出…」保存的 lanflow.yaml（或旧版本导出的 JSON 文件）。导入会应用其中的设置、覆写和自定义规则。": "Choose a lanflow.yaml saved earlier with “Export…” (or a JSON file exported by an earlier version). Its settings, overrides and custom rules are applied.",
 
 		// internal/view/settings/mirror.go
 		"下载镜像": "Download Mirror",
@@ -382,7 +382,7 @@ func init() {
 		"数据":           "Data",
 		"配置文件夹":        "Config folder",
 		"导出 / 导入设置":    "Export / import settings",
-		"设置、覆写与自定义规则保存为 JSON 文件；导入会按文件内容应用": "Settings, overrides and custom rules as a JSON file; importing applies what the file holds",
+		"设置、覆写与自定义规则保存为 lanflow.yaml；导入会按文件内容应用": "Settings, overrides and custom rules as lanflow.yaml; importing applies what the file holds",
 		"关于":                   "About",
 		"基于 Mihomo（GPL-3.0）· ": "Based on Mihomo (GPL-3.0) · ",
 		"Mihomo 源代码":           "Mihomo source",

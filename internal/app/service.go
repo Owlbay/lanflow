@@ -79,7 +79,8 @@ type Service struct {
 
 	probeExitMu sync.Mutex // one 检测 probe uses the probe group at a time (probe.go)
 
-	f2 feat2State // Wi-Fi rules and WebDAV backup (feat2state.go); its own lock
+	f2 feat2State      // Wi-Fi rules and WebDAV backup (feat2state.go); its own lock
+	cs configSyncState // configuration sync (configsync.go); its own locks
 
 	// bgMu guards closing against wg.Add: once Shutdown sets closing, no
 	// new background goroutine or timer callback joins wg (Add racing Wait).

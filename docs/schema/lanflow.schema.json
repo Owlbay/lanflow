@@ -1,0 +1,997 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Lanflow configuration file lanflow.yaml (docs/config-sync.md)",
+  "properties": {
+    "customRules": {
+      "description": "Custom rules, in matching order, before the subscription's rules",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "payload": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "format": {
+      "const": 1,
+      "description": "File format version; this version writes and reads 1"
+    },
+    "overrides": {
+      "description": "The override list, in the order the overrides apply",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "global": {
+            "type": "boolean"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "pattern": "^https?://",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "settings": {
+      "additionalProperties": false,
+      "description": "Settings, without the machine-local items (docs/config-sync.md). A missing key means the default value",
+      "properties": {
+        "aTrust": {
+          "additionalProperties": false,
+          "properties": {
+            "always": {
+              "type": "boolean"
+            },
+            "corpDNS": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "corpDomains": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "directCIDRs": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "directDomains": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "excludeCIDRs": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "aTrustCompat": {
+          "type": "boolean"
+        },
+        "advanced": {
+          "additionalProperties": false,
+          "properties": {
+            "authentication": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "disableEtag": {
+              "type": "boolean"
+            },
+            "disableKeepAlive": {
+              "type": "boolean"
+            },
+            "dnsCacheAlgorithm": {
+              "enum": [
+                "",
+                "lru",
+                "arc"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dnsDefaultNameserver": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "dnsFallback": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "dnsFallbackFilter": {
+              "additionalProperties": false,
+              "properties": {
+                "domain": {
+                  "items": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "geoip": {
+                  "type": "boolean"
+                },
+                "geoipCode": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "ipcidr": {
+                  "items": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            },
+            "dnsListen": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dnsPreferH3": {
+              "type": "boolean"
+            },
+            "findProcessMode": {
+              "enum": [
+                "",
+                "off",
+                "strict",
+                "always"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "geodataLoader": {
+              "enum": [
+                "",
+                "memconservative",
+                "standard"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "globalUa": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "httpPort": {
+              "type": "integer"
+            },
+            "ipv6": {
+              "type": "boolean"
+            },
+            "keepAliveIdle": {
+              "type": "integer"
+            },
+            "keepAliveInterval": {
+              "type": "integer"
+            },
+            "lanAllowedIps": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "lanDisallowedIps": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "pacDirectCn": {
+              "type": "boolean"
+            },
+            "pacMode": {
+              "type": "boolean"
+            },
+            "pacPort": {
+              "type": "integer"
+            },
+            "skipAuthPrefixes": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "snifferNoForceDnsMapping": {
+              "type": "boolean"
+            },
+            "socksPort": {
+              "type": "integer"
+            },
+            "storeFakeIp": {
+              "type": "boolean"
+            },
+            "tcpConcurrent": {
+              "type": "boolean"
+            },
+            "tunDnsHijack": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "tunEndpointIndependentNat": {
+              "type": "boolean"
+            },
+            "tunMtu": {
+              "type": "integer"
+            },
+            "tunRouteAddress": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "tunRouteExcludeAddress": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "tunStrictRoute": {
+              "type": "boolean"
+            },
+            "unifiedDelay": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "allowLAN": {
+          "type": "boolean"
+        },
+        "appearance": {
+          "enum": [
+            "system",
+            "light",
+            "dark"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "autoSystemProxy": {
+          "type": "boolean"
+        },
+        "bypass": {
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "closeToTray": {
+          "type": "boolean"
+        },
+        "coreAutoCheck": {
+          "type": "boolean"
+        },
+        "coreAutoInstall": {
+          "type": "boolean"
+        },
+        "coreChannel": {
+          "enum": [
+            "stable",
+            "alpha"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delayTimeoutMs": {
+          "type": "integer"
+        },
+        "delayURL": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disableUpdateCheck": {
+          "type": "boolean"
+        },
+        "disconnectOnSwitch": {
+          "type": "boolean"
+        },
+        "dns": {
+          "additionalProperties": false,
+          "properties": {
+            "directNameserver": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "enhancedMode": {
+              "enum": [
+                "fake-ip",
+                "redir-host"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fakeIPFilter": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "hosts": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "key": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "nameserver": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "policy": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "key": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "type": "object"
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "proxyServerNameserver": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "respectRules": {
+              "type": "boolean"
+            },
+            "takeOver": {
+              "type": "boolean"
+            },
+            "useSystemHosts": {
+              "type": "boolean"
+            }
+          },
+          "type": "object"
+        },
+        "downloadMirror": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "geo": {
+          "additionalProperties": false,
+          "properties": {
+            "asn": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "autoUpdate": {
+              "type": "boolean"
+            },
+            "geoIP": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "geoSite": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "intervalHours": {
+              "type": "integer"
+            },
+            "mmdb": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mode": {
+              "enum": [
+                "db",
+                "dat"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "globalShortcut": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hideTraySpeed": {
+          "type": "boolean"
+        },
+        "language": {
+          "enum": [
+            "zh",
+            "en"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "logLevel": {
+          "enum": [
+            "debug",
+            "info",
+            "warning",
+            "error",
+            "silent"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mainGroup": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mixedPort": {
+          "type": "integer"
+        },
+        "mode": {
+          "enum": [
+            "rule",
+            "global",
+            "direct"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "probeExits": {
+          "type": "boolean"
+        },
+        "shortcuts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "accelerator": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "action": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "silentStart": {
+          "type": "boolean"
+        },
+        "sites": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "sniffer": {
+          "additionalProperties": false,
+          "properties": {
+            "enable": {
+              "type": "boolean"
+            },
+            "forceDomain": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "http": {
+              "type": "boolean"
+            },
+            "httpPorts": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "overrideDestination": {
+              "type": "boolean"
+            },
+            "parsePureIP": {
+              "type": "boolean"
+            },
+            "quic": {
+              "type": "boolean"
+            },
+            "quicPorts": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "skipDomain": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "skipDstAddress": {
+              "items": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "takeOver": {
+              "type": "boolean"
+            },
+            "tls": {
+              "type": "boolean"
+            },
+            "tlsPorts": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        },
+        "ssidDefaultSub": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ssidRules": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "ssid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "subscriptionId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tunSetDNS": {
+          "type": "boolean"
+        },
+        "tunStack": {
+          "enum": [
+            "mixed",
+            "system",
+            "gvisor"
+          ],
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "webDAV": {
+          "additionalProperties": false,
+          "properties": {
+            "autoBackup": {
+              "enum": [
+                "",
+                "daily",
+                "weekly"
+              ],
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dir": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "keep": {
+              "type": "integer"
+            },
+            "url": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "user": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "subscriptions": {
+      "description": "Subscriptions with a link; the link is a keychain:\u003cid\u003e reference (a plain http(s) link is accepted too)",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "autoUpdateHours": {
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^[A-Za-z0-9_-]{1,64}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overrides": {
+            "items": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": [
+              "array",
+              "null"
+            ]
+          },
+          "timeoutSec": {
+            "type": "integer"
+          },
+          "url": {
+            "pattern": "^$|^keychain:.+$|^https?://",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "userAgent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "viaProxy": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "webdavPassword": {
+      "description": "keychain:webdav-password when a WebDAV password is set; the password itself stays in the keychain",
+      "pattern": "^keychain:.+$",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "format"
+  ],
+  "title": "lanflow.yaml",
+  "type": "object"
+}

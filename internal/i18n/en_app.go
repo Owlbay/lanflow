@@ -5,7 +5,6 @@ func init() {
 	for k, v := range map[string]string{
 		// internal/app/backup.go
 		"保存下载内容失败：%v":                "Failed to save the download: %v",
-		"导出设置失败：%v":                  "Failed to export the settings: %v",
 		"请先填写 WebDAV 服务器地址。":         "Enter the WebDAV server URL first.",
 		"读取钥匙串失败：%v":                 "Reading the keychain failed: %v",
 		"写入钥匙串失败：%v":                 "Writing the keychain failed: %v",

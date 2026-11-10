@@ -40,7 +40,7 @@ type exportDialog struct {
 }
 
 func settingsFileFilter() []mygo.FileFilter {
-	return []mygo.FileFilter{{Name: i18n.T("澜流设置"), Extensions: []string{"json"}}}
+	return []mygo.FileFilter{{Name: i18n.T("澜流设置"), Extensions: []string{"yaml", "yml", "json"}}}
 }
 
 func (p *Page) exportDialog(c *ui.Context, t *ui.Theme) {
@@ -76,14 +76,14 @@ func (p *Page) exportSettings(includeSubs bool) {
 	e := p.e
 	path, err := mygo.Dialog.Save(mygo.SaveDialogOptions{
 		Title:       i18n.T("导出澜流设置"),
-		DefaultPath: "lanflow-settings.json",
+		DefaultPath: "lanflow.yaml",
 		Filters:     settingsFileFilter(),
 	})
 	if err != nil || path == "" {
 		return
 	}
 	if filepath.Ext(path) == "" {
-		path += ".json"
+		path += ".yaml"
 	}
 	e.Run(func() error { return e.API.ExportSettings(path, includeSubs) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }
@@ -93,7 +93,7 @@ func (p *Page) importSettings() {
 	e := p.e
 	paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
 		Title:   i18n.T("导入澜流设置"),
-		Message: i18n.T("选择之前用「导出…」保存的 JSON 文件。导入会应用其中的设置、覆写和自定义规则。"),
+		Message: i18n.T("选择之前用「导出…」保存的 lanflow.yaml（或旧版本导出的 JSON 文件）。导入会应用其中的设置、覆写和自定义规则。"),
 		Filters: settingsFileFilter(),
 	})
 	if err != nil || len(paths) == 0 {
