@@ -179,6 +179,9 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route) {
 	// height (docs/design.md §5.1), so the globe grows with the window.
 	ui.Column(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Grow(64).Basis(0).MinHeight(cardHeight).Padding(8, 12, 8, 12).Gap(2).Children(func() {
 		cardTitle(c, i18n.T("出口地图"), func() {
+			if guessed {
+				p.youUnknown(c, t)
+			}
 			switch {
 			case !run:
 				ui.Text(c, i18n.T("内核未启动")).FontSize(11).TextColor(t.TextMuted).Padding(1, 6).Radius(999).Background(t.TextMuted.Alpha(0.12))
@@ -695,6 +698,21 @@ func (p *Page) drawLabels(fr *mapFrame) {
 	for _, m := range destMarks {
 		placeLabel(pt, b, r, m.x, m.y, 8, m.city, t.TextMuted.Alpha(0.4+0.6*m.vis), back, destSize, false, false)
 	}
+}
+
+// youUnknown notes, beside the map's title, that the user's own location
+// was not measured, the reason in the tooltip: the 「你」 on the map is
+// then the time zone's city, not a measurement.
+func (p *Page) youUnknown(c *ui.Context, t *ui.Theme) {
+	n := p.e.API.NetInfo()
+	if n.PublicIPStatus != "failed" {
+		return
+	}
+	tip := i18n.T("未能经物理网卡实测你的位置，地图上的「你」按系统时区推测")
+	if n.PublicIPError != "" {
+		tip += "\n" + n.PublicIPError
+	}
+	ui.Text(c, i18n.T("你的位置：未知")).FontSize(11).TextColor(t.TextMuted).SingleLine().Tooltip(tip)
 }
 
 // anyLive reports whether a route carries traffic now (active): the

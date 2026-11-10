@@ -465,7 +465,7 @@ func (f *Fake) ExitRoutes() []model.ExitRoute {
 }
 func (f *Fake) You() *model.EndpointInfo {
 	p := places["上海"]
-	return &model.EndpointInfo{IP: "116.227.38.12", Place: &p, ISP: "中国电信", ASN: "AS4812"}
+	return &model.EndpointInfo{IP: "116.227.38.12", Place: &p, ISP: "中国电信", ASN: "AS4812", BoundIface: "en0"}
 }
 func (f *Fake) NetInfo() model.NetInfo {
 	return model.NetInfo{Interface: "Wi-Fi (en0)", SSID: "Home-5G", LANIP: "192.168.1.23", Gateway: "192.168.1.1", DNS: []string{"192.168.1.1"}, PublicIPStatus: "ok"}

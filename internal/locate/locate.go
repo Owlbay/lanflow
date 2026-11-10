@@ -38,7 +38,10 @@ func (l *Locator) Probe(ctx context.Context, sel SelectFunc, probePort int, node
 	return l.l.probe(ctx, sel, probePort, node)
 }
 
-// Direct fetches TraceURL directly (netx.Direct) and returns the user's public endpoint.
+// Direct fetches TraceURL over the physical interface (netx.PhysicalDirect,
+// so a TUN cannot capture it) and returns the user's public endpoint with
+// BoundIface set. It fails, never falling back to an unbound request, when
+// there is no physical interface or the socket cannot be bound.
 func (l *Locator) Direct(ctx context.Context) (model.EndpointInfo, error) { return l.l.direct(ctx) }
 
 // Lookup resolves an IP offline (country place + ISP + ASN).

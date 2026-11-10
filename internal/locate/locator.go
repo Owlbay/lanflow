@@ -1,6 +1,7 @@
 package locate
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -37,7 +38,7 @@ type locator struct {
 
 	// Injection points for tests.
 	proxyClient  func(port int, timeout time.Duration) *http.Client
-	directClient func(timeout time.Duration) *http.Client
+	directClient func(ctx context.Context, timeout time.Duration) (*http.Client, string, error)
 	resolve      func(ip string) model.EndpointInfo
 
 	mu     sync.Mutex // guards cache
@@ -58,10 +59,16 @@ func newLocator(cachePath, mmdbPath, asnPath string) *locator {
 		traceURL:     TraceURL,
 		now:          time.Now,
 		proxyClient:  netx.ViaPort,
-		directClient: netx.Direct,
+		directClient: physicalClient,
 	}
 	l.resolve = l.lookup
 	return l
+}
+
+// physicalClient is netx.PhysicalDirect, reporting the interface name.
+func physicalClient(ctx context.Context, timeout time.Duration) (*http.Client, string, error) {
+	c, ifc, err := netx.PhysicalDirect(ctx, timeout)
+	return c, ifc.Name, err
 }
 
 // guess answers offline: a valid cached probe, else the node-name guess,

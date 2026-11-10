@@ -243,10 +243,15 @@ func (p *Page) retest() {
 func (p *Page) directCard(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 	e := p.e
 	you := e.API.You()
+	if you != nil && you.BoundIface == "" {
+		you = nil // not measured over the physical interface: may be a proxy's exit
+	}
 	fetching := n.PublicIPStatus == "fetching"
 	env.InfoCard(c, i18n.T("直连 · 本机公网"), func() {
 		if you != nil && !fetching {
-			e.Kit.Tag(c, i18n.T("实测"), "green")
+			ui.Box(c).Tooltip(i18n.Tf("已绑定物理网卡 %s 实测，不经过 TUN", you.BoundIface)).Children(func() {
+				e.Kit.Tag(c, i18n.T("实测"), "green")
+			})
 		}
 		if fetching {
 			ui.Spinner(c).Size(12, 12).Label(i18n.T("正在获取"))
@@ -260,14 +265,15 @@ func (p *Page) directCard(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 		}
 	}, func() {
 		if you == nil {
-			ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
 			switch n.PublicIPStatus {
 			case "failed":
+				ui.Text(c, i18n.T("未知")).FontSize(20).TextColor(t.TextMuted).Tooltip(n.PublicIPError)
 				ui.Text(c, i18n.T("获取本机公网地址失败，稍后自动重试")).FontSize(11).TextColor(t.Warning)
 				if n.PublicIPError != "" {
 					ui.Text(c, n.PublicIPError).FontSize(11).TextColor(t.TextMuted).Selectable()
 				}
 			default:
+				ui.Text(c, "—").FontSize(20).TextColor(t.TextMuted)
 				ui.Text(c, i18n.T("正在获取本机公网地址…")).FontSize(11).TextColor(t.TextMuted)
 			}
 			return

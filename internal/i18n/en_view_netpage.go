@@ -77,6 +77,7 @@ func init() {
 		"已启用 · 内网网段 %d 个 · 内网域名 %d 个": "On · %d intranet ranges · %d intranet domains",
 		"等待 aTrust 连接后读取内网网段和域名":      "Intranet ranges and domains are read once aTrust connects",
 		"经内核的解析器":                     "Through the core's resolver",
+		"已绑定物理网卡 %s 实测，不经过 TUN":       "Measured with the socket bound to the physical interface %s, bypassing any TUN",
 	} {
 		en[k] = v
 	}

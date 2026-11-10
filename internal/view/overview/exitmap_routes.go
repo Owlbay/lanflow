@@ -43,9 +43,11 @@ type route struct {
 	color ui.Color
 }
 
-// youPlace returns the user's place and whether it is a guess.
+// youPlace returns the user's place and whether it is a guess. Only an
+// endpoint measured over the physical interface (BoundIface) is the
+// user's location: anything else may be a TUN's proxy exit.
 func (p *Page) youPlace() (*model.Place, bool) {
-	if y := p.e.API.You(); y != nil && y.Place != nil {
+	if y := p.e.API.You(); y != nil && y.Place != nil && y.BoundIface != "" {
 		return y.Place, false
 	}
 	// Before a measurement 「你」 sits at the system time zone's city,

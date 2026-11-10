@@ -25,6 +25,7 @@ const ifTypePropVirtual = 53 // IF_TYPE_PROP_VIRTUAL (Wintun, Hyper-V and other 
 // adapter is the subset of IP_ADAPTER_ADDRESSES we present.
 type adapter struct {
 	name    string
+	index   uint32 // IPv4 interface index (IfIndex)
 	ipv4    string
 	ipv6    string
 	gateway string
@@ -113,6 +114,7 @@ func listAdapters() ([]adapter, error) {
 		}
 		a := adapter{
 			name:   windows.UTF16PtrToString(aa.FriendlyName),
+			index:  aa.IfIndex,
 			metric: aa.Ipv4Metric,
 			wifi:   aa.IfType == windows.IF_TYPE_IEEE80211,
 			tunnel: aa.IfType == windows.IF_TYPE_TUNNEL || aa.IfType == ifTypePropVirtual,
