@@ -45,6 +45,36 @@ func init() {
 		// internal/app/configsecrets.go, internal/view/subs/page.go
 		"这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。": "This subscription came through configuration sync, and this machine's keychain does not have its link. Enter the subscription link again in Edit.",
 		"需要重新输入链接": "Link needed",
+
+		// internal/app/configapply.go
+		"与本机一个从文件导入的订阅 ID 相同":  "is the ID of a subscription imported from a file on this machine",
+		"保存配置失败，可能只加载了一部分：%v":  "Saving the configuration failed; it may be loaded only in part: %v",
+		"文件与本机配置一致，没有需要加载的内容。": "The file matches this machine's configuration; there is nothing to load.",
+		"更新了%s": "Updated %s",
+		"；%d 个订阅需要重新输入链接": "; %d subscription(s) need their link entered again",
+		"；正在使用的订阅「%s」已保留": "; the subscription in use, \"%s\", was kept",
+
+		// internal/app/configsync.go
+		"同步文件夹中已有不同的 lanflow.yaml：请选择使用文件中的配置，还是用本机配置覆盖文件。": "The sync folder already has a different lanflow.yaml: choose whether to use the configuration in the file or to overwrite the file with this machine's.",
+		"读取同步文件失败：%v":    "Reading the sync file failed: %v",
+		"已加载同步的配置":       "Synced configuration loaded",
+		"同步文件未加载，配置保持不变": "Sync file not loaded; the configuration is unchanged",
+		"无法创建同步文件夹：%v":   "Cannot create the sync folder: %v",
+		"写入同步文件失败：%v":    "Writing the sync file failed: %v",
+		"同步文件有冲突副本":      "The sync file has conflict copies",
+		"同步文件夹里有 %d 个冲突副本（%s）。请在「设置 › 常规 › 配置同步」中选择保留哪一个；澜流不会自动删除任何副本。": "The sync folder has %d conflict copy(ies) (%s). Choose which to keep in Settings › General › Configuration sync; Lanflow never deletes a copy by itself.",
+		"没有找到 iCloud 云盘文件夹。请在系统设置中登录 iCloud 并打开 iCloud 云盘。":             "No iCloud Drive folder found. Sign in to iCloud in System Settings and turn on iCloud Drive.",
+		"请选择同步文件夹。": "Choose a sync folder.",
+		"iCloud 正在下载同步文件夹中已有的 lanflow.yaml，请稍后再试。": "iCloud is downloading the lanflow.yaml already in the sync folder; try again in a moment.",
+		"同步文件无效，无法使用：%v":                           "The sync file is not valid and cannot be used: %v",
+		"同步文件中的配置未能加载：%v":                          "The configuration in the sync file could not be loaded: %v",
+		"备份原有同步文件失败：%v":                            "Backing up the existing sync file failed: %v",
+		"配置同步未开启。":                                 "Configuration sync is off.",
+		"不是同步文件的冲突副本。":                             "Not a conflict copy of the sync file.",
+		"读取冲突副本失败：%v":                              "Reading the conflict copy failed: %v",
+		"冲突副本无效：%v":                                "The conflict copy is not valid: %v",
+		"冲突副本中的配置未能加载：%v":                          "The configuration in the conflict copy could not be loaded: %v",
+		"移走冲突副本失败：%v":                              "Moving the conflict copy away failed: %v",
 	} {
 		en[k] = v
 	}

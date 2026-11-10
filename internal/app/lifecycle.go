@@ -33,6 +33,9 @@ type composeArgs struct {
 	// ov, when set, takes the place of the override-list entry with its ID
 	// (appended when new) for this composition (override preview/save).
 	ov *model.Override
+	// ovs, when set, is the whole override list for this composition
+	// (loading lanflow.yaml) instead of the stored one.
+	ovs *[]model.Override
 	// subOverrides, when set, is the subscription's override selection for
 	// this composition instead of the stored one.
 	subOverrides *[]string
@@ -77,9 +80,13 @@ func (s *Service) buildInput(a composeArgs) (profile.Input, model.Subscription, 
 	if a.subOverrides != nil {
 		layerSub.Overrides = *a.subOverrides
 	}
+	list := s.d.store.Overrides()
+	if a.ovs != nil {
+		list = *a.ovs
+	}
 	in := profile.Input{
 		Subscription: data,
-		Overrides:    profile.Layers(substituteOverride(s.d.store.Overrides(), a.ov), layerSub),
+		Overrides:    profile.Layers(substituteOverride(list, a.ov), layerSub),
 		CustomRules:  s.d.store.CustomRules(),
 		DNS:          set.DNS,
 		Sniffer:      set.Sniffer,

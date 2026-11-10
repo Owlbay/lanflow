@@ -308,6 +308,7 @@ func (s *Service) run() {
 	s.goBackground(s.watchCrashes)
 	s.goBackground(s.autoUpdateLoop)
 	s.goBackground(s.watchSystem)
+	s.goBackground(s.configSyncLoop)
 	s.goBackground(s.watchCoexist)
 	s.goBackground(s.bootstrap)
 	s.goBackground(s.coreUpdateLoop)
