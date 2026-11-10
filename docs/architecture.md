@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-已生成 MyGo v0.8.3 原生 UI 模板，并使用澜流 / Lanflow 名称。以下模块均为后续实现计划，不代表功能已经可用。尚未下载、打包或运行 Mihomo。
+下文是最初的搭建方案，分层和目录均已按此实现：系统代理、TUN（权限组件）、订阅与覆写、内核下载与多版本管理均可用，功能见 [README](../README.md) 与 [design.md](design.md)。Mihomo 内核随安装包分发，也可在应用内下载其他版本；分阶段验收一节保留为当时的计划，以代码和 README 为准。
 
 ## 分层
 
@@ -18,7 +18,7 @@ Mihomo 子进程：代理协议、路由规则、DNS
 系统代理适配器 / 后续 TUN 权限助手独立于上述层次
 ```
 
-计划目录：
+目录：
 
 | 目录 | 职责 |
 | --- | --- |
@@ -29,15 +29,16 @@ Mihomo 子进程：代理协议、路由规则、DNS
 | internal/platform | 分平台系统代理、开机启动、权限助手 |
 | internal/view | MyGo 页面与组件 |
 | resources | 图标与打包资源 |
-| bin（忽略） | 开发时的内核二进制 |
+| bin（忽略） | `scripts/fetch-core.sh` 下载并校验过的内核（`bin/<goos>-<goarch>/`，宿主平台另有 `bin/mihomo` 供测试用）、地理数据（`bin/geo/`）和压缩包缓存 |
 | runtime（忽略） | 仅供开发的运行数据 |
 
 按功能创建目录，避免提前堆积空接口。初期设置使用 JSON、代理配置使用 YAML；暂不引入数据库。
 
 ## 内核接入
 
-- 从 Mihomo 官方 release 选定并固定版本，记录平台、架构、下载来源和校验值。独立于 MyGo 版本升级。
-- 第一步可接入用户指定的本机内核文件；自动下载与随包分发随后实现。
+- 固定版本 v1.19.33（`scripts/fetch-core.sh` 的 `PINNED_VERSION`、`internal/app/coredl.go` 的 `pinnedCoreVersion`），独立于 MyGo 版本升级。各平台官方压缩包的 SHA-256 取自 github.com/MetaCubeX/mihomo 发布页的 asset digest，同时写在 `fetch-core.sh` 和 `internal/app/coresums.go` 中，测试保证两处一致。
+- 随包分发：`fetch-core.sh` 先确定期望的 SHA-256（固定版本用内置值，其他版本向 api.github.com 查询 asset digest，不经镜像），下载（可经 `GITHUB_MIRROR`）后核对，不符即退出；通过后写入 `bin/<goos>-<goarch>/`，`prepare-resources.sh` 再拷入 `resources/<goos>-<goarch>/`。地理数据（MetaCubeX/meta-rules-dat）只有滚动更新的 `latest`，没有可固定的 tag，按同一 release 的 asset digest 校验，也可用 `GEOIP_SHA256` 等环境变量指定。
+- 应用内下载（设置 › 内核）：同样先取得期望的 SHA-256 再下载，压缩包核对通过后才解压、运行 `mihomo -v` 与 `-t` 并安装；GitHub 没有给出 digest 的版本一律拒绝。也可选择用户指定的本机内核文件。
 - 启动前检查版本和配置，使用独立工作目录；管理自己启动的 PID，不结束其他代理客户端的进程。
 - controller 仅监听 127.0.0.1，生成随机 secret。API 客户端绕开系统代理，设置请求超时，不把 secret 或订阅令牌写进日志。
 - 应用覆盖项与订阅原始文件分开保存。订阅不得覆盖本地 controller、secret、监听地址和 TUN 开关。

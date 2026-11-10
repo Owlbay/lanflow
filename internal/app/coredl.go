@@ -21,14 +21,16 @@ import (
 
 // Downloading the official Mihomo core (docs/design.md:277 「下载内核」 and
 // :519 「更新」). Assets follow scripts/fetch-core.sh: the plain amd64/arm64
-// build, .gz on macOS/Linux and .zip on Windows; the release ships no
-// checksum file, so the binary is verified by running it (`mihomo -v` must
-// report the requested version) and by validating the current runtime
-// config with `mihomo -t` before it replaces the active core.
+// build, .gz on macOS/Linux and .zip on Windows. The archive's SHA-256 is
+// checked first (coresums.go: pinned for pinnedCoreVersion, else the
+// asset digest from the GitHub API); only then is the binary run, to see
+// that `mihomo -v` reports the requested version and that `mihomo -t`
+// accepts the current runtime config before it replaces the active core.
 
 const (
 	// pinnedCoreVersion is the release DownloadCore("") installs; keep in
-	// sync with MIHOMO_VERSION in scripts/fetch-core.sh.
+	// sync with PINNED_VERSION in scripts/fetch-core.sh, and its checksums
+	// with pinnedCoreSHA256 (coresums.go).
 	pinnedCoreVersion = "v1.19.33"
 
 	coreDownloadTimeout = 15 * time.Minute

@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: go mod tidy -diff
+        run: go mod tidy -diff
+
+      # The end-to-end tests (internal/app, internal/core, internal/locate) use
+      # bin/mihomo and bin/geo/ and skip themselves when those are absent.
+      # fetch-core.sh checks every file against a pinned or API-reported
+      # SHA-256. Set the repository variable CI_SKIP_CORE=1 to skip the
+      # download (e.g. while GitHub release downloads are failing); the
+      # tests then run without the real core.
+      - name: Fetch Mihomo core and geodata
+        if: vars.CI_SKIP_CORE != '1'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: scripts/fetch-core.sh
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: mygo vet
+        run: go tool mygo vet .
+
+      - name: go test
+        env:
+          CGO_ENABLED: "0"
+        run: go test ./...
+
+      # -race needs cgo; the macOS runner has a C toolchain.
+      - name: go test -race
+        if: runner.os == 'macOS'
+        env:
+          CGO_ENABLED: "1"
+        run: go test -race ./...
+
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
