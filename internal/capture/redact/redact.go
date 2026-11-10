@@ -206,14 +206,18 @@ func maskJSON(v any) any {
 // lengths, form field names with lengths, or the kind and size. No value
 // leaves (docs/capture.md §10 L2).
 func Structure(body []byte, contentType string) any {
-	switch k := Kind(contentType, body); k {
+	k := Kind(contentType, body)
+	if k != "json" && len(body) > 0 && (body[0] == '{' || body[0] == '[') && json.Valid(body) {
+		k = "json" // mislabelled
+	}
+	switch k {
 	case "json":
 		var v any
 		if json.Unmarshal(body, &v) == nil {
 			return map[string]any{"kind": "json", "size": len(body), "shape": shape(v, 0)}
 		}
 	case "form":
-		if vals, err := url.ParseQuery(string(body)); err == nil {
+		if vals, err := url.ParseQuery(string(body)); err == nil && plainNames(vals) {
 			fields := map[string]string{}
 			for name, vs := range vals {
 				n := 0
@@ -227,7 +231,19 @@ func Structure(body []byte, contentType string) any {
 	default:
 		return map[string]any{"kind": k, "size": len(body)}
 	}
-	return map[string]any{"kind": "binary", "size": len(body)}
+	return map[string]any{"kind": "text", "size": len(body)}
+}
+
+var plainName = regexp.MustCompile(`^[A-Za-z0-9_.\-\[\]]{1,64}$`)
+
+// plainNames: form field names that are names, not data.
+func plainNames(v url.Values) bool {
+	for k := range v {
+		if !plainName.MatchString(k) {
+			return false
+		}
+	}
+	return true
 }
 
 func shape(v any, depth int) any {

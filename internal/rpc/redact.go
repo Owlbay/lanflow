@@ -108,7 +108,7 @@ func captureStructure(d model.CaptureFlowDetail) any {
 		out := redact.Headers(h)
 		for i := range out {
 			if redact.SensitiveHeader(out[i].Key) {
-				out[i].Value = fmt.Sprintf("(%d 字节，已隐藏)", len(h[i].Value))
+				out[i].Value = fmt.Sprintf("(%d bytes, hidden)", len(h[i].Value))
 			}
 		}
 		return out

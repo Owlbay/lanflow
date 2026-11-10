@@ -125,6 +125,12 @@ type session struct {
 	askMu     sync.Mutex
 	writeOK   bool
 	sensitive int // 0 = not asked, 1 = allowed, -1 = refused
+
+	// capture isolation (docs/capture.md §10): a connection that read
+	// captured traffic cannot change anything, and one that changed
+	// something cannot read captured traffic (guard.go)
+	capRead bool
+	acted   bool
 }
 
 func (s *Server) serveConn(c net.Conn) {

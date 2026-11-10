@@ -62,7 +62,7 @@ func (f *Fake) capInit() *fakeCapture {
 			[]byte(`{"login":"octocat","id":1,"email":"octo@example.com","plan":{"name":"pro","private_repos":9999}}`), "Code"),
 		mk(2, "POST", "api.github.com", "/graphql", 200, "application/json", []byte(`{"query":"query { viewer { login } }","variables":{}}`),
 			[]byte(`{"data":{"viewer":{"login":"octocat"}}}`), "Code"),
-		mk(3, "POST", "login.example.com", "/oauth/token", 200, "application/x-www-form-urlencoded",
+		mk(3, "POST", "login.example.com", "/oauth/token", 200, "application/json",
 			[]byte("grant_type=password&username=octo&password=hunter2hunter2&client_secret=abcdef123456"), []byte(`{"access_token":"eyJhbGciOiJIUzI1NiJ9.e30.x","expires_in":3600}`), "Slack"),
 		mk(4, "GET", "img.example.com", "/avatar.png", 200, "image/png", nil, png, "Slack"),
 		mk(5, "GET", "api.github.com", "/repos/a/b/issues", 404, "application/json", nil, []byte(`{"message":"Not Found"}`), "Code"),

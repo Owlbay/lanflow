@@ -247,3 +247,55 @@ func TestPinTable(t *testing.T) {
 		t.Fatal("two alerts did not skip")
 	}
 }
+
+func wsFrame(op byte, payload []byte, mask bool) []byte {
+	b := []byte{0x80 | op}
+	n := len(payload)
+	m := byte(0)
+	if mask {
+		m = 0x80
+	}
+	switch {
+	case n < 126:
+		b = append(b, m|byte(n))
+	default:
+		b = append(b, m|126, byte(n>>8), byte(n))
+	}
+	if mask {
+		key := []byte{1, 2, 3, 4}
+		b = append(b, key...)
+		for i, c := range payload {
+			b = append(b, c^key[i%4])
+		}
+		return b
+	}
+	return append(b, payload...)
+}
+
+func TestWebSocketFrames(t *testing.T) {
+	s := newStore(100, 1<<20, 0, "", 0)
+	cr := &connRec{st: s, base: model.CaptureFlow{Host: "ws.test", Port: 443}}
+	p := newH1Parser(cr, "https", "ws.test")
+	req := "GET /chat HTTP/1.1\r\nHost: ws.test\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+	reqBytes := append([]byte(req), wsFrame(1, []byte("hello server"), true)...)
+	reqBytes = append(reqBytes, wsFrame(8, nil, true)...)
+	resp := append([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"), wsFrame(1, []byte(strings.Repeat("x", 300)), false)...)
+	resp = append(resp, wsFrame(2, []byte{0, 1, 2}, false)...)
+	resp = append(resp, wsFrame(8, nil, false)...)
+	done := make(chan struct{})
+	go func() { p.requests(bytes.NewReader(reqBytes)); close(done) }()
+	p.responses(bytes.NewReader(resp))
+	<-done
+	fs, _, _, _ := s.since(0, 0)
+	if len(fs) != 1 || fs[0].Status != 101 || !fs[0].Has(model.FlowWebSocket) {
+		t.Fatalf("%+v", fs)
+	}
+	d, _ := s.detail(fs[0].ID)
+	var texts []string
+	for _, f := range d.WSFrames {
+		texts = append(texts, f.Text)
+	}
+	if len(d.WSFrames) != 5 || !strings.Contains(strings.Join(texts, "|"), "hello server") || !strings.Contains(strings.Join(texts, "|"), strings.Repeat("x", 300)) {
+		t.Fatalf("frames %+v", d.WSFrames)
+	}
+}

@@ -64,6 +64,9 @@ func (g *guard) check(ss *session, method string, level Level, summary string) e
 	if !id.Agent() {
 		return nil
 	}
+	if err := g.isolate(ss, method, level, summary); err != nil {
+		return err
+	}
 	switch level {
 	case LevelRead:
 		return nil
@@ -90,6 +93,31 @@ func (g *guard) check(ss *session, method string, level Level, summary string) e
 		return g.checkWrite(ss, id, method, summary)
 	}
 	return denied("%s 的权限级别未知", method)
+}
+
+// captureReads are the methods that return captured traffic.
+var captureReads = map[string]bool{"CaptureFlows": true, "CaptureFlow": true}
+
+// isolate keeps reading captured traffic and acting apart within one
+// connection (docs/capture.md §10): a request body is an ideal carrier
+// for prompt injection, so an agent that has read one must not be able to
+// act on it through the same channel.
+func (g *guard) isolate(ss *session, method string, level Level, summary string) error {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	switch {
+	case captureReads[method]:
+		if ss.acted {
+			return denied("本连接已执行过修改操作，不能再读取抓包数据：请另开一个只读的会话")
+		}
+		ss.capRead = true
+	case level == LevelWrite || level == LevelDanger:
+		if ss.capRead {
+			return denied("本连接读取过抓包数据，不能再执行 %s：请另开一个会话", method)
+		}
+		ss.acted = true
+	}
+	return nil
 }
 
 func (g *guard) checkSensitive(ss *session, id Identity, method, summary string) error {
