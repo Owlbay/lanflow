@@ -535,6 +535,21 @@ func (cl *Client) ApplyConfigFile(path string, dryRun bool) (res0 model.ConfigAp
 	return
 }
 
+func (cl *Client) SetSyncPassphrase(passphrase string) (err error) {
+	err = cl.call("SetSyncPassphrase", []any{passphrase})
+	return
+}
+
+func (cl *Client) UnlockSync(passphrase string) (err error) {
+	err = cl.call("UnlockSync", []any{passphrase})
+	return
+}
+
+func (cl *Client) ForgetSyncPassphrase() (err error) {
+	err = cl.call("ForgetSyncPassphrase", nil)
+	return
+}
+
 func (cl *Client) ATrustReference() (res0 string) {
 	_ = cl.call("ATrustReference", nil, &res0)
 	return

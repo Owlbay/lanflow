@@ -295,6 +295,20 @@ type API interface {
 	// dryRun only returns what would change. The diff shows links as
 	// keychain references.
 	ApplyConfigFile(path string, dryRun bool) (model.ConfigApplyResult, error)
+	// SetSyncPassphrase seals the sync file's secrets with passphrase
+	// (configseal.go): turns it on, or changes the passphrase (everything
+	// sealed again, the file rewritten atomically; other devices are asked
+	// for the new one). "" turns it off: the file goes back to keychain
+	// references. The derived key, never the passphrase, is kept in this
+	// machine's keychain. Window only.
+	SetSyncPassphrase(passphrase string) error
+	// UnlockSync enters the sync passphrase on this device: the derived
+	// key goes into the keychain and the file's secrets are loaded;
+	// a wrong one returns syncfile.ErrWrongPassphrase. Window only.
+	UnlockSync(passphrase string) error
+	// ForgetSyncPassphrase removes the derived key from this machine's
+	// keychain; links already here stay.
+	ForgetSyncPassphrase() error
 
 	// ---- aTrust 兼容 (atrustcfg.go) ----
 	// ATrustReference is a commented YAML template of the aTrust lists

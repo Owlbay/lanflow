@@ -144,6 +144,9 @@ var methodLevels = map[string]Level{
 	"SetConfigSync":         LevelDanger, // writes outside the data directory
 	"ResolveConfigConflict": LevelDanger,
 	"ApplyConfigFile":       LevelWrite, // like the settings writes; undo restores settings, rules and overrides
+	"SetSyncPassphrase":     LevelUI,    // the passphrase is typed in the window only, never by an agent
+	"UnlockSync":            LevelUI,
+	"ForgetSyncPassphrase":  LevelUI,
 
 	// ---- aTrust ----
 	"ATrustReference":    LevelRead,
