@@ -1,6 +1,6 @@
 # 后台服务与按需界面
 
-状态：设计稿，尚未实施。目标：界面关闭后进程真正退出、释放内存；代理、订阅更新、统计、检测和通知照常运行；`lanflow ctl`、MCP 和界面共用同一套本机接口。
+状态：S1 已实施（见第 8 节），S2、S3 尚未开始。目标：界面关闭后进程真正退出、释放内存；代理、订阅更新、统计、检测和通知照常运行；`lanflow ctl`、MCP 和界面共用同一套本机接口。
 
 ## 1. 现状与实测
 
@@ -75,3 +75,33 @@ S1 完成后再做配置同步（`lanflow.yaml` 也经同一接口加载和校�
 - 界面进程退出后 macOS 的 Dock 行为：服务进程不显示 Dock 图标，点「应用程序」里的 Lanflow 需要拉起界面而不是第二个服务。
 - 远程客户端下各页面的刷新延迟，尤其是连接页（每秒一帧的整包传输）。
 - Windows 命名管道在服务以普通用户运行、helper 以 SYSTEM 运行时的权限组合。
+
+## 8. S1 实施说明
+
+S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `app.Service`；`lanflow ctl` 和 `lanflow mcp` 是它的客户端。
+
+**代码位置**
+
+| 位置 | 内容 |
+| --- | --- |
+| `internal/rpc` | 协议（`protocol.go`）、传输与对端校验（`transport_*.go`、`peer_*.go`）、服务端（`server.go`）、权限（`guard.go`、`levels.go`）、审计（`audit.go`）、撤销（`undo.go`）、agent 专用方法（`agentops.go`）、脱敏（`redact.go`）、通用客户端（`client.go`）；`manifest_gen.go` 是生成的方法清单 |
+| `internal/app/remote` | 生成的 `app.API` 客户端（`client_gen.go`）；生成器在 `apigen/`，`go generate ./internal/app/remote` 同时写出客户端和清单 |
+| `internal/ctl`、`internal/mcp` | 两个子命令；`main_cli.go` 在单实例锁之前分派，不开窗口 |
+| `main_rpc.go` | app 启动时开始服务（模拟后端同样提供），退出时关闭；授权弹窗经 `view.Shell.AskAgentConsent` |
+| `internal/view/agents.go`、`settings/agents.go` | 授权弹窗；「设置 › 高级 › Agent 接入」：复制 MCP 配置、撤销授权 |
+| `skills/lanflow/SKILL.md` | 配套 skill |
+
+**与设计的差异和补充**
+
+- 传输：socket 路径是 `<DataDir>/run/lanflow.sock`（目录必须属于当前用户，0700；socket 0600）；Windows 管道 DACL 只含当前用户（`D:P(A;;GA;;;<SID>)`），服务端与客户端都用 `GetNamedPipeClientProcessId` / `GetNamedPipeServerProcessId` 核对对端进程的用户 SID。另一个进程正在服务时 `Listen` 返回 `ErrInUse`，残留的 socket 会被替换。`LANFLOW_SOCKET` 可改端点（测试、开发）。
+- 协议：参数是按声明顺序的 JSON 数组，结果是去掉 error 后的返回值数组；`hello` 必须是第一条消息，协议版本（`rpc.ProtocolVersion`）不一致即拒绝，澜流版本不一致只记日志。`app.ErrHelperRequired` 以 `data.kind = "helper-required"` 传回并在客户端还原。请求并发处理，事件在独立 goroutine 发送，慢客户端不拖住服务。
+- 方法清单：`internal/rpc/levels.go` 是权限表的唯一来源，生成器把它和 `api.go` 合成 `manifest_gen.go`（名称、参数名与类型、结果类型、级别、文档）。API 新增方法而 `levels.go` 没有对应条目时，生成器和 `internal/app/remote` 的测试都会失败；生成文件过期也会被测试发现。
+- 权限：在四级之外加了「仅界面」级（`TakeNotices`、UI 状态、`ResolveRecovery`、`DismissProxyHint`、`PatchUIState`），任何 agent 都不能调用。只测量、不改配置的动作（测速、检测、DNS 查询、刷新网络、泄漏检查）归为「读」。删除订阅、重置统计、切换/安装内核、备份与恢复、WebDAV 密码归为「危险」。
+- 授权：MCP 首次写入、MCP 敏感读、ctl `--reveal` 敏感读、ctl 危险操作都经界面弹窗（同时发系统通知并把窗口拉到前台）。写入的「始终允许 / 拒绝」存进 `Settings.AgentGrants`，「仅本次」只对当前连接有效；敏感读只按连接授权。等待超过 2 分钟视为拒绝。没有界面可问时（`Prompt` 为空）一律拒绝并说明原因。
+- 整体写设置：agent 读到的设置已脱敏，整体写回会把掩码存进去，所以 `SaveSettings`、`ApplyDNS`、`ApplySniffer` 对 agent 拒绝，改用新增的 `PatchSettings(patch, dryRun)`：按字段名（不区分大小写）合并 JSON 补丁，未知字段报错，`UI`、`AgentGrants`、`CorePath`、`CoreVersion`、`WebDAV`、`ConnHiddenColumns` 不可改；`dryRun` 返回脱敏后设置的行级差异（前后各 2 行上下文）。`EditSubscription` 收到空链接时保留原链接。
+- 其他 agent 方法：`Undo`、`AuditLog(n)`、`Methods`（清单，供兼容检查）、`PatchUIState`（`UpdateUIState` 的远程形式，仅界面）。
+- 审计与撤销：ctl/MCP 的写入和被拒的非读调用写入日志目录的 `audit.log`（JSON 行，参数经 `applog.Redact`，2 MB 轮转一份）。写入前按方法快照：设置（撤销时保留 UI 状态与授权）、自定义规则（删新增、补回删除的、再按原顺序移动）、覆写列表、规则启停、系统代理开关、代理组选择、当前订阅、订阅编辑、导入的订阅（撤销即删除）。撤销栈在内存里，最多 20 条，只覆盖本次运行。
+- 脱敏：agent 收到的每个结果都先转成 JSON 再对所有字符串做 `applog.Redact`（图标字节除外）；订阅的 `URL` 清空；设置去掉 UI 状态和授权，代理认证的密码打码。
+- MCP：工具名是方法名的 snake_case；提供读、敏感读、写三级，去掉整体写设置、图标、目录路径、aTrust 文件导入导出和诊断包导出。参数的 JSON Schema 由 `app.API` 的反射类型生成。连接按需建立，澜流重启后自动重连；单次调用最长等 3 分钟（包含等用户授权）。
+- 测试：`internal/rpc`（往返、握手、对端 uid 校验、权限与授权、事件、补丁预览与撤销、脱敏）、`internal/app/remote`（清单覆盖与生成文件新鲜度）、`apigen`（漏标即失败）、`internal/ctl`、`internal/mcp`（工具清单、一次完整的 `route_domain` 预览 → 应用 → 验证 → 撤销）、`internal/view`（授权弹窗）。
+- 未做：大数据的增量参数（`since`/`limit`）；托盘里的授权入口（S2 拆出服务进程后再做）；Windows 管道与对端校验只经交叉编译和 `go vet`，未在真机运行。

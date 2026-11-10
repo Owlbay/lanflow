@@ -152,6 +152,7 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 			s.invalid = nil
 		}
 	}
+	s.consentDialog(c)
 	if s.recovery {
 		ui.Modal(c, &s.recovery, func() {
 			ui.Column(c).Width(440).Gap(12).Children(func() {

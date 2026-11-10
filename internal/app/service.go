@@ -778,6 +778,7 @@ func copySettings(in model.Settings) model.Settings {
 	out.ConnHiddenColumns = append([]string(nil), in.ConnHiddenColumns...)
 	out.Shortcuts = append([]model.Shortcut(nil), in.Shortcuts...)
 	out.SSIDRules = append([]model.SSIDRule(nil), in.SSIDRules...)
+	out.AgentGrants = append([]model.AgentGrant(nil), in.AgentGrants...)
 	return out
 }
 
