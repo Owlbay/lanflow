@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -125,7 +124,7 @@ func (s *Service) ImportSubscriptionURL(rawURL, name, userAgent string, viaProxy
 	}
 	s.setImportPhase(model.ImportDownloading)
 	defer s.setImportPhase("")
-	ctx, cancel := context.WithTimeout(s.rootCtx, defaultSubTimeout)
+	ctx, cancel := s.ctrlCtx(nil, defaultSubTimeout)
 	defer cancel()
 	f, err := s.d.prof.Fetch(ctx, s.fetchClient(viaProxy, defaultSubTimeout), rawURL, userAgent)
 	if err != nil {
@@ -313,7 +312,7 @@ func (s *Service) updateOne(sub model.Subscription) error {
 	switch sub.Source {
 	case urlSubscriptionK:
 		timeout := subTimeout(sub)
-		ctx, cancel := context.WithTimeout(s.rootCtx, timeout)
+		ctx, cancel := s.ctrlCtx(nil, timeout)
 		f, err := s.d.prof.Fetch(ctx, s.fetchClient(sub.ViaProxy, timeout), sub.URL, sub.UserAgent)
 		cancel()
 		if err != nil {

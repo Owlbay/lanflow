@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -252,7 +251,7 @@ func (s *Service) SetRuleDisabled(index int, disabled bool) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	err := s.d.ctrl.DisableRules(ctx, map[int]bool{index: disabled})
 	cancel()
 	if err != nil {
@@ -277,7 +276,7 @@ func (s *Service) UpdateRuleProvider(name string) error {
 		s.mu.Unlock()
 		s.em.emit(TopicRules)
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
 	err := s.d.ctrl.UpdateRuleProvider(ctx, name)
 	cancel()
 	s.refreshProviders()

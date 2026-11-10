@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"reflect"
@@ -92,7 +91,7 @@ func (s *Service) detectCoexist() bool {
 	s.mu.Unlock()
 	var info atrust.Info
 	if on && detect != nil && s.rootCtx.Err() == nil {
-		ctx, cancel := context.WithTimeout(s.rootCtx, 8*time.Second)
+		ctx, cancel := s.ctrlCtx(nil, 8*time.Second)
 		info = detect(ctx, isOwnTUN)
 		cancel()
 	}

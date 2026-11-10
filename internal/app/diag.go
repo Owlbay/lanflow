@@ -3,7 +3,6 @@ package app
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -90,7 +89,7 @@ func (s *Service) ExportDiagnostics(path string) (err error) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(s.rootCtx, 20*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 20*time.Second)
 	defer cancel()
 	cmds := s.d.diagCommands
 	if cmds == nil {

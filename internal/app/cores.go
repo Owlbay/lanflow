@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -284,7 +283,7 @@ func (s *Service) learnBundledVersion() {
 	if bin == "" || v != "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
 	got, err := s.d.core.Version(ctx, bin)
 	cancel()
 	if err != nil {
@@ -392,7 +391,7 @@ func (s *Service) migrateLegacyCore() {
 	if err != nil || !fi.Mode().IsRegular() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
 	got, err := s.d.core.Version(ctx, legacy)
 	cancel()
 	version := normalizeVersion(got)

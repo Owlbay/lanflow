@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -97,7 +96,7 @@ func (s *Service) checkOtherTUN() error {
 	if ours {
 		return nil // the TUN we see is our own
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
 	defer cancel()
 	if name, found := s.d.otherTUN(ctx); found {
 		return fmt.Errorf(i18n.T("检测到其他代理软件的 TUN（%s）正在接管网络。两个 TUN 同时开启会互相冲突，请先在那款软件中关闭 TUN 模式，再开启澜流的 TUN"), name)
@@ -238,7 +237,7 @@ func (s *Service) InstallTUNHelper() (err error) {
 	if bin == "" {
 		return errors.New(i18n.T("未找到 Mihomo 内核，无法安装权限组件。请先在设置 › 内核中选择内核文件。"))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
 	defer cancel()
 	err = s.d.helper.Install(ctx, helper.InstallOptions{HelperBin: s.opt.helperBinary(), CoreBin: bin, DataDir: s.opt.DataDir})
 	s.refreshHelper()
@@ -259,7 +258,7 @@ func (s *Service) UninstallTUNHelper() (err error) {
 			return err
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
 	defer cancel()
 	err = s.d.helper.Uninstall(ctx)
 	s.refreshHelper()
@@ -281,7 +280,7 @@ func (s *Service) SetMode(m model.Mode) (err error) {
 	}
 	if s.running() {
 		mode := string(m)
-		ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 		err := s.d.ctrl.PatchConfigs(ctx, controller.ConfigPatch{Mode: &mode})
 		cancel()
 		if err != nil {
@@ -330,7 +329,7 @@ func (s *Service) ensureGlobalExit() {
 	if target == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	err := s.d.ctrl.SelectProxy(ctx, "GLOBAL", target)
 	cancel()
 	if err != nil {

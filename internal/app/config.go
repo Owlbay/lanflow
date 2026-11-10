@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -14,9 +13,16 @@ import (
 	"lanflow/internal/model"
 )
 
-// SaveSettings persists s and applies what changed: hot-patchable fields go
-// through PATCH /configs, anything else in the composed config triggers a
-// recompose + reload (or a restart when the binary or TUN changed).
+// SaveSettings persists s and applies what changed. Each change takes the
+// cheapest path that applies it:
+//
+//   - restart (applySettingsRestart): the core binary or TUN changed;
+//   - reload (reloadLocked): the composed config changed in a way PATCH
+//     /configs cannot apply (needsReload, aTrust coexistence, advanced);
+//   - hot patch (applySettingsHot): mode, log level, LAN, ports, sniffing.
+//
+// The system proxy then follows the port, bypass list and PAC mode
+// (followSystemProxy). A failed apply restores the previous settings.
 func (s *Service) SaveSettings(in model.Settings) error {
 	in = normalizeSettings(in)
 	s.opMu.Lock()
@@ -28,17 +34,68 @@ func (s *Service) SaveSettings(in model.Settings) error {
 	ours := s.state.weSetProxy
 	s.mu.Unlock()
 
-	if in.TUN != old.TUN && in.TUN && !s.refreshHelper() {
-		return ErrHelperRequired
+	if err := s.checkSettingsChange(old, in); err != nil {
+		return err
 	}
+	// persist first so a failed apply still keeps the user's choice
+	if err := s.storeSettings(in, running); err != nil {
+		return err
+	}
+	if ch := changedSettings(old, in); len(ch) > 0 {
+		s.alog.Infof("settings changed: %s", strings.Join(ch, ", "))
+	}
+	if in.CorePath != old.CorePath {
+		s.mu.Lock()
+		s.resolveBinaryLocked()
+		s.mu.Unlock()
+		s.em.emit(TopicStatus)
+	}
+	if in.LogLevel != old.LogLevel && running {
+		s.restartLogStream(in.LogLevel)
+	}
+	coexistChanged := (in.ATrustCompat != old.ATrustCompat && s.detectCoexist()) || s.coexistSettingsChanged(old, in)
+	if !running {
+		return nil // a stopped core picks the new settings up at its next start
+	}
+	if (in.TUNSetDNS != old.TUNSetDNS || coexistChanged) && in.TUN == old.TUN {
+		s.syncDNS()
+	}
+
+	needRestart := (in.CorePath != old.CorePath || in.TUN != old.TUN) && s.running()
+	needReload := needsReload(old, in) || coexistChanged || advancedNeedsReload(old.Advanced, in.Advanced)
+	var err error
+	switch {
+	case needRestart:
+		err = s.restartLocked()
+	case needReload:
+		err = s.reloadLocked()
+	default:
+		err = s.applySettingsHot(old, in)
+	}
+	if err != nil {
+		return s.revertSettings(old, err)
+	}
+	if err := s.followSystemProxy(old, in, ours, coexistChanged); err != nil {
+		return err
+	}
+	if in.Mode != old.Mode {
+		s.rebuildRoutes()
+	}
+	return nil
+}
+
+// checkSettingsChange refuses changes that cannot work: TUN without the
+// helper or beside another client's TUN, and ports another program holds
+// (Mihomo would keep running without its mixed port and only log it).
+func (s *Service) checkSettingsChange(old, in model.Settings) error {
 	if in.TUN != old.TUN && in.TUN {
+		if !s.refreshHelper() {
+			return ErrHelperRequired
+		}
 		if err := s.checkOtherTUN(); err != nil {
 			return err
 		}
 	}
-
-	// Mihomo would keep running without its mixed port (it only logs), so
-	// refuse a port another program already listens on.
 	if in.MixedPort != old.MixedPort && s.d.portInUse(in.MixedPort, in.AllowLAN) {
 		return fmt.Errorf(i18n.T("端口 %d 已被其他程序占用（可能是另一款代理软件），已保留原端口 %d。"), in.MixedPort, old.MixedPort)
 	}
@@ -47,8 +104,11 @@ func (s *Service) SaveSettings(in model.Settings) error {
 			return fmt.Errorf(i18n.T("端口 %d 已被其他程序占用，请换一个端口。"), p.now)
 		}
 	}
+	return nil
+}
 
-	// persist first so a failed apply still keeps the user's choice
+// storeSettings makes in the current settings in memory and on disk.
+func (s *Service) storeSettings(in model.Settings, running bool) error {
 	s.mu.Lock()
 	s.state.settings = copySettings(in)
 	i18n.SetLang(in.Language)
@@ -62,115 +122,95 @@ func (s *Service) SaveSettings(in model.Settings) error {
 		s.alog.Errorf("save settings: %v", err)
 		return err
 	}
-	if ch := changedSettings(old, in); len(ch) > 0 {
-		s.alog.Infof("settings changed: %s", strings.Join(ch, ", "))
-	}
+	return nil
+}
 
-	if in.CorePath != old.CorePath {
-		s.mu.Lock()
-		s.resolveBinaryLocked()
-		s.mu.Unlock()
-		s.em.emit(TopicStatus)
+// revertSettings restores old after applying the new settings failed, so
+// the UI shows what the core actually runs, and returns err.
+func (s *Service) revertSettings(old model.Settings, err error) error {
+	s.mu.Lock()
+	s.state.settings = copySettings(old)
+	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, old.MainGroup)
+	s.mu.Unlock()
+	i18n.SetLang(old.Language)
+	_ = s.persistSettings()
+	s.em.emit(TopicSettings, TopicProxies)
+	return err
+}
+
+// settingsPatch is the PATCH /configs body for the hot-patchable changes
+// between old and in; ok is false when there are none.
+func settingsPatch(old, in model.Settings) (patch controller.ConfigPatch, ok bool) {
+	if in.Mode != old.Mode {
+		m := string(in.Mode)
+		patch.Mode, ok = &m, true
 	}
-	if in.LogLevel != old.LogLevel && running {
-		s.restartLogStream(in.LogLevel)
+	if in.LogLevel != old.LogLevel {
+		l := in.LogLevel
+		patch.LogLevel, ok = &l, true
 	}
-	coexistChanged := (in.ATrustCompat != old.ATrustCompat && s.detectCoexist()) || s.coexistSettingsChanged(old, in)
-	if !running {
+	if in.AllowLAN != old.AllowLAN {
+		a := in.AllowLAN
+		patch.AllowLan, ok = &a, true
+	}
+	if in.MixedPort != old.MixedPort {
+		p := in.MixedPort
+		patch.MixedPort, ok = &p, true
+	}
+	if in.Sniffer.Enable != old.Sniffer.Enable {
+		e := in.Sniffer.Enable
+		patch.Sniffing, ok = &e, true
+	}
+	if ap, changed := advancedPatch(old.Advanced, in.Advanced); changed {
+		patch.Port, patch.SocksPort, patch.TCPConcurrent, patch.InterfaceName = ap.Port, ap.SocksPort, ap.TCPConcurrent, ap.InterfaceName
+		ok = true
+	}
+	return patch, ok
+}
+
+// applySettingsHot patches the running core with the hot-patchable
+// changes and updates Status; opMu must be held.
+func (s *Service) applySettingsHot(old, in model.Settings) error {
+	if patch, ok := settingsPatch(old, in); ok {
+		ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+		err := s.d.ctrl.PatchConfigs(ctx, patch)
+		cancel()
+		if err != nil {
+			if patch.MixedPort != nil {
+				// most likely the port is taken
+				return fmt.Errorf(i18n.T("端口 %d 无法使用：%v。已保留原端口 %d。"), in.MixedPort, err, old.MixedPort)
+			}
+			return fmt.Errorf(i18n.T("应用设置失败：%v。已恢复原设置。"), err)
+		}
+	}
+	s.mu.Lock()
+	s.state.st.Mode, s.state.st.MixedPort, s.state.st.AllowLAN = in.Mode, in.MixedPort, in.AllowLAN
+	s.mu.Unlock()
+	s.em.emit(TopicStatus)
+	return nil
+}
+
+// followSystemProxy points the system proxy Lanflow set (ours) at the new
+// port, bypass list or PAC mode.
+func (s *Service) followSystemProxy(old, in model.Settings, ours, coexistChanged bool) error {
+	if !ours {
 		return nil
 	}
-	if (in.TUNSetDNS != old.TUNSetDNS || coexistChanged) && in.TUN == old.TUN {
-		s.syncDNS()
-	}
-
-	// revert restores the previous settings when applying them failed, so
-	// the UI shows what the core actually runs.
-	revert := func(err error) error {
-		s.mu.Lock()
-		s.state.settings = copySettings(old)
-		s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, old.MainGroup)
-		s.mu.Unlock()
-		i18n.SetLang(old.Language)
-		_ = s.persistSettings()
-		s.em.emit(TopicSettings, TopicProxies)
-		return err
-	}
-
-	// A stopped core picks the new settings up at its next start.
-	needRestart := (in.CorePath != old.CorePath || in.TUN != old.TUN) && s.running()
-	needReload := needsReload(old, in) || coexistChanged || advancedNeedsReload(old.Advanced, in.Advanced)
+	fail := func(err error) error { return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err) }
 	switch {
-	case needRestart:
-		if err := s.restartLocked(); err != nil {
-			return revert(err)
-		}
-	case needReload:
-		if err := s.reloadLocked(); err != nil {
-			return revert(err)
-		}
-	default:
-		patch := controller.ConfigPatch{}
-		changed := false
-		if in.Mode != old.Mode {
-			m := string(in.Mode)
-			patch.Mode, changed = &m, true
-		}
-		if in.LogLevel != old.LogLevel {
-			l := in.LogLevel
-			patch.LogLevel, changed = &l, true
-		}
-		if in.AllowLAN != old.AllowLAN {
-			a := in.AllowLAN
-			patch.AllowLan, changed = &a, true
-		}
-		if in.MixedPort != old.MixedPort {
-			p := in.MixedPort
-			patch.MixedPort, changed = &p, true
-		}
-		if in.Sniffer.Enable != old.Sniffer.Enable {
-			e := in.Sniffer.Enable
-			patch.Sniffing, changed = &e, true
-		}
-		if ap, ok := advancedPatch(old.Advanced, in.Advanced); ok {
-			patch.Port, patch.SocksPort, patch.TCPConcurrent, patch.InterfaceName = ap.Port, ap.SocksPort, ap.TCPConcurrent, ap.InterfaceName
-			changed = true
-		}
-		if changed {
-			ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
-			err := s.d.ctrl.PatchConfigs(ctx, patch)
-			cancel()
-			if err != nil {
-				if patch.MixedPort != nil {
-					// most likely the port is taken
-					return revert(fmt.Errorf(i18n.T("端口 %d 无法使用：%v。已保留原端口 %d。"), in.MixedPort, err, old.MixedPort))
-				}
-				return revert(fmt.Errorf(i18n.T("应用设置失败：%v。已恢复原设置。"), err))
-			}
-		}
-		s.mu.Lock()
-		s.state.st.Mode, s.state.st.MixedPort, s.state.st.AllowLAN = in.Mode, in.MixedPort, in.AllowLAN
-		s.mu.Unlock()
-		s.em.emit(TopicStatus)
-	}
-
-	// the system proxy follows the port, the bypass list and the PAC mode
-	switch {
-	case ours && pacChanged(old.Advanced, in.Advanced):
+	case pacChanged(old.Advanced, in.Advanced):
 		// Global proxy ↔ PAC: let go of the old form first so the saved
 		// state is restored, then set the new one.
 		if err := s.releaseProxy(); err != nil {
-			return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err)
+			return fail(err)
 		}
 		if err := s.applySystemProxy(); err != nil {
-			return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err)
+			return fail(err)
 		}
-	case ours && (in.MixedPort != old.MixedPort || !reflect.DeepEqual(in.Bypass, old.Bypass) || coexistChanged || in.Advanced.PACDirectCN != old.Advanced.PACDirectCN):
+	case in.MixedPort != old.MixedPort || !reflect.DeepEqual(in.Bypass, old.Bypass) || coexistChanged || in.Advanced.PACDirectCN != old.Advanced.PACDirectCN:
 		if err := s.applySystemProxy(); err != nil {
-			return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err)
+			return fail(err)
 		}
-	}
-	if in.Mode != old.Mode {
-		s.rebuildRoutes()
 	}
 	return nil
 }
@@ -332,7 +372,7 @@ func (s *Service) UpdateGeoData() error {
 	if !s.running() {
 		return errors.New(i18n.T("请先启动内核，再更新地理数据库。"))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := s.ctrlCtx(nil, 5*time.Minute)
 	defer cancel()
 	if err := s.d.ctrl.UpdateGeo(ctx); err != nil {
 		return fmt.Errorf(i18n.T("更新地理数据库失败：%v"), err)

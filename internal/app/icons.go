@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -227,7 +226,7 @@ func (s *Service) fetchIcon(c *iconCache, ref string) {
 }
 
 func (s *Service) downloadIcon(ref string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(s.rootCtx, iconTimeout)
+	ctx, cancel := s.ctrlCtx(nil, iconTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ref, nil)
 	if err != nil {

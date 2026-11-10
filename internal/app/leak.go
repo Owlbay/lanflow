@@ -94,7 +94,7 @@ func (s *Service) RunLeakCheckWith(domain string) error {
 	s.mu.Unlock()
 	s.em.emit(TopicNet)
 
-	ctx, cancel := context.WithTimeout(s.rootCtx, leakTimeout)
+	ctx, cancel := s.ctrlCtx(nil, leakTimeout)
 	defer cancel()
 	var items []model.LeakItem
 	if st.Mode == model.ModeDirect {

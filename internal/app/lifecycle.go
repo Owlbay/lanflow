@@ -218,7 +218,7 @@ func (s *Service) rollback() error {
 		return nil
 	}
 	if err := fsx.Rename(bak, s.runtime); err != nil {
-		return fmt.Errorf(i18n.T("恢复运行时配置失败：%v"), err)
+		return fmt.Errorf("restore runtime config: %w", err) // logged only
 	}
 	return nil
 }
@@ -305,13 +305,13 @@ func (s *Service) launchLocked(bin string, set model.Settings, helperOK bool, pr
 		logFile = s.tunLogFile()
 	}
 	spec := core.Spec{Bin: bin, WorkDir: s.workDir, Config: s.runtime, Controller: s.ctrlAddr, LogFile: logFile}
-	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
+	ctx, cancel := s.ctrlCtx(nil, startTimeout)
 	err := s.d.mgr.Start(ctx, spec)
 	cancel()
 	if err != nil {
 		return fail(fmt.Errorf(i18n.T("内核启动失败：%v。可在「日志」中查看详情，或重新启动。"), err), model.CoreError)
 	}
-	vctx, vcancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	vctx, vcancel := s.ctrlCtx(nil, ctrlTimeout)
 	version, _ := s.d.ctrl.Version(vctx)
 	vcancel()
 

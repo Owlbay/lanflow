@@ -311,7 +311,7 @@ func (s *Service) CoreReleases(channel string, refresh bool) ([]model.CoreReleas
 	if hasCache && !refresh && s.d.now().Sub(cached.At) < releaseCacheTTL {
 		return s.markInstalled(cached.List), nil
 	}
-	ctx, cancel := context.WithTimeout(s.rootCtx, releaseTimeout)
+	ctx, cancel := s.ctrlCtx(nil, releaseTimeout)
 	defer cancel()
 	list, err := s.fetchReleases(ctx, channel)
 	if err != nil {

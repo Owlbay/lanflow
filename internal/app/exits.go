@@ -292,7 +292,7 @@ func (s *Service) ProbeExits() error {
 			continue
 		}
 		seen[r.Node] = true
-		ctx, cancel := context.WithTimeout(s.rootCtx, probeTimeout)
+		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
 		err := s.probeNode(ctx, r.Node)
 		cancel()
 		if err != nil && firstErr == nil {
@@ -336,7 +336,7 @@ func (s *Service) scheduleMainProbe() {
 		if node == "" || node == "DIRECT" || node == "REJECT" || node == main {
 			return
 		}
-		ctx, cancel := context.WithTimeout(s.rootCtx, probeTimeout)
+		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
 		defer cancel()
 		_ = s.probeNode(ctx, node)
 	})
@@ -383,7 +383,7 @@ func (s *Service) fetchYouLoop() {
 	s.mu.Unlock()
 	s.em.emit(TopicNet)
 	for attempt := 0; s.rootCtx.Err() == nil; attempt++ {
-		ctx, cancel := context.WithTimeout(s.rootCtx, probeTimeout)
+		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
 		info, err := s.d.loc.Direct(ctx)
 		cancel()
 		s.mu.Lock()

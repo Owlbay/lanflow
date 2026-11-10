@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"net"
 	"sort"
@@ -196,7 +195,7 @@ func (s *Service) recheck() {
 // corePings reports whether the controller answers, trying twice.
 func (s *Service) corePings() bool {
 	for i := 0; i < 2; i++ {
-		ctx, cancel := context.WithTimeout(s.rootCtx, pingTimeout)
+		ctx, cancel := s.ctrlCtx(nil, pingTimeout)
 		_, err := s.d.ctrl.Version(ctx)
 		cancel()
 		if err == nil {

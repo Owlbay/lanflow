@@ -248,7 +248,7 @@ func (s *Service) testNodes(names []string) {
 		go func(n string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(context.Background(), delayTimeout+5*time.Second)
+			ctx, cancel := s.ctrlCtx(nil, delayTimeout+5*time.Second)
 			d, err := s.d.ctrl.ProxyDelay(ctx, n, delayURL, delayTimeout)
 			cancel()
 			if err != nil || d <= 0 {
@@ -319,7 +319,7 @@ func (s *Service) SelectProxy(group, name string) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	err := s.d.ctrl.SelectProxy(ctx, group, name)
 	cancel()
 	if err != nil {
@@ -350,7 +350,7 @@ func (s *Service) disconnectGroup(group string) {
 	if len(ids) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	defer cancel()
 	closed := 0
 	for _, id := range ids {
@@ -507,7 +507,7 @@ func (s *Service) UpdateProxyProvider(name string) error {
 	}
 	s.setProviderBusy(name, "update")
 	defer s.setProviderBusy(name, "")
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
 	err := s.d.ctrl.UpdateProxyProvider(ctx, name)
 	cancel()
 	s.refreshProxies()
@@ -541,7 +541,7 @@ func (s *Service) HealthCheckProvider(name string) error {
 	s.setTesting(members, true)
 	defer s.setTesting(members, false)
 	_, delayTimeout := s.delayParams()
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout+delayTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout+delayTimeout)
 	err := s.d.ctrl.HealthCheckProvider(ctx, name)
 	cancel()
 	s.refreshProxies()

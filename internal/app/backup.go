@@ -285,7 +285,7 @@ func (s *Service) TestWebDAV() (err error) {
 }
 
 func (s *Service) webdavCtx() (context.Context, context.CancelFunc) {
-	return context.WithTimeout(s.rootCtx, 5*time.Minute)
+	return s.ctrlCtx(nil, 5*time.Minute)
 }
 
 // backupDocument is the JSON of a backup: the export with subscriptions.

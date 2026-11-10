@@ -348,7 +348,7 @@ func (s *Service) bootstrap() {
 	s.mu.Unlock()
 
 	if bin != "" {
-		ctx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+		ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
 		v, err := s.d.core.Version(ctx, bin)
 		cancel()
 		if err == nil {
@@ -378,7 +378,7 @@ func (s *Service) bootstrap() {
 
 // refreshHelper re-checks whether the privileged helper is installed.
 func (s *Service) refreshHelper() bool {
-	ctx, cancel := context.WithTimeout(s.rootCtx, 3*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
 	ok := s.d.helper.Installed(ctx)
 	cancel()
 	s.mu.Lock()
