@@ -223,7 +223,7 @@ func TestSupervisorKillsAfterGrace(t *testing.T) {
 }
 
 func TestLogRotation(t *testing.T) {
-	dir := t.TempDir()
+	dir := resolvedTempDir(t)
 	path := filepath.Join(dir, "core.log")
 	if err := os.WriteFile(path, make([]byte, LogRotateSize), 0o600); err != nil {
 		t.Fatal(err)
