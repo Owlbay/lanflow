@@ -161,5 +161,15 @@ var methodLevels = map[string]Level{
 	"ClearAppLogs":      LevelWrite,
 	"ExportDiagnostics": LevelWrite,
 
+	// ---- 反馈问题 ----
+	// Agents may draft a report (BuildFeedback); only the window sends it,
+	// after the user has seen it.
+	"FeedbackInfo":     LevelRead,
+	"SetFeedbackToken": LevelUI,
+	"DismissLastCrash": LevelUI,
+	"BuildFeedback":    LevelRead, // redacted like the diagnostics bundle
+	"SendFeedback":     LevelUI,
+	"SaveFeedback":     LevelWrite,
+
 	"Shutdown": LevelDanger,
 }

@@ -547,6 +547,9 @@ type Settings struct {
 	// change the configuration through the local interface
 	// (docs/service-split.md §4); revoked in 设置 › 高级.
 	AgentGrants []AgentGrant `json:",omitempty"`
+
+	// Feedback is where 反馈问题 sends reports (model/feedback.go).
+	Feedback FeedbackSettings `json:",omitempty"`
 }
 
 // AgentGrant is the standing answer for one agent: Allow lets its writes

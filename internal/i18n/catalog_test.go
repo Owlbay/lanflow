@@ -23,6 +23,9 @@ var dataLiterals = map[string]string{
 	"下载": "coredl.go env.go", "校验": "coredl.go env.go", "安装": "coredl.go env.go", "启动": "coredl.go env.go",
 	// A default site name: user data.
 	"百度": "settings.go",
+	// Parts of the core's exit message (internal/core/runner.go) that
+	// errlog.go looks for.
+	"最近日志：": "errlog.go", "退出码 0": "errlog.go", "，, \n": "errlog.go",
 }
 
 // hasCJK reports whether s holds a Han character or CJK/fullwidth

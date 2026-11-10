@@ -584,6 +584,35 @@ func (cl *Client) ExportDiagnostics(path string) (err error) {
 	return
 }
 
+func (cl *Client) FeedbackInfo() (res0 model.FeedbackInfo) {
+	_ = cl.call("FeedbackInfo", nil, &res0)
+	return
+}
+
+func (cl *Client) SetFeedbackToken(token string) (err error) {
+	err = cl.call("SetFeedbackToken", []any{token})
+	return
+}
+
+func (cl *Client) DismissLastCrash() {
+	_ = cl.call("DismissLastCrash", nil)
+}
+
+func (cl *Client) BuildFeedback(opts model.FeedbackOptions) (res0 model.FeedbackReport, err error) {
+	err = cl.call("BuildFeedback", []any{opts}, &res0)
+	return
+}
+
+func (cl *Client) SendFeedback(id string) (res0 model.FeedbackSent, err error) {
+	err = cl.call("SendFeedback", []any{id}, &res0)
+	return
+}
+
+func (cl *Client) SaveFeedback(id string, path string) (err error) {
+	err = cl.call("SaveFeedback", []any{id, path})
+	return
+}
+
 func (cl *Client) Shutdown() {
 	_ = cl.call("Shutdown", nil)
 }
