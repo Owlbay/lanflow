@@ -55,6 +55,7 @@ type Fake struct {
 	f2             *feat2                // WebDAV backup and mirror state (feat2.go), allocated on first use
 	cores          []model.InstalledCore // installed Mihomo versions (CoreReleases / InstalledCores / UseCore…)
 	cachesCleaned  bool                  // CleanCaches was called: CacheUsage reports the core cache only
+	syncTest       *SyncTest             // configuration sync answers (configsync.go)
 }
 
 var _ app.API = (*Fake)(nil)

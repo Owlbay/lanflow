@@ -275,6 +275,21 @@ type API interface {
 	// says what was imported (shown as a toast).
 	ImportSettings(path string) (summary string, err error)
 
+	// ---- configuration sync (configsync.go, docs/config-sync.md) ----
+	// ConfigSyncStatus is a cheap read of the sync state: the folder, the
+	// last load or refusal (with the line), conflict copies and links this
+	// machine's keychain lacks (TopicSettings).
+	ConfigSyncStatus() model.ConfigSyncStatus
+	// SetConfigSync turns sync on (model.SyncICloud, or model.SyncFolder
+	// with dir) or off (model.SyncOff). When the folder already has a
+	// different lanflow.yaml, choice picks model.SyncUseFile or
+	// model.SyncUseLocal; "" returns ErrConfigSyncChoice and changes nothing.
+	SetConfigSync(mode, dir, choice string) error
+	// ResolveConfigConflict keeps the conflict copy name (keepCopy: it is
+	// loaded and becomes lanflow.yaml) or the current file; the copy not
+	// kept moves to <DataDir>/sync-backups.
+	ResolveConfigConflict(name string, keepCopy bool) error
+
 	// ---- aTrust 兼容 (atrustcfg.go) ----
 	// ATrustReference is a commented YAML template of the aTrust lists
 	// with generic example values, for the user to copy and fill in.

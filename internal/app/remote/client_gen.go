@@ -515,6 +515,21 @@ func (cl *Client) ImportSettings(path string) (res0 string, err error) {
 	return
 }
 
+func (cl *Client) ConfigSyncStatus() (res0 model.ConfigSyncStatus) {
+	_ = cl.call("ConfigSyncStatus", nil, &res0)
+	return
+}
+
+func (cl *Client) SetConfigSync(mode string, dir string, choice string) (err error) {
+	err = cl.call("SetConfigSync", []any{mode, dir, choice})
+	return
+}
+
+func (cl *Client) ResolveConfigConflict(name string, keepCopy bool) (err error) {
+	err = cl.call("ResolveConfigConflict", []any{name, keepCopy})
+	return
+}
+
 func (cl *Client) ATrustReference() (res0 string) {
 	_ = cl.call("ATrustReference", nil, &res0)
 	return

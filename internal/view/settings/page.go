@@ -90,6 +90,8 @@ type Page struct {
 
 	// 全局快捷键 (hotkey.go), Wi-Fi 规则, 下载镜像, 备份与同步 (feat2.go)
 	f2 feat2UI
+	// 配置同步 (configsync.go)
+	sync syncUI
 
 	// 应用更新 (update.go)
 	upd      Updater
@@ -351,7 +353,8 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 			p.cacheRow(c)
 			p.exportDialog(c, t)
 		})
-		p.backupSection(c, t, s) // 备份与同步 (backup.go)
+		p.configSyncSection(c, t) // 配置同步 (configsync.go)
+		p.backupSection(c, t, s)  // 备份与同步 (backup.go)
 		e.Kit.Section(c, i18n.T("关于"), "", func() {
 			ui.Row(c).Gap(12).MinHeight(56).PaddingX(12).Children(func() {
 				ui.Column(c).Gap(4).Grow(1).Children(func() {

@@ -139,6 +139,11 @@ var methodLevels = map[string]Level{
 	"ExportSettings": LevelDanger,
 	"ImportSettings": LevelDanger,
 
+	// ---- configuration sync ----
+	"ConfigSyncStatus":      LevelRead,
+	"SetConfigSync":         LevelDanger, // writes outside the data directory
+	"ResolveConfigConflict": LevelDanger,
+
 	// ---- aTrust ----
 	"ATrustReference":    LevelRead,
 	"ImportATrustConfig": LevelSensitive, // reads a local file
