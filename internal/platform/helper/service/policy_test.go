@@ -230,3 +230,22 @@ func TestConfigRoundTrip(t *testing.T) {
 		t.Fatal("invalid config saved")
 	}
 }
+
+func TestCheckDowngrade(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := checkDowngrade(p, InstallOptions{Version: "1.0.0"}); err != nil {
+		t.Fatalf("no config: %v", err)
+	}
+	cfg := Config{Version: ConfigVersion, Core: "/c", SHA256: strings.Repeat("0", 64), DataDir: "/d", UID: "501", HelperVersion: "1.2.0"}
+	if err := SaveConfig(p, cfg, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for v, wantErr := range map[string]bool{"1.1.9": true, "1.2.0": false, "1.3.0": false, "dev": false} {
+		if err := checkDowngrade(p, InstallOptions{Version: v}); (err != nil) != wantErr {
+			t.Errorf("install %s over 1.2.0: %v", v, err)
+		}
+	}
+	if err := checkDowngrade(p, InstallOptions{Version: "1.0.0", AllowDowngrade: true}); err != nil {
+		t.Fatalf("allow-downgrade: %v", err)
+	}
+}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,11 +23,146 @@ func newClient() *protocol.Client {
 // pingTimeout bounds Installed.
 const pingTimeout = time.Second
 
-func installed(ctx context.Context) bool {
+// ExpectedVersion is the helper version this app requires. It can be set
+// at build time (-ldflags "-X lanflow/internal/platform/helper.ExpectedVersion=1.2.3");
+// otherwise it is learned from the bundled helper binary (SetBundledHelper,
+// or Install's HelperBin). While unknown, or for "dev" builds, only the
+// protocol version is compared.
+var ExpectedVersion string
+
+var (
+	learnedMu      sync.Mutex
+	learnedVersion string
+)
+
+// Errors returned by Check and Install.
+var (
+	// ErrNotRunning: nothing answers on the helper endpoint.
+	ErrNotRunning = errors.New("权限组件未安装或未运行")
+	// ErrProtocolMismatch: the helper speaks another protocol version.
+	ErrProtocolMismatch = errors.New("权限组件协议版本与应用不一致，请重新安装权限组件")
+	// ErrVersionMismatch: the helper is another release than the app ships.
+	ErrVersionMismatch = errors.New("权限组件版本与应用不一致，请重新安装权限组件")
+	// ErrDowngrade: Install would replace a newer helper with an older one.
+	ErrDowngrade = errors.New("已安装的权限组件比应用自带的版本更新，拒绝降级")
+)
+
+// VersionError carries both versions; it matches ErrVersionMismatch or
+// ErrDowngrade with errors.Is.
+type VersionError struct {
+	Kind      error
+	Installed string
+	Bundled   string
+}
+
+func (e *VersionError) Error() string {
+	return fmt.Sprintf("%v（已安装 %s，应用自带 %s）", e.Kind, e.Installed, e.Bundled)
+}
+
+func (e *VersionError) Unwrap() error { return e.Kind }
+
+func expectedVersion() string {
+	if ExpectedVersion != "" {
+		return ExpectedVersion
+	}
+	learnedMu.Lock()
+	defer learnedMu.Unlock()
+	return learnedVersion
+}
+
+// versionTimeout bounds `lanflow-helper version`.
+const versionTimeout = 5 * time.Second
+
+// helperVersionOf runs `bin version` (unprivileged) and parses the
+// output; tests replace it.
+var helperVersionOf = func(ctx context.Context, bin string) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
+	defer cancel()
+	out, err := versionCommand(ctx, bin).Output()
+	if err != nil {
+		return "", err
+	}
+	v, ok := protocol.ParseVersionLine(string(out))
+	if !ok {
+		return "", fmt.Errorf("无法识别权限组件版本: %q", strings.TrimSpace(string(out)))
+	}
+	return v, nil
+}
+
+// learnBundledVersion reads the version of the helper shipped with the
+// app and remembers it as the required version.
+func learnBundledVersion(ctx context.Context, bin string) (string, error) {
+	v, err := helperVersionOf(ctx, bin)
+	if err != nil {
+		return "", err
+	}
+	learnedMu.Lock()
+	learnedVersion = v
+	learnedMu.Unlock()
+	return v, nil
+}
+
+// ping asks the helper for its identity.
+func ping(ctx context.Context) (protocol.Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 	resp, err := newClient().Call(ctx, protocol.Request{Op: protocol.OpPing})
-	return err == nil && resp.OK && resp.Protocol == protocol.Version
+	if err != nil {
+		return resp, err
+	}
+	if !resp.OK {
+		return resp, resp.Err()
+	}
+	return resp, nil
+}
+
+// check reports whether the helper answers with this app's protocol and
+// (when known and comparable) its version.
+func check(ctx context.Context) error {
+	resp, err := ping(ctx)
+	if err != nil {
+		if isTransport(err) {
+			return fmt.Errorf("%w: %v", ErrNotRunning, err)
+		}
+		// An old helper refuses our request version with an error
+		// response.
+		return fmt.Errorf("%w: %v", ErrProtocolMismatch, err)
+	}
+	if resp.Protocol != protocol.Version {
+		return fmt.Errorf("%w（权限组件协议 %d，应用协议 %d）", ErrProtocolMismatch, resp.Protocol, protocol.Version)
+	}
+	want := expectedVersion()
+	if c, ok := protocol.CompareVersions(resp.Version, want); ok && c != 0 {
+		return &VersionError{Kind: ErrVersionMismatch, Installed: resp.Version, Bundled: want}
+	}
+	return nil
+}
+
+func installed(ctx context.Context) bool { return check(ctx) == nil }
+
+// reachable reports whether anything answers a ping, whatever its version.
+func reachable(ctx context.Context) bool {
+	_, err := ping(ctx)
+	return err == nil || !isTransport(err)
+}
+
+// checkDowngrade learns the bundled helper's version and refuses to
+// replace a running helper that is newer.
+func checkDowngrade(ctx context.Context, helperBin string) error {
+	bundled, err := learnBundledVersion(ctx, helperBin)
+	if err != nil {
+		// Unknown bundled version: nothing to compare; the root
+		// installer still checks the recorded version.
+		return nil
+	}
+	resp, err := ping(ctx)
+	if err != nil {
+		return nil
+	}
+	if c, ok := protocol.CompareVersions(resp.Version, bundled); ok && c > 0 {
+		return &VersionError{Kind: ErrDowngrade, Installed: resp.Version, Bundled: bundled}
+	}
+	return nil
 }
 
 // waitInstalled polls ping until it answers or d elapses.
@@ -50,7 +186,7 @@ func waitInstalled(ctx context.Context, d time.Duration) error {
 // waitUninstalled polls until ping stops answering.
 func waitUninstalled(ctx context.Context, d time.Duration) error {
 	deadline := time.Now().Add(d)
-	for installed(ctx) {
+	for reachable(ctx) {
 		if time.Now().After(deadline) {
 			return errors.New("权限组件仍在运行，移除可能未完成")
 		}

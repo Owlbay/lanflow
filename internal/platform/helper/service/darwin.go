@@ -50,6 +50,9 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if err != nil {
 		return err
 	}
+	if err := checkDowngrade(ConfigPath, o); err != nil {
+		return err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -85,7 +88,7 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if err != nil {
 		return err
 	}
-	cfg := Config{Version: ConfigVersion, Core: CoreBin, CoreSource: src, SHA256: sum, DataDir: dataDir, UID: o.UID}
+	cfg := Config{Version: ConfigVersion, Core: CoreBin, CoreSource: src, SHA256: sum, DataDir: dataDir, UID: o.UID, HelperVersion: o.Version}
 	if err := os.MkdirAll(ConfigDir, 0o755); err != nil {
 		return err
 	}

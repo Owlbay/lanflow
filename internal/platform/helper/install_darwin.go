@@ -35,6 +35,9 @@ func install(ctx context.Context, o InstallOptions) error {
 	if err := checkOptions(o); err != nil {
 		return err
 	}
+	if err := checkDowngrade(ctx, o.HelperBin); err != nil {
+		return err
+	}
 	args := []string{o.HelperBin, "install", "--core", o.CoreBin, "--data-dir", o.DataDir, "--uid", strconv.Itoa(currentUID())}
 	if err := runPrivileged(ctx, args, installPrompt); err != nil {
 		return err

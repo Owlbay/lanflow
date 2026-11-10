@@ -25,6 +25,8 @@ type fakeHelper struct {
 	stopped   chan struct{}
 	listener  net.Listener
 	dialErrOn bool
+	version   string // ping version; "fake" when empty
+	protocol  int    // ping protocol; protocol.Version when zero
 }
 
 func startFakeHelper(t *testing.T) *fakeHelper {
@@ -59,7 +61,14 @@ func (f *fakeHelper) handle(_ context.Context, req protocol.Request) protocol.Re
 	defer f.mu.Unlock()
 	switch req.Op {
 	case protocol.OpPing:
-		return protocol.Response{OK: true, Version: "fake", Protocol: protocol.Version}
+		v, p := f.version, f.protocol
+		if v == "" {
+			v = "fake"
+		}
+		if p == 0 {
+			p = protocol.Version
+		}
+		return protocol.Response{OK: true, Version: v, Protocol: p}
 	case protocol.OpStart:
 		if f.refuse != "" {
 			return protocol.Response{Error: f.refuse}
@@ -257,5 +266,103 @@ func TestStopWithoutHelperIsNoop(t *testing.T) {
 	r := newTestRunner()
 	if err := r.Stop(context.Background()); err != nil {
 		t.Fatalf("Stop on an idle runner without a helper: %v", err)
+	}
+}
+
+func setExpected(t *testing.T, v string) {
+	t.Helper()
+	learnedMu.Lock()
+	old := learnedVersion
+	learnedVersion = v
+	learnedMu.Unlock()
+	t.Cleanup(func() { learnedMu.Lock(); learnedVersion = old; learnedMu.Unlock() })
+}
+
+func TestCheckVersions(t *testing.T) {
+	ctx := context.Background()
+	if reachable(ctx) {
+		t.Skip("a real helper answers on this machine")
+	}
+	if err := check(ctx); !errors.Is(err, ErrNotRunning) {
+		t.Fatalf("no helper: %v", err)
+	}
+	f := startFakeHelper(t)
+	f.mu.Lock()
+	f.version = "1.2.0"
+	f.mu.Unlock()
+
+	setExpected(t, "1.2.0")
+	if err := check(ctx); err != nil || !installed(ctx) {
+		t.Fatalf("same version: %v", err)
+	}
+	setExpected(t, "1.3.0")
+	err := check(ctx)
+	var ve *VersionError
+	if !errors.Is(err, ErrVersionMismatch) || !errors.As(err, &ve) || ve.Installed != "1.2.0" || ve.Bundled != "1.3.0" {
+		t.Fatalf("mismatch: %v", err)
+	}
+	if installed(ctx) {
+		t.Fatal("installed() true for a mismatched version")
+	}
+	if !reachable(ctx) {
+		t.Fatal("reachable() false for a running helper")
+	}
+	// dev builds and an unknown expectation compare only the protocol.
+	setExpected(t, "")
+	if err := check(ctx); err != nil {
+		t.Fatalf("unknown expectation: %v", err)
+	}
+	setExpected(t, "1.3.0")
+	f.mu.Lock()
+	f.version = "dev"
+	f.mu.Unlock()
+	if err := check(ctx); err != nil {
+		t.Fatalf("dev helper: %v", err)
+	}
+	f.mu.Lock()
+	f.protocol = protocol.Version + 1
+	f.mu.Unlock()
+	if err := check(ctx); !errors.Is(err, ErrProtocolMismatch) {
+		t.Fatalf("protocol: %v", err)
+	}
+}
+
+func TestCheckDowngrade(t *testing.T) {
+	ctx := context.Background()
+	if reachable(ctx) {
+		t.Skip("a real helper answers on this machine")
+	}
+	setExpected(t, "")
+	old := helperVersionOf
+	t.Cleanup(func() { helperVersionOf = old })
+	bundled := "1.0.0"
+	helperVersionOf = func(context.Context, string) (string, error) { return bundled, nil }
+
+	// No helper running: nothing to downgrade.
+	if err := checkDowngrade(ctx, "/x"); err != nil {
+		t.Fatal(err)
+	}
+	if expectedVersion() != "1.0.0" {
+		t.Fatalf("bundled version not learned: %q", expectedVersion())
+	}
+	f := startFakeHelper(t)
+	f.mu.Lock()
+	f.version = "1.1.0"
+	f.mu.Unlock()
+	if err := checkDowngrade(ctx, "/x"); !errors.Is(err, ErrDowngrade) {
+		t.Fatalf("downgrade allowed: %v", err)
+	}
+	bundled = "1.1.0"
+	if err := checkDowngrade(ctx, "/x"); err != nil {
+		t.Fatalf("same version refused: %v", err)
+	}
+	bundled = "1.2.0"
+	if err := checkDowngrade(ctx, "/x"); err != nil {
+		t.Fatalf("upgrade refused: %v", err)
+	}
+	// Unreadable bundled version does not block the install.
+	helperVersionOf = func(context.Context, string) (string, error) { return "", errors.New("boom") }
+	if err := checkDowngrade(ctx, "/x"); err != nil {
+		t.Fatal(err)
 	}
 }

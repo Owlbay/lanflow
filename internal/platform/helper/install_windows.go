@@ -26,6 +26,9 @@ func install(ctx context.Context, o InstallOptions) error {
 	if fi, err := os.Stat(o.HelperBin); err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("找不到权限组件程序: %s", o.HelperBin)
 	}
+	if err := checkDowngrade(ctx, o.HelperBin); err != nil {
+		return err
+	}
 	sid, err := currentUserSID()
 	if err != nil {
 		return err

@@ -59,6 +59,9 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if err != nil {
 		return err
 	}
+	if err := checkDowngrade(ConfigPath, o); err != nil {
+		return err
+	}
 	self, err := os.Executable()
 	if err != nil {
 		return err
@@ -95,7 +98,7 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if err != nil {
 		return err
 	}
-	cfg := Config{Version: ConfigVersion, Core: CoreBin, CoreSource: filepath.Clean(o.CoreBin), SHA256: sum, DataDir: dataDir, UID: o.UID}
+	cfg := Config{Version: ConfigVersion, Core: CoreBin, CoreSource: filepath.Clean(o.CoreBin), SHA256: sum, DataDir: dataDir, UID: o.UID, HelperVersion: o.Version}
 	if err := SaveConfig(ConfigPath, cfg, 0o644); err != nil {
 		return fmt.Errorf("写入配置失败: %w", err)
 	}

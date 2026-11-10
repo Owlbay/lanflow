@@ -36,6 +36,10 @@ type Config struct {
 	// UID identifies the installing user: a decimal uid on macOS, a SID
 	// string on Windows.
 	UID string `json:"uid"`
+	// HelperVersion is the version of the helper that wrote the config;
+	// install refuses to replace a newer helper. Empty for configs
+	// written before it was recorded.
+	HelperVersion string `json:"helperVersion,omitempty"`
 }
 
 // Validate checks that the config is complete.
