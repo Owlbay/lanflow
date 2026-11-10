@@ -39,10 +39,10 @@ const (
 // Logger writes the app log. The zero value and a nil *Logger are usable
 // and keep entries in memory only.
 type Logger struct {
-	mu      sync.Mutex
-	path    string
-	f       *os.File
-	size    int64
+	mu   sync.Mutex
+	path string
+	f    *os.File
+	size int64
 	// entries is a ring of the newest maxEntries entries: head is the
 	// oldest, n how many are held (allocated on the first entry).
 	entries []model.LogEntry

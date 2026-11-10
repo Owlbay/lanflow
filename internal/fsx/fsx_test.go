@@ -3,8 +3,8 @@ package fsx
 import (
 	"bytes"
 	"errors"
-	"io"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"

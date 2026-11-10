@@ -196,7 +196,9 @@ func (s *Service) followSystemProxy(old, in model.Settings, ours, coexistChanged
 	if !ours {
 		return nil
 	}
-	fail := func(err error) error { return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err) }
+	fail := func(err error) error {
+		return fmt.Errorf(i18n.T("设置已保存，但更新系统代理失败：%v"), err)
+	}
 	switch {
 	case pacChanged(old.Advanced, in.Advanced):
 		// Global proxy ↔ PAC: let go of the old form first so the saved
