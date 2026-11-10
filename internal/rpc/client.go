@@ -23,6 +23,14 @@ type Conn struct {
 	onEvent func(topic string)
 	onUI    func(UICommand)
 	closed  chan struct{}
+
+	// Notifications go to their handlers in order on a goroutine of
+	// their own: a handler may call the server (the window takes the
+	// notices on TopicNotice), whose reply the reading goroutine delivers.
+	qmu     sync.Mutex
+	qcond   *sync.Cond
+	queue   []func()
+	qdone   bool
 	err     error // why the connection ended
 	welcome Welcome
 }
@@ -33,11 +41,11 @@ type DialOptions struct {
 	Client  string // ui, ctl or mcp:<name>
 	Version string // this program's Lanflow version
 	Reveal  bool   // ask for sensitive reads (ctl --reveal)
-	// OnEvent receives "changed" notifications after Subscribe; it runs on
-	// the reading goroutine and must be quick.
+	// OnEvent receives "changed" notifications after Subscribe, in order,
+	// on a goroutine of their own (it may call the server).
 	OnEvent func(topic string)
 	// OnUI receives the service's "ui" commands (the window process,
-	// AttachUI); it runs on the reading goroutine and must be quick.
+	// AttachUI), in order with the events.
 	OnUI    func(UICommand)
 	Timeout time.Duration // dial and handshake, default 3 s
 }
@@ -73,6 +81,8 @@ func NewConn(nc net.Conn, onEvent func(string)) *Conn { return newConn(nc, onEve
 
 func newConn(nc net.Conn, onEvent func(string), onUI func(UICommand)) *Conn {
 	c := &Conn{c: nc, pending: map[string]chan message{}, onEvent: onEvent, onUI: onUI, closed: make(chan struct{})}
+	c.qcond = sync.NewCond(&c.qmu)
+	go c.dispatch()
 	go c.read()
 	return c
 }
@@ -106,12 +116,12 @@ func (c *Conn) read() {
 			case m.Method == "changed" && c.onEvent != nil:
 				var ch Changed
 				if json.Unmarshal(m.Params, &ch) == nil {
-					c.onEvent(ch.Topic)
+					c.post(func() { c.onEvent(ch.Topic) })
 				}
 			case m.Method == "ui" && c.onUI != nil:
 				var u UICommand
 				if json.Unmarshal(m.Params, &u) == nil {
-					c.onUI(u)
+					c.post(func() { c.onUI(u) })
 				}
 			}
 			continue
@@ -136,6 +146,38 @@ func (c *Conn) read() {
 	}
 	c.mu.Unlock()
 	close(c.closed)
+	c.qmu.Lock()
+	c.qdone = true
+	c.qcond.Signal()
+	c.qmu.Unlock()
+}
+
+// post queues a notification handler.
+func (c *Conn) post(fn func()) {
+	c.qmu.Lock()
+	c.queue = append(c.queue, fn)
+	c.qcond.Signal()
+	c.qmu.Unlock()
+}
+
+// dispatch runs the queued handlers in order until the connection ends
+// and the queue is empty.
+func (c *Conn) dispatch() {
+	for {
+		c.qmu.Lock()
+		for len(c.queue) == 0 && !c.qdone {
+			c.qcond.Wait()
+		}
+		if len(c.queue) == 0 {
+			c.qmu.Unlock()
+			return
+		}
+		fn := c.queue[0]
+		c.queue[0] = nil
+		c.queue = c.queue[1:]
+		c.qmu.Unlock()
+		fn()
+	}
 }
 
 // Call sends method with params (marshalled as is: an array for the API

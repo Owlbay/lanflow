@@ -164,6 +164,7 @@ type state struct {
 	probePort     int
 	weSetProxy    bool        // Lanflow pointed the system proxy at itself
 	tunRunner     bool        // the manager currently uses the helper runner
+	stray         *strayRun   // a core of the previous run found at start (takeover.go)
 	helperOK      bool        // helper.Check passed at last check
 	helperStale   bool        // last Check: installed helper of another version/protocol
 	runningTUN    bool        // the running config has TUN enabled
@@ -302,8 +303,14 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 	v := s.readStore()
 	s.applyStoreLocked(v)
 	s.state.effDNS, s.state.effSnf = s.subscriptionSections(v)
-	s.detectRecovery()
-	s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
+	// A previous run that died: when its core still runs, bootstrap takes
+	// it over (takeover.go) and the system proxy and DNS stay as they
+	// are; otherwise the leftover system proxy is offered for recovery and
+	// the system DNS put back.
+	if !s.findStray() {
+		s.detectRecovery()
+		s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
+	}
 	s.stats = newStatsStore(filepath.Join(o.DataDir, "stats"), d.now, s.statsCountry)
 	if err := s.stats.load(); err != nil {
 		s.alog.Errorf("traffic statistics: %v", err)
@@ -367,7 +374,6 @@ func (s *Service) bootstrap() {
 	s.mu.Lock()
 	bin := s.state.coreBin
 	set := s.state.settings
-	pending := s.state.st.PendingRecovery
 	s.mu.Unlock()
 
 	if bin != "" {
@@ -386,6 +392,13 @@ func (s *Service) bootstrap() {
 	s.learnBundledHelper()
 	s.refreshHelper()
 	s.learnBundledVersion()
+	if s.takeOver() {
+		_ = s.RefreshNetwork()
+		return // the previous run's core carries on, or was restarted as it ran
+	}
+	s.mu.Lock()
+	pending := s.state.st.PendingRecovery
+	s.mu.Unlock()
 	_ = s.RefreshNetwork()
 
 	if s.rootCtx.Err() != nil || pending {
@@ -526,24 +539,20 @@ func (s *Service) refreshStore(topics ...Topic) {
 }
 
 // detectRecovery checks whether a previous run left the system proxy
-// pointing at Lanflow (marker present, proxy at 127.0.0.1:<our port>).
-func (s *Service) detectRecovery() {
-	m, ok := s.readMarker()
-	if !ok {
-		return
+// pointing at Lanflow (marker present, proxy at 127.0.0.1:<our port>) and
+// queues the "recovery" notice; it reports whether it did. Call without mu.
+func (s *Service) detectRecovery() bool {
+	port, ok := s.leftoverProxy()
+	if !ok || s.d.mgr.Running() {
+		return false
 	}
-	st, err := s.d.sys.Get()
-	port := m.Port
-	if port == 0 {
-		port = s.state.settings.MixedPort
-	}
-	if err != nil || !proxyIsOurs(st, m, port) {
-		// Something else changed the proxy since; our marker is stale.
-		s.removeMarker()
-		return
-	}
-	if s.d.mgr.Running() {
-		return
+	m, _ := s.readMarker()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, n := range s.state.notices {
+		if n.Kind == "recovery" {
+			return true
+		}
 	}
 	s.state.st.PendingRecovery = true
 	detail := fmt.Sprintf(i18n.T("系统代理仍指向 127.0.0.1:%d。可以恢复为关闭，或保持开启并启动内核。"), port)
@@ -555,6 +564,30 @@ func (s *Service) detectRecovery() {
 		Title:  i18n.T("上次澜流未正常退出"),
 		Detail: detail,
 	})
+	return true
+}
+
+// leftoverProxy reports whether the system proxy still points at Lanflow
+// as a previous run set it (the marker), with the port; a stale marker is
+// removed. Call without mu.
+func (s *Service) leftoverProxy() (port int, ours bool) {
+	m, ok := s.readMarker()
+	if !ok {
+		return 0, false
+	}
+	st, err := s.d.sys.Get()
+	port = m.Port
+	if port == 0 {
+		s.mu.Lock()
+		port = s.state.settings.MixedPort
+		s.mu.Unlock()
+	}
+	if err != nil || !proxyIsOurs(st, m, port) {
+		// Something else changed the proxy since; our marker is stale.
+		s.removeMarker()
+		return 0, false
+	}
+	return port, true
 }
 
 func isLoopback(host string) bool {

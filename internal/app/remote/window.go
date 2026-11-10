@@ -126,6 +126,10 @@ var allTopics = []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicProxies,
 
 // windowCall calls a window op on conn (the current one when nil).
 func (cl *Client) windowCall(conn *rpc.Conn, method string, args []any, out any) error {
+	return cl.windowCallTimeout(conn, method, args, out, 10*time.Second)
+}
+
+func (cl *Client) windowCallTimeout(conn *rpc.Conn, method string, args []any, out any, timeout time.Duration) error {
 	if conn == nil {
 		conn = cl.Conn()
 	}
@@ -135,7 +139,7 @@ func (cl *Client) windowCall(conn *rpc.Conn, method string, args []any, out any)
 	if args == nil {
 		args = []any{}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	return conn.Call(ctx, method, args, out)
 }
@@ -153,8 +157,11 @@ func (cl *Client) AttachUI(conn *rpc.Conn, arg string) (rpc.AttachResult, error)
 	return res[0], nil
 }
 
-// DetachUI tells the service the window is closing.
-func (cl *Client) DetachUI() error { return cl.windowCall(nil, "DetachUI", nil, nil) }
+// DetachUI tells the service the window is closing; it waits a second at
+// most (the window is on its way out either way).
+func (cl *Client) DetachUI() error {
+	return cl.windowCallTimeout(nil, "DetachUI", nil, nil, time.Second)
+}
 
 // QuitService quits Lanflow: the service process restores the system
 // proxy, stops and tells the window to quit (rpc.UIQuit).
@@ -162,10 +169,33 @@ func (cl *Client) QuitService() error { return cl.windowCall(nil, "QuitService",
 
 // SetBackground passes the window's visibility to the service (the
 // optional interface the shell looks for).
+// It is called on the main thread by window events, so the call goes out
+// on a goroutine; the latest value wins.
 func (cl *Client) SetBackground(hidden bool) {
-	if err := cl.windowCall(nil, "SetBackground", []any{hidden}, nil); err != nil {
-		cl.setErr(err)
+	cl.bgMu.Lock()
+	cl.bgWant = &hidden
+	if cl.bgBusy {
+		cl.bgMu.Unlock()
+		return
 	}
+	cl.bgBusy = true
+	cl.bgMu.Unlock()
+	go func() {
+		for {
+			cl.bgMu.Lock()
+			want := cl.bgWant
+			cl.bgWant = nil
+			if want == nil {
+				cl.bgBusy = false
+				cl.bgMu.Unlock()
+				return
+			}
+			cl.bgMu.Unlock()
+			if err := cl.windowCallTimeout(nil, "SetBackground", []any{*want}, nil, 2*time.Second); err != nil {
+				cl.setErr(err)
+			}
+		}
+	}()
 }
 
 // SetShortcut registers a global shortcut in the service process.

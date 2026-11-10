@@ -67,3 +67,8 @@ func Uninstall(ctx context.Context) error { return uninstall(ctx) }
 // Stop asks the helper to stop it; Exited reports unexpected exits that the
 // helper reports (poll Status every second if push is not implemented).
 func NewRunner() core.Runner { return newRunner() }
+
+// CoreRunning reports whether the helper runs Mihomo (for this user's
+// Lanflow: the helper only starts cores of the data directory it was
+// installed for).
+func CoreRunning(ctx context.Context) (bool, error) { return coreRunning(ctx, newClient()) }

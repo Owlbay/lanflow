@@ -98,6 +98,11 @@ func (s *Service) checkOtherTUN() error {
 	}
 	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
 	defer cancel()
+	if s.d.stray != nil {
+		if found, tun := s.d.stray.Find(ctx, s.workDir); found && tun {
+			return nil // a core of ours in the helper (a previous run's): its TUN is Lanflow's own
+		}
+	}
 	if name, found := s.d.otherTUN(ctx); found {
 		return fmt.Errorf(i18n.T("检测到其他代理软件的 TUN（%s）正在接管网络。两个 TUN 同时开启会互相冲突，请先在那款软件中关闭 TUN 模式，再开启澜流的 TUN"), name)
 	}
@@ -166,8 +171,14 @@ func (s *Service) ResolveRecovery(restore bool) (err error) {
 	if err := s.startLocked(); err != nil {
 		return err
 	}
-	// The proxy already points at us; take ownership again. In PAC mode
-	// the PAC server has to be up again at the recorded URL.
+	s.reclaimProxyLocked()
+	return nil
+}
+
+// reclaimProxyLocked takes ownership of the system proxy a previous run
+// pointed at Lanflow (the marker); in PAC mode the PAC server comes up
+// again at the recorded URL. opMu must be held.
+func (s *Service) reclaimProxyLocked() {
 	if m, ok := s.readMarker(); ok && m.PAC != "" {
 		s.mu.Lock()
 		pacPort := s.state.settings.Advanced.PACPort
@@ -181,9 +192,9 @@ func (s *Service) ResolveRecovery(restore bool) (err error) {
 	s.mu.Lock()
 	s.state.weSetProxy = true
 	s.state.st.SystemProxy = true
+	s.state.st.PendingRecovery = false
 	s.mu.Unlock()
 	s.em.emit(TopicStatus)
-	return nil
 }
 
 // ---- TUN ----

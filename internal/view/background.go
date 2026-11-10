@@ -161,7 +161,7 @@ func (b *Background) AskAgentConsent(req AgentConsent, answer func(string)) (wit
 	b.mu.Lock()
 	b.consents = append(b.consents, r)
 	b.mu.Unlock()
-	b.refreshTray()
+	go b.refreshTray() // the menu is set on the main thread, which may be busy
 	if b.notify != nil {
 		b.notify(i18n.T("有 agent 请求授权"), consentTitle(req), func() { go b.decide(r) })
 	}
@@ -190,7 +190,7 @@ func (b *Background) finish(r *bgConsent, a string) {
 		}
 	}
 	b.mu.Unlock()
-	b.refreshTray()
+	go b.refreshTray()
 	if a != "" {
 		r.answer(a)
 	}

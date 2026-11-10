@@ -244,6 +244,49 @@ func (r *runner) Start(ctx context.Context, spec core.Spec) error {
 	return nil
 }
 
+// Adopt takes over the Mihomo the helper runs already (started for a
+// Lanflow service that has since crashed): it only begins polling.
+func (r *runner) Adopt(ctx context.Context, _ core.Spec) error {
+	running, err := coreRunning(ctx, r.c)
+	if err != nil {
+		return wrapTransport(err)
+	}
+	if !running {
+		return core.ErrNothingToAdopt
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopPollingLocked()
+	r.running = true
+	r.exited = make(chan error, 1)
+	pctx, pcancel := context.WithCancel(context.Background())
+	r.cancel = pcancel
+	go r.poll(pctx, r.exited)
+	return nil
+}
+
+// Release forgets an adopted core without stopping it.
+func (r *runner) Release() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stopPollingLocked()
+	r.running = false
+}
+
+// coreRunning asks the helper whether it runs Mihomo.
+func coreRunning(ctx context.Context, c *protocol.Client) (bool, error) {
+	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	resp, err := c.Call(cctx, protocol.Request{Op: protocol.OpStatus})
+	if err != nil {
+		return false, err
+	}
+	if !resp.OK {
+		return false, resp.Err()
+	}
+	return resp.Running, nil
+}
+
 // Stop stops polling (so no spurious Exited is delivered) and asks the
 // helper to stop Mihomo.
 func (r *runner) Stop(ctx context.Context) error {

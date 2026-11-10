@@ -248,7 +248,9 @@ type fakeMgr struct {
 	stops    int
 	startErr error
 	startFn  func(spec core.Spec) error // when set, decides each Start (cores tests)
-	onStop   func()                     // when set, called on each Stop of a running core (cores tests)
+	adopts   int
+	adoptErr error
+	onStop   func() // when set, called on each Stop of a running core (cores tests)
 	runner   core.Runner
 	specs    []core.Spec
 	crashCh  chan error
@@ -283,6 +285,18 @@ func (m *fakeMgr) Stop(context.Context) error {
 	if wasRunning && onStop != nil {
 		onStop()
 	}
+	return nil
+}
+func (m *fakeMgr) Adopt(_ context.Context, spec core.Spec, r core.Runner) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.adopts++
+	m.runner = r
+	if m.adoptErr != nil {
+		return m.adoptErr
+	}
+	m.specs = append(m.specs, spec)
+	m.running = true
 	return nil
 }
 func (m *fakeMgr) SetRunner(r core.Runner) { m.mu.Lock(); m.runner = r; m.mu.Unlock() }
@@ -815,6 +829,7 @@ type harness struct {
 	sys    *fakeSys
 	dns    *fakeDNS
 	helper *fakeHelper
+	stray  *fakeStray
 	loc    *fakeLoc
 	store  *fakeStore
 	prof   *fakeProf
@@ -839,13 +854,35 @@ func (f *fakeVPN) detect(context.Context, func(string) bool) atrust.Info {
 	return f.info
 }
 
+// fakeStray is a core the previous run left (takeover.go).
+type fakeStray struct {
+	mu    sync.Mutex
+	found bool
+	tun   bool
+	stops int
+}
+
+func (f *fakeStray) Find(context.Context, string) (bool, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.found, f.tun
+}
+
+func (f *fakeStray) Stop(context.Context, string, bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
+	f.found = false
+	return nil
+}
+
 // newHarness builds a service on fakes with one stored subscription.
 func newHarness(t testingT, prepare func(h *harness)) *harness {
 	t.Helper()
 	dir := t.TempDir()
 	h := &harness{
 		ctrl: newFakeCtrl(), mgr: newFakeMgr(), core: &fakeCore{bin: "/fake/mihomo"},
-		sys: &fakeSys{}, dns: &fakeDNS{}, helper: &fakeHelper{}, loc: &fakeLoc{}, store: newFakeStore(), prof: &fakeProf{}, dir: dir, taken: map[int]bool{}, vpn: &fakeVPN{},
+		sys: &fakeSys{}, dns: &fakeDNS{}, helper: &fakeHelper{}, stray: &fakeStray{}, loc: &fakeLoc{}, store: newFakeStore(), prof: &fakeProf{}, dir: dir, taken: map[int]bool{}, vpn: &fakeVPN{},
 	}
 	sub, _ := h.store.Put(model.Subscription{Name: "测试机场", Source: "url", URL: "https://example.com/sub"})
 	_ = h.store.SetContent(sub.ID, []byte("proxies: []\n"))
@@ -863,6 +900,7 @@ func newHarness(t testingT, prepare func(h *harness)) *harness {
 		portInUse:  func(p int, _ bool) bool { return h.taken[p] },
 		otherTUN:   func(context.Context) (string, bool) { return h.tunOf, h.tunOf != "" },
 		vpnDetect:  h.vpn.detect,
+		stray:      h.stray,
 		diagCommands: func(context.Context) map[string]string {
 			return map[string]string{"routes.txt": "default 192.168.1.1 en0\nfetched https://sub.example.com/link/abc?token=zzz9"}
 		},

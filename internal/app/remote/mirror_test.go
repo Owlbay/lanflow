@@ -139,3 +139,31 @@ func sameLogs(a, b []model.LogEntry) bool {
 	}
 	return true
 }
+
+// A "changed" handler may call the API (the window takes the notices
+// when TopicNotice arrives): events must not be delivered on the
+// goroutine that reads the replies.
+func TestHandlerMayCall(t *testing.T) {
+	s := rpctest.Start(t, nil)
+	c := dialWindow(t, s)
+	c.Timeout = 5 * time.Second
+	got := make(chan int, 4)
+	c.OnChange(func(tp app.Topic) {
+		if tp == app.TopicNotice {
+			got <- len(c.TakeNotices())
+		}
+	})
+	s.Fake.PushNotice(app.Notice{Kind: "toast", Title: "hi"})
+	select {
+	case n := <-got:
+		if n != 1 {
+			t.Fatalf("took %d notices", n)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the handler's call never returned: deadlock on the reading goroutine")
+	}
+	// The connection still works afterwards.
+	if c.Status().Core == "" {
+		t.Fatalf("status after the handler: %v", c.LastError())
+	}
+}

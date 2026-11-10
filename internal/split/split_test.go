@@ -320,3 +320,42 @@ func TestProtocolMismatch(t *testing.T) {
 		t.Fatal("a handshake error without a pid is not replaceable")
 	}
 }
+
+// After the service is replaced, the window gets the new service's
+// events and snapshots: a change made through another client shows.
+func TestEventsAfterServiceRestart(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	h := newHarness(t)
+	w, err := h.connect("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := Kill(w.res.PID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, w.ups, "the reconnection", func(up bool) bool { return up })
+	_ = w.c.Status() // read (and cache) the new service's state
+	other, err := remote.Dial(context.Background(), remote.Options{DataDir: h.dir, Client: rpc.KindUI})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	for range 3 { // a few rounds: every change must come through
+		want := model.ModeDirect
+		if w.c.Status().Mode == model.ModeDirect {
+			want = model.ModeGlobal
+		}
+		if err := other.SetMode(want); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for w.c.Status().Mode != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("the window still shows mode %s after the new service changed it to %s", w.c.Status().Mode, want)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+}

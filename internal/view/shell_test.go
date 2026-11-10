@@ -507,3 +507,33 @@ func TestFileDropFirstImportStarts(t *testing.T) {
 		t.Fatalf("subscriptions: %+v", subs)
 	}
 }
+
+// The recovery prompt goes when the question is gone (answered through
+// ctl, or a new service process took the core over), and a reconnection
+// to a new service process drops what the old one had asked.
+func TestRecoveryPromptFollowsStatus(t *testing.T) {
+	api, s, tt := newTest(t)
+	api.SetPendingRecovery(true)
+	api.PushNotice(app.Notice{Kind: "recovery", Title: "上次澜流未正常退出"})
+	tt.Frame()
+	if !tt.HasText("恢复为关闭") {
+		t.Fatalf("recovery prompt not shown: %q", tt.Texts())
+	}
+	api.SetPendingRecovery(false)
+	tt.Frame()
+	tt.Frame()
+	if tt.HasText("恢复为关闭") {
+		t.Fatal("prompt still shown after the recovery was resolved elsewhere")
+	}
+
+	api.SetPendingRecovery(true)
+	api.PushNotice(app.Notice{Kind: "recovery"})
+	tt.Frame()
+	s.ServiceConnection(true)
+	api.SetPendingRecovery(false)
+	tt.Frame()
+	tt.Frame()
+	if tt.HasText("恢复为关闭") || s.recovery {
+		t.Fatal("prompt of the old service kept after reconnecting")
+	}
+}

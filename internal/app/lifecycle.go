@@ -266,7 +266,10 @@ func (s *Service) startLocked() (err error) {
 	}
 	fail := s.failStart
 	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
-		return fail(portTakenError(set.MixedPort), model.CoreError)
+		// A core of ours the previous run left may hold it (takeover.go).
+		if !s.stopStray() || s.d.portInUse(set.MixedPort, set.AllowLAN) {
+			return fail(portTakenError(set.MixedPort), model.CoreError)
+		}
 	}
 	s.detectCoexist() // compose with aTrust's routes when it is already running
 	p, err := s.prepare(composeArgs{})

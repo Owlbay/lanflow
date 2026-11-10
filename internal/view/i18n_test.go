@@ -221,6 +221,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	click(t, tt, i18n.T("查看详情"))
 	c.frame("error detail", tt)
 	click(t, tt, i18n.T("好"))
+	api.SetPendingRecovery(true)
 	s.recovery = true
 	c.frame("recovery dialog", tt)
 	click(t, tt, i18n.T("恢复为关闭"))

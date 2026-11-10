@@ -242,6 +242,15 @@ func (f *Fake) loop() {
 	}
 }
 
+// SetPendingRecovery makes Status report a leftover system proxy waiting
+// for the user's answer (tests of the recovery prompt).
+func (f *Fake) SetPendingRecovery(on bool) {
+	f.mu.Lock()
+	f.st.PendingRecovery = on
+	f.mu.Unlock()
+	f.emit(app.TopicStatus)
+}
+
 // Tick runs one second of the simulation: traffic, connection counters
 // and, mostly, a new log line (New ticks by itself; tests call it).
 func (f *Fake) Tick() {
