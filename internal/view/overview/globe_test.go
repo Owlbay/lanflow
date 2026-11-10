@@ -562,3 +562,29 @@ func TestDragInWindowRotatesAndDoesNotClick(t *testing.T) {
 		t.Errorf("refit moved the globe: %+v -> %+v", turned, p.view.cur)
 	}
 }
+
+// TestVisibleCircleKeepsToView: a circle inside the view is drawn whole;
+// one far larger than it keeps to the view grown by the margin, so that
+// its stroke's mask is no larger than the card (some 50 MB otherwise at a
+// full zoom, kept by the renderer).
+func TestVisibleCircleKeepsToView(t *testing.T) {
+	view := ui.Rect{X: 10, Y: 20, W: 600, H: 400}
+	var p ui.Path
+	small := visibleCircle(&p, 300, 200, 100, view, 8).Bounds()
+	if small.W < 199 || small.W > 201 || small.H < 199 || small.H > 201 {
+		t.Fatalf("small circle bounds %+v", small)
+	}
+	// Around the whole card: none of it shows, nothing is stroked.
+	if b := visibleCircle(&p, 300, 200, 2000, view, 8).Bounds(); b.W != 0 || b.H != 0 {
+		t.Fatalf("circle around the card drew %+v", b)
+	}
+	big := visibleCircle(&p, 300, 2300, 2200, view, 8).Bounds()
+	if big.W == 0 || big.X < view.X-8.5 || big.Y < view.Y-8.5 || big.X+big.W > view.X+view.W+8.5 || big.Y+big.H > view.Y+view.H+8.5 {
+		t.Fatalf("big circle leaves the view: %+v", big)
+	}
+	// The globe's limb crossing the card: some of it shows.
+	edge := visibleCircle(&p, 300, 1500, 1400, view, 8).Bounds()
+	if edge.W < 500 {
+		t.Fatalf("limb arc missing: %+v", edge)
+	}
+}

@@ -374,6 +374,7 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 		g := newGlobeProj(view.lat, view.lon, r.X+r.W/2, r.Y+r.H/2, float32(p.view.radius()))
 		b.labels = b.labels[:0]
 
+		b.clip = ui.Rect{X: r.X - clipMargin, Y: r.Y - clipMargin, W: r.W + 2*clipMargin, H: r.H + 2*clipMargin}
 		pt.Clip(r, 0, func() {
 			// The disc, darker toward the limb, with a thin atmosphere.
 			disc := circle(g.cx, g.cy, g.R)
@@ -381,8 +382,8 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			pt.FillRadialGradient(disc, ui.RadialGradient{Radius: g.R, Stops: []ui.GradientStop{
 				{Color: t.TextMuted.Alpha(0), At: 0.72}, {Color: t.TextMuted.Alpha(0.16), At: 1},
 			}}, g.R)
-			pt.StrokePath(b.path.Reset().Circle(g.cx, g.cy, g.R+3), 6, t.Accent.Alpha(0.08))
-			pt.StrokePath(b.path.Reset().Circle(g.cx, g.cy, g.R+0.5), 1, t.TextMuted.Alpha(0.3))
+			pt.StrokePath(visibleCircle(&b.path, g.cx, g.cy, g.R+3, r, clipMargin), 6, t.Accent.Alpha(0.08))
+			pt.StrokePath(visibleCircle(&b.path, g.cx, g.cy, g.R+0.5, r, clipMargin), 1, t.TextMuted.Alpha(0.3))
 			// The graticule and the land, the front half of the dots,
 			// fainter toward the limb, larger when zoomed in so far that
 			// they spread apart: from the ground canvases, redrawn only
@@ -716,3 +717,7 @@ func (p *Page) Hidden() {
 }
 
 func circle(cx, cy, r float32) ui.Rect { return ui.Rect{X: cx - r, Y: cy - r, W: 2 * r, H: 2 * r} }
+
+// clipMargin is how far past the map's card strokes still draw: past the
+// card's clip, so that no cut shows at its edge.
+const clipMargin = 8

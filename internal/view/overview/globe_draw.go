@@ -32,7 +32,11 @@ var hidden = [2]float32{float32(math.NaN()), float32(math.NaN())}
 
 // globeBuffers is the scratch memory of a frame.
 type globeBuffers struct {
-	path   ui.Path
+	path ui.Path
+	// clip is the card the map draws in, grown by a few DIPs: strokes
+	// keep to it (visibleCircle, arc.stroke), so that the mask of a path
+	// on a globe zoomed in past the card is no larger than the card.
+	clip   ui.Rect
 	line   [][2]float32
 	labels []ui.Rect
 	dest   arc
@@ -188,6 +192,9 @@ func (a *arc) stroke(pt *ui.Painter, b *globeBuffers, upto, width float32, col u
 			p = [2]float32{q[0] + (p[0]-q[0])*t, q[1] + (p[1]-q[1])*t}
 		}
 		lv := level(a.vis[i])
+		if b.clip.W > 0 && !inRect(b.clip, p) {
+			lv = 0
+		}
 		if lv != cur {
 			// Close the run at this point and start the next one here.
 			if count > 0 {
@@ -394,4 +401,45 @@ func grow[T any](s []T, n int) []T {
 		return s[:n]
 	}
 	return make([]T, n)
+}
+
+// visibleCircle sets p to the circle at (cx, cy) of radius r, or, when
+// the circle reaches past view by more than margin, to just the arcs of it
+// inside view grown by margin, as polylines. A stroke's mask covers the
+// bounds of its path: the outline of a globe zoomed in past the card
+// stroked whole would rasterize a mask several times the window's size,
+// which the renderer keeps (some 50 MB at a full zoom); the arcs keep it
+// to the card's.
+func visibleCircle(p *ui.Path, cx, cy, r float32, view ui.Rect, margin float32) *ui.Path {
+	p.Reset()
+	x0, y0 := view.X-margin, view.Y-margin
+	x1, y1 := view.X+view.W+margin, view.Y+view.H+margin
+	if cx-r >= x0 && cy-r >= y0 && cx+r <= x1 && cy+r <= y1 {
+		return p.Circle(cx, cy, r)
+	}
+	inside := func(x, y float32) bool { return x >= x0 && x <= x1 && y >= y0 && y <= y1 }
+	// A point every 2 DIPs at most along the circle, enough that the
+	// polyline shows no corners at the zooms the globe reaches.
+	n := int(min(max(2*math.Pi*float64(r)/2, 64), 8192))
+	open := false
+	for i := 0; i <= n; i++ {
+		a := 2 * math.Pi * float64(i) / float64(n)
+		x, y := cx+r*float32(math.Cos(a)), cy+r*float32(math.Sin(a))
+		if !inside(x, y) {
+			open = false
+			continue
+		}
+		if open {
+			p.LineTo(x, y)
+		} else {
+			p.MoveTo(x, y)
+			open = true
+		}
+	}
+	return p
+}
+
+// inRect reports whether p lies in r.
+func inRect(r ui.Rect, p [2]float32) bool {
+	return p[0] >= r.X && p[0] <= r.X+r.W && p[1] >= r.Y && p[1] <= r.Y+r.H
 }
