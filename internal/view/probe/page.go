@@ -315,7 +315,7 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 			// First view: what the three tabs do and that nothing runs on its
 			// own, with the one primary action of the page.
 			e.Kit.Empty(c, "probe", i18n.T("按需检测，不会自动运行"),
-				i18n.T("IP 纯净度读取出口的地址、位置、运营商和风险评分；解锁检测访问常用服务各一次；地区探查对比同一地区各节点的延迟和真实出口。只在你按下按钮时发出请求。"),
+				i18n.T("读取所选出口的地址、位置、运营商和风险评分。只在你按下按钮时发出请求。"),
 				func() {
 					ui.PrimaryButton(c, i18n.T("检测出口")).OnClick(func() { start(false) })
 				})

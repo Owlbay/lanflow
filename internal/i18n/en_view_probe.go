@@ -5,7 +5,7 @@ func init() {
 	for k, v := range map[string]string{
 		// internal/view/probe/page.go
 		"按需检测，不会自动运行": "Checks run on demand only",
-		"IP 纯净度读取出口的地址、位置、运营商和风险评分；解锁检测访问常用服务各一次；地区探查对比同一地区各节点的延迟和真实出口。只在你按下按钮时发出请求。": "IP purity reads the exit's address, location, carrier and risk score; the unlock check visits each popular service once; the region probe compares the latency and real exit of every node in a region. Requests are sent only when you press a button.",
+		"读取所选出口的地址、位置、运营商和风险评分。只在你按下按钮时发出请求。": "Reads the selected exit's address, location, ISP and risk score. Requests are sent only when you press the button.",
 		"尚未检测":     "Not checked yet",
 		"尚未探查":     "Not probed yet",
 		"没有可探查的地区": "No region to probe",
