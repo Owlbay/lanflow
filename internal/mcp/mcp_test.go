@@ -54,7 +54,11 @@ func TestToolList(t *testing.T) {
 			t.Errorf("tool %s missing", want)
 		}
 	}
-	for _, never := range []string{"install_tun_helper", "delete_subscription", "save_settings", "take_notices", "shutdown", "export_settings"} {
+	if !seen["build_feedback"] {
+		t.Error("tool build_feedback missing: agents may draft a report")
+	}
+	for _, never := range []string{"install_tun_helper", "delete_subscription", "save_settings", "take_notices", "shutdown", "export_settings",
+		"send_feedback", "set_feedback_token", "save_feedback"} {
 		if seen[never] {
 			t.Errorf("tool %s must not be offered", never)
 		}

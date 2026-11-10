@@ -390,3 +390,27 @@ func TestSettingsRedacted(t *testing.T) {
 		}
 	}
 }
+
+// Agents may draft a feedback report, but only the window sends it.
+func TestFeedbackPermissions(t *testing.T) {
+	h := start(t, func(ctx context.Context, c rpc.Consent) (rpc.Answer, error) { return rpc.AnswerOnce, nil })
+	for _, client := range []string{"mcp:claude", "ctl"} {
+		cl := h.dial(t, client, false)
+		rep, err := cl.BuildFeedback(model.FeedbackOptions{Description: "drafted by an agent", IncludeDiagnostics: true})
+		if err != nil || rep.ID == "" {
+			t.Fatalf("%s BuildFeedback: %v", client, err)
+		}
+		if _, err := cl.SendFeedback(rep.ID); code(err) != rpc.CodeDenied {
+			t.Fatalf("%s SendFeedback: %v", client, err)
+		}
+		if err := cl.SetFeedbackToken("x"); code(err) != rpc.CodeDenied {
+			t.Fatalf("%s SetFeedbackToken: %v", client, err)
+		}
+		if info := cl.FeedbackInfo(); info.Errors == 0 || info.TokenSet {
+			t.Fatalf("%s FeedbackInfo: %+v", client, info)
+		}
+	}
+	if rpc.LevelOf("SendFeedback") != rpc.LevelUI || rpc.LevelOf("BuildFeedback") != rpc.LevelRead {
+		t.Fatal("feedback levels changed")
+	}
+}

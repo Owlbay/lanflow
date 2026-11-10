@@ -42,7 +42,7 @@ func offered(m rpc.Method) bool {
 	}
 	switch m.Name {
 	case "OnChange", "SaveSettings", "ApplyDNS", "ApplySniffer", "IconData", "ProcessIcon", "Methods",
-		"ConfigDir", "LogDir", "ExportATrustConfig", "ImportATrustConfig", "ExportDiagnostics":
+		"ConfigDir", "LogDir", "ExportATrustConfig", "ImportATrustConfig", "ExportDiagnostics", "SaveFeedback":
 		return false
 	}
 	return true

@@ -49,6 +49,7 @@ type Logger struct {
 	head, n int
 	onWrite func()
 	now     func() time.Time
+	errs    *ErrorLog // Error entries are also recorded here (errors.go)
 }
 
 // Open opens (creating) dir/lanflow.log for appending. When the file cannot
@@ -93,16 +94,38 @@ func (l *Logger) OnWrite(fn func()) {
 	l.mu.Unlock()
 }
 
+// SetErrors makes every Error entry also a record of errs (errors.jsonl).
+func (l *Logger) SetErrors(errs *ErrorLog) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	l.errs = errs
+	l.mu.Unlock()
+}
+
 // Logf records one entry at level.
 func (l *Logger) Logf(level, format string, args ...any) {
 	if l == nil {
 		return
 	}
-	msg := format
-	if len(args) > 0 {
-		msg = fmt.Sprintf(format, args...)
+	l.add(level, sprintf(format, args), true)
+}
+
+// Unrecorded is Logf for an error the caller records in errors.jsonl
+// itself in a better form (a core exit with its code and log tail).
+func (l *Logger) Unrecorded(level, format string, args ...any) {
+	if l == nil {
+		return
 	}
-	l.add(level, msg)
+	l.add(level, sprintf(format, args), false)
+}
+
+func sprintf(format string, args []any) string {
+	if len(args) > 0 {
+		return fmt.Sprintf(format, args...)
+	}
+	return format
 }
 
 func (l *Logger) Infof(format string, args ...any)  { l.Logf(Info, format, args...) }
@@ -110,7 +133,7 @@ func (l *Logger) Warnf(format string, args ...any)  { l.Logf(Warn, format, args.
 func (l *Logger) Errorf(format string, args ...any) { l.Logf(Error, format, args...) }
 func (l *Logger) Debugf(format string, args ...any) { l.Logf(Debug, format, args...) }
 
-func (l *Logger) add(level, msg string) {
+func (l *Logger) add(level, msg string, record bool) {
 	msg = Redact(strings.TrimRight(msg, "\n"))
 	// keep one entry per line in the file; the UI shows it on one line too
 	oneLine := strings.ReplaceAll(msg, "\n", " ⏎ ")
@@ -130,8 +153,11 @@ func (l *Logger) add(level, msg string) {
 			l.size += int64(n)
 		}
 	}
-	fn := l.onWrite
+	fn, errs := l.onWrite, l.errs
 	l.mu.Unlock()
+	if record && level == Error && errs != nil {
+		errs.Add(model.ErrorKindError, oneLine, "")
+	}
 	if fn != nil {
 		fn()
 	}
@@ -214,7 +240,7 @@ func (w stdWriter) Write(p []byte) (int, error) {
 	if lower := strings.ToLower(msg); strings.Contains(lower, "error") || strings.Contains(lower, "fail") || strings.Contains(msg, "失败") {
 		level = Warn
 	}
-	w.l.add(level, msg)
+	w.l.add(level, msg, true)
 	return len(p), nil
 }
 

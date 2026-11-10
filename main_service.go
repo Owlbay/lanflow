@@ -1,6 +1,9 @@
 package main
 
-import "lanflow/internal/app"
+import (
+	"lanflow/internal/app"
+	"lanflow/internal/view/settings"
+)
 
 // newService wires the real service (internal/app). main falls back to the
 // fake backend, with a log line, when it cannot be created. lang is the
@@ -8,6 +11,8 @@ import "lanflow/internal/app"
 func newService(lang string) (app.API, error) {
 	o := app.DefaultOptions("Lanflow")
 	o.Language = lang
+	o.Version = settings.AppVersion()
+	o.CaptureCrashes = true
 	svc, err := app.NewService(o)
 	if err != nil {
 		return nil, err

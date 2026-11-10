@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -37,66 +38,11 @@ func (s *Service) ExportDiagnostics(path string) (err error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	now := s.d.now()
-	add := func(name string, data []byte) {
-		w, err := zw.CreateHeader(&zip.FileHeader{Name: name, Method: zip.Deflate, Modified: now})
+	for _, f := range s.diagFiles(false, true) {
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: f.name, Method: zip.Deflate, Modified: now})
 		if err == nil {
-			_, _ = w.Write(data)
+			_, _ = w.Write(f.data)
 		}
-	}
-
-	add("README.txt", []byte(diagReadme))
-	add("system.txt", []byte(s.diagSystem(now)))
-
-	s.mu.Lock()
-	set := copySettings(s.state.settings)
-	runtimeYAML := append([]byte(nil), s.state.runtimeYAML...)
-	ov := s.state.overrides
-	s.mu.Unlock()
-	if data, err := json.MarshalIndent(set, "", "  "); err == nil {
-		add("config/settings.json", []byte(applog.Redact(string(data))))
-	}
-	if len(runtimeYAML) == 0 {
-		runtimeYAML, _ = os.ReadFile(s.runtime)
-	}
-	if len(runtimeYAML) > 0 {
-		add("config/runtime.yaml", redactConfig(runtimeYAML))
-	}
-	if strings.TrimSpace(ov.Global) != "" {
-		add("config/override-global.yaml", redactConfig([]byte(ov.Global)))
-	}
-	for id, text := range ov.PerSub {
-		if strings.TrimSpace(text) != "" {
-			add("config/override-"+safeName(id)+".yaml", redactConfig([]byte(text)))
-		}
-	}
-
-	logs := map[string]string{
-		"logs/lanflow.log":        s.alog.Path(),
-		"logs/lanflow.log.1":      s.alog.Path() + ".1",
-		"logs/mihomo.log":         s.logFile,
-		"logs/mihomo.log.1":       s.logFile + ".1",
-		"logs/mihomo-tun.log":     filepath.Join(s.workDir, "mihomo-tun.log"),
-		"logs/mihomo-tun.log.1":   filepath.Join(s.workDir, "mihomo-tun.log.1"),
-		"logs/helper.log":         filepath.Join(helperLogDir, "helper.log"),
-		"logs/helper-install.log": filepath.Join(helperLogDir, "install.log"),
-	}
-	for name, p := range logs {
-		if p == "" || p == ".1" {
-			continue
-		}
-		if data, err := readTail(p, diagTailBytes); err == nil && len(data) > 0 {
-			add(name, []byte(applog.Redact(string(data))))
-		}
-	}
-
-	ctx, cancel := s.ctrlCtx(nil, 20*time.Second)
-	defer cancel()
-	cmds := s.d.diagCommands
-	if cmds == nil {
-		cmds = systemDiagnostics
-	}
-	for name, out := range cmds(ctx) {
-		add("network/"+name, []byte(applog.Redact(out)))
 	}
 
 	if err := zw.Close(); err != nil {
@@ -106,6 +52,122 @@ func (s *Service) ExportDiagnostics(path string) (err error) {
 		return fmt.Errorf(i18n.T("写入 %s 失败：%v"), path, err)
 	}
 	return nil
+}
+
+// diagFile is one file of the diagnostics bundle.
+type diagFile struct {
+	name string
+	data []byte
+}
+
+// diagFiles collects the diagnostics bundle. For a feedback report
+// (feedback true) it is stricter: core logs keep only warnings and
+// errors without connection lines, domain lists (rules, hosts, bypass,
+// DNS policies, Wi-Fi names…) are left out of the configs, public IP
+// addresses are masked, logs are cut shorter, and Lanflow's own log
+// only comes in when withLog.
+func (s *Service) diagFiles(feedback, withLog bool) []diagFile {
+	var out []diagFile
+	add := func(name string, data []byte) {
+		if feedback {
+			data = []byte(redactReport(string(data)))
+		}
+		out = append(out, diagFile{name, data})
+	}
+	now := s.d.now()
+	tail := int64(diagTailBytes)
+	readme := diagReadme
+	if feedback {
+		tail = feedbackTailBytes
+		readme = feedbackReadme
+	}
+	add("README.txt", []byte(readme))
+	add("system.txt", []byte(s.diagSystem(now, withLog)))
+
+	s.mu.Lock()
+	set := copySettings(s.state.settings)
+	runtimeYAML := append([]byte(nil), s.state.runtimeYAML...)
+	ov := s.state.overrides
+	s.mu.Unlock()
+	if data, err := json.MarshalIndent(set, "", "  "); err == nil {
+		if feedback {
+			data = dropPrivateJSON(data)
+		}
+		add("config/settings.json", []byte(applog.Redact(string(data))))
+	}
+	conf := redactConfig
+	if feedback {
+		conf = func(b []byte) []byte { return dropPrivateYAML(redactConfig(b)) }
+	}
+	if len(runtimeYAML) == 0 {
+		runtimeYAML, _ = os.ReadFile(s.runtime)
+	}
+	if len(runtimeYAML) > 0 {
+		add("config/runtime.yaml", conf(runtimeYAML))
+	}
+	if strings.TrimSpace(ov.Global) != "" {
+		add("config/override-global.yaml", conf([]byte(ov.Global)))
+	}
+	ids := make([]string, 0, len(ov.PerSub))
+	for id := range ov.PerSub {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if text := ov.PerSub[id]; strings.TrimSpace(text) != "" {
+			add("config/override-"+safeName(id)+".yaml", conf([]byte(text)))
+		}
+	}
+
+	logs := []struct {
+		name, path string
+		core       bool
+	}{
+		{"logs/lanflow.log", s.alog.Path(), false},
+		{"logs/lanflow.log.1", s.alog.Path() + ".1", false},
+		{"logs/mihomo.log", s.logFile, true},
+		{"logs/mihomo.log.1", s.logFile + ".1", true},
+		{"logs/mihomo-tun.log", filepath.Join(s.workDir, "mihomo-tun.log"), true},
+		{"logs/mihomo-tun.log.1", filepath.Join(s.workDir, "mihomo-tun.log.1"), true},
+		{"logs/helper.log", filepath.Join(helperLogDir, "helper.log"), false},
+		{"logs/helper-install.log", filepath.Join(helperLogDir, "install.log"), false},
+	}
+	for _, l := range logs {
+		if l.path == "" || l.path == ".1" {
+			continue
+		}
+		if feedback && !withLog && strings.HasPrefix(l.name, "logs/lanflow.log") {
+			continue
+		}
+		data, err := readTail(l.path, tail)
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		if feedback && l.core {
+			data = coreProblems(data)
+			if len(data) == 0 {
+				continue
+			}
+		}
+		add(l.name, []byte(applog.Redact(string(data))))
+	}
+
+	ctx, cancel := s.ctrlCtx(nil, 20*time.Second)
+	defer cancel()
+	cmds := s.d.diagCommands
+	if cmds == nil {
+		cmds = systemDiagnostics
+	}
+	outs := cmds(ctx)
+	names := make([]string, 0, len(outs))
+	for name := range outs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		add("network/"+name, []byte(applog.Redact(outs[name])))
+	}
+	return out
 }
 
 const diagReadme = `Lanflow diagnostics
@@ -121,7 +183,7 @@ in the core log: look through the files before sharing them.
 `
 
 // diagSystem is system.txt.
-func (s *Service) diagSystem(now time.Time) string {
+func (s *Service) diagSystem(now time.Time, withLog bool) string {
 	var b strings.Builder
 	line := func(k string, v any) { fmt.Fprintf(&b, "%-22s %v\n", k+":", v) }
 	line("time", now.Format(time.RFC3339))
@@ -179,6 +241,9 @@ func (s *Service) diagSystem(now time.Time) string {
 			fmt.Fprintf(&b, " error: %s", applog.Redact(sub.LastError))
 		}
 		b.WriteString("\n")
+	}
+	if !withLog {
+		return b.String()
 	}
 	b.WriteString("\nrecent Lanflow log:\n")
 	es := s.alog.Entries()

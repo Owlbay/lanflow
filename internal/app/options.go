@@ -17,6 +17,13 @@ type Options struct {
 	// §5.8), when no settings file exists yet; "" keeps the default (zh).
 	// main derives it from the system's preferred languages.
 	Language string
+	// Version is the app's version, stamped on error records and feedback
+	// reports ("" = "dev").
+	Version string
+	// CaptureCrashes makes the Go runtime write fatal errors to the log
+	// directory (applog.ErrorLog.CaptureCrashOutput); process-wide, so only
+	// the app sets it, not tests.
+	CaptureCrashes bool
 }
 
 // DefaultOptions returns the platform's conventional directories for appName:

@@ -555,6 +555,8 @@ type Settings struct {
 	// Sync is where this machine syncs lanflow.yaml (model/sync.go);
 	// machine-local, never in the file itself.
 	Sync ConfigSyncSettings `json:",omitempty"`
+	// Feedback is where 反馈问题 sends reports (model/feedback.go).
+	Feedback FeedbackSettings `json:",omitempty"`
 }
 
 // AgentGrant is the standing answer for one agent: Allow lets its writes

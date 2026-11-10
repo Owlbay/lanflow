@@ -36,12 +36,13 @@ type Service struct {
 	opt Options
 	d   deps
 
-	ctrlAddr string         // controller socket / pipe
-	workDir  string         // <DataDir>/core
-	runtime  string         // <DataDir>/core/runtime.yaml
-	logFile  string         // <LogDir>/mihomo.log
-	alog     *applog.Logger // <LogDir>/lanflow.log (applog.go)
-	pac      pacServer      // PAC file server for the PAC system-proxy mode (pac.go)
+	ctrlAddr string           // controller socket / pipe
+	workDir  string           // <DataDir>/core
+	runtime  string           // <DataDir>/core/runtime.yaml
+	logFile  string           // <LogDir>/mihomo.log
+	alog     *applog.Logger   // <LogDir>/lanflow.log (applog.go)
+	elog     *applog.ErrorLog // <LogDir>/errors.jsonl (feedback.go)
+	pac      pacServer        // PAC file server for the PAC system-proxy mode (pac.go)
 
 	rootCtx    context.Context
 	rootCancel context.CancelFunc
@@ -87,8 +88,10 @@ type Service struct {
 	bgMu    sync.Mutex
 	closing bool
 
-	stats *statsStore // 流量统计 (stats.go); its own lock
-	cores coresState  // installed Mihomo versions and release lists (cores.go); its own lock
+	stats   *statsStore   // 流量统计 (stats.go); its own lock
+	cores   coresState    // installed Mihomo versions and release lists (cores.go); its own lock
+	started time.Time     // when the service was created
+	fb      feedbackState // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
 }
 
 // state is everything the reads return. Every slice/map handed out is copied.
@@ -278,6 +281,8 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		overrides:    model.Overrides{PerSub: map[string]string{}},
 	}
 	s.state.st = model.Status{Core: model.CoreStopped, Mode: set.Mode, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN}
+	s.started = d.now()
+	s.openErrorLog()
 	if loadErr != nil {
 		s.state.notices = append(s.state.notices, Notice{Kind: "error", Title: i18n.T("设置文件有问题"), Detail: loadErr.Error()})
 		s.alog.Errorf("settings file: %v", loadErr)
@@ -321,6 +326,7 @@ func (s *Service) goBackground(fn func()) {
 	}
 	go func() {
 		defer s.wg.Done()
+		defer s.elog.CatchPanic("background")
 		fn()
 	}()
 }

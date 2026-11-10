@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"lanflow/internal/applog"
 	"lanflow/internal/model"
 )
 
@@ -45,7 +46,9 @@ func (s *Service) logNotice(n Notice) {
 		msg += n.Detail
 	}
 	switch n.Kind {
-	case "error", "core-crash", "invalid-config":
+	case "core-crash": // recorded in errors.jsonl by handleCrash, with the exit code
+		s.alog.Unrecorded(applog.Error, "notice [%s] %s", n.Kind, msg)
+	case "error", "invalid-config":
 		s.alog.Errorf("notice [%s] %s", n.Kind, msg)
 	case "recovery":
 		s.alog.Warnf("notice [%s] %s", n.Kind, msg)

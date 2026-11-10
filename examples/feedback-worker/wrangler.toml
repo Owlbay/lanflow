@@ -1,0 +1,25 @@
+# Example configuration for the Lanflow feedback Worker (docs/feedback-api.md).
+# Nothing here is deployed by the Lanflow repository: copy the folder, create
+# your own KV namespace and R2 bucket, fill in their IDs and deploy yourself.
+
+name = "lanflow-feedback"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+[vars]
+MAX_BODY_BYTES = "10485760"   # 10 MB, the limit of the contract
+REPORTS_PER_HOUR = "10"       # per client IP
+RETENTION_DAYS = "90"         # KV metadata TTL; add an R2 lifecycle rule with the same age
+# VIEW_BASE_URL = "https://feedback.example.com/r/"  # optional: returned as url + id
+
+# Secret, not a var:  npx wrangler secret put REPORT_TOKEN
+# When set, requests must carry  Authorization: Bearer <token>  (the token
+# entered in Lanflow › Settings › About › Feedback reporting).
+
+[[kv_namespaces]]
+binding = "REPORTS"
+id = "<your KV namespace id>"   # npx wrangler kv namespace create REPORTS
+
+[[r2_buckets]]
+binding = "DIAGNOSTICS"
+bucket_name = "lanflow-feedback"  # npx wrangler r2 bucket create lanflow-feedback

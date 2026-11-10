@@ -333,6 +333,30 @@ type API interface {
 	// credentials and tokens removed.
 	ExportDiagnostics(path string) error
 
+	// ---- 反馈问题 (feedback.go, docs/feedback-api.md) ----
+	// FeedbackInfo is a cheap read: the endpoint, whether a token is set,
+	// how many error records errors.jsonl holds and the previous run's
+	// crash until DismissLastCrash (TopicSettings).
+	FeedbackInfo() model.FeedbackInfo
+	// SetFeedbackToken keeps the endpoint's bearer token in the system
+	// keychain (the obfuscated file fallback without one); "" removes it.
+	SetFeedbackToken(token string) error
+	// DismissLastCrash forgets the previous run's crash (FeedbackInfo).
+	DismissLastCrash()
+	// BuildFeedback assembles a report for the user to look through: a
+	// new ID, the description, the recent error records and, as chosen,
+	// the redacted diagnostics bundle and the recent part of lanflow.log.
+	// Nothing leaves the machine; the report is kept for SendFeedback and
+	// SaveFeedback.
+	BuildFeedback(opts model.FeedbackOptions) (model.FeedbackReport, error)
+	// SendFeedback posts the report built as id, exactly as previewed, to
+	// {Settings.Feedback.Endpoint}/v1/reports, retrying with backoff.
+	// Window only: the user confirms what is sent.
+	SendFeedback(id string) (model.FeedbackSent, error)
+	// SaveFeedback writes the report built as id to path as a zip, for
+	// sending by hand.
+	SaveFeedback(id, path string) error
+
 	// Shutdown restores the system proxy if Lanflow set it and stops the
 	// core. Called once when the app quits.
 	Shutdown()

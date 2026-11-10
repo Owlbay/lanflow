@@ -584,6 +584,7 @@ func (s *Service) handleCrash(cause error) {
 	s.state.routes = nil
 	s.mu.Unlock()
 	s.em.emit(TopicStatus, TopicConns, TopicExits)
+	s.recordCoreExit(cause)
 
 	if ours {
 		if err := s.releaseProxy(); err == nil {

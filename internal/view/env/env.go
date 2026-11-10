@@ -125,6 +125,10 @@ type Env struct {
 	// settings page then accepts any shortcut.
 	SetGlobalShortcut func(acc string) error
 
+	// OpenFeedback opens the 反馈问题 dialog (internal/view/feedback.go);
+	// nil in Env values without a shell (tests).
+	OpenFeedback func()
+
 	// Kit draws shared components so all pages look alike.
 	Kit Kit
 

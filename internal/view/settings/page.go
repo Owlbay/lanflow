@@ -93,6 +93,9 @@ type Page struct {
 	// 配置同步 (configsync.go)
 	sync syncUI
 
+	// 反馈问题 / 反馈上报 of 关于 (feedback.go)
+	fbk feedbackUI
+
 	// 应用更新 (update.go)
 	upd      Updater
 	relaunch func()
@@ -371,6 +374,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				})
 			})
 			p.updateRows(c, t, s)
+			p.feedbackRows(c, t, s)
 		})
 	})
 }
