@@ -180,7 +180,8 @@ func TestUIStatePersists(t *testing.T) {
 	if got := h.s.UIState(); len(got.OpenGroups) != 0 || got.ProxyGrid {
 		t.Fatalf("fresh UI state: %+v", got)
 	}
-	u := model.UIState{OpenGroups: map[string]bool{"节点选择": false, "流媒体": true}, ProxyGrid: true}
+	u := model.UIState{OpenGroups: map[string]bool{"节点选择": false, "流媒体": true}, ProxyGrid: true,
+		ProxySort: "delay", ProxyHideTimeout: true, ProxyProvidersOpen: true}
 	if err := h.s.SaveUIState(u); err != nil {
 		t.Fatal(err)
 	}
@@ -193,10 +194,26 @@ func TestUIStatePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !set.UI.ProxyGrid || !set.UI.OpenGroups["流媒体"] || set.MixedPort != 7890 {
+	if !set.UI.ProxyGrid || !set.UI.OpenGroups["流媒体"] || set.MixedPort != 7890 ||
+		set.UI.ProxySort != "delay" || !set.UI.ProxyHideTimeout || !set.UI.ProxyProvidersOpen {
 		t.Fatalf("settings on disk: %+v", set.UI)
 	}
 	if h.ctrl.reloads != 0 {
 		t.Fatal("saving UI state must not reload the core")
+	}
+
+	// A settings page saving the snapshot it opened with (older UI state)
+	// keeps the UI state chosen since.
+	stale := h.s.Settings()
+	stale.UI = model.UIState{}
+	stale.MixedPort = 7891
+	if err := h.s.SaveSettings(stale); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.s.UIState(); got.ProxySort != "delay" || !got.ProxyGrid {
+		t.Fatalf("SaveSettings rolled back the UI state: %+v", got)
+	}
+	if set, _ := loadSettings(h.dir); set.UI.ProxySort != "delay" || set.MixedPort != 7891 {
+		t.Fatalf("on disk after SaveSettings: port %d ui %+v", set.MixedPort, set.UI)
 	}
 }

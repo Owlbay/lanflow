@@ -220,8 +220,13 @@ type ProxyProvider struct {
 type UIState struct {
 	OpenGroups map[string]bool // proxy group name → expanded; absent = default
 	ProxyGrid  bool            // the 代理 page shows nodes as a compact grid
-	LogLevel   string          // the 日志 page's lowest level shown ("debug"…"error"); "" = default
-	LogSource  string          // the 日志 page's source: "core" or "app"; "" = default
+	// ProxySort is the 代理 page's node order: "" (subscription order),
+	// "delay" or "name".
+	ProxySort          string
+	ProxyHideTimeout   bool   // the 代理 page hides timed-out nodes
+	ProxyProvidersOpen bool   // the 代理 page's 代理集合 section is expanded
+	LogLevel           string // the 日志 page's lowest level shown ("debug"…"error"); "" = default
+	LogSource          string // the 日志 page's source: "core" or "app"; "" = default
 }
 
 // RuleMatch is the result of testing an address against the rules.

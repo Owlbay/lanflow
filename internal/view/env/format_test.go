@@ -83,6 +83,13 @@ type fakeUI struct {
 }
 
 func (f *fakeUI) UIState() model.UIState { f.mu.Lock(); defer f.mu.Unlock(); return f.u }
+func (f *fakeUI) UpdateUIState(fn func(*model.UIState)) error {
+	f.mu.Lock()
+	u := f.u
+	f.mu.Unlock()
+	fn(&u)
+	return f.SaveUIState(u)
+}
 func (f *fakeUI) SaveUIState(u model.UIState) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

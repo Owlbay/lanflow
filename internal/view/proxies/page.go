@@ -77,6 +77,21 @@ func (p *Page) restore() {
 	if u.ProxyGrid {
 		p.view = viewGrid
 	}
+	p.sort = sortFromKey(u.ProxySort)
+	p.hideTimeout = u.ProxyHideTimeout
+	p.provOpen = u.ProxyProvidersOpen
+}
+
+// sortKeys are the stored names of the sort orders, by sort constant.
+var sortKeys = [...]string{sortDefault: "", sortDelay: "delay", sortName: "name"}
+
+func sortFromKey(k string) int {
+	for i, v := range sortKeys {
+		if v == k {
+			return i
+		}
+	}
+	return sortDefault
 }
 
 // persist saves the expanded states and view off the UI thread, keeping
@@ -87,8 +102,10 @@ func (p *Page) persist() {
 		open[name] = o
 	}
 	grid := p.view == viewGrid
+	order, hide, prov := sortKeys[p.sort], p.hideTimeout, p.provOpen
 	p.e.SaveUIState("proxies", func(u *model.UIState) {
 		u.OpenGroups, u.ProxyGrid = open, grid
+		u.ProxySort, u.ProxyHideTimeout, u.ProxyProvidersOpen = order, hide, prov
 	})
 }
 
@@ -118,13 +135,15 @@ func (p *Page) View(c *ui.Context) {
 		}
 		ui.MenuButton(c, i18n.T("排序"), func(m *ui.Menu) {
 			for i, name := range []string{i18n.T("默认顺序"), i18n.T("按延迟"), i18n.T("按名称")} {
-				if m.Item(name).Radio(p.sort == i).Chosen() {
+				if m.Item(name).Radio(p.sort == i).Chosen() && p.sort != i {
 					p.sort = i
+					p.persist()
 				}
 			}
 			m.Separator()
 			if m.Item(i18n.T("隐藏超时节点")).Checked(p.hideTimeout).Chosen() {
 				p.hideTimeout = !p.hideTimeout
+				p.persist()
 			}
 		}).Label(i18n.T("排序"))
 		tip := i18n.T("依次测试所有组的延迟（⌘R）")
@@ -544,7 +563,11 @@ func (p *Page) providers(c *ui.Context, provs []model.ProxyProvider, px model.Pr
 	k := p.e.Kit
 	box := ui.Column(c.Key("providers")).Radius(10).Background(t.Surface).Border(1, t.Border).Clip()
 	box.Children(func() {
+		wasOpen := p.provOpen
 		parts := ui.CollapsibleBase(c.Key("coll"), &p.provOpen)
+		if p.provOpen != wasOpen {
+			p.persist()
+		}
 		parts.Trigger.MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(i18n.T("代理集合")).Children(func() {
 			ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 			ui.Text(c, i18n.T("代理集合")).FontSize(13).FontWeight(600).SingleLine()

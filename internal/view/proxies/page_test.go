@@ -291,3 +291,50 @@ func TestBigGroupVirtual(t *testing.T) {
 		t.Fatalf("built %d of 300 rows", n)
 	}
 }
+
+// TestDisplayPrefsRemembered: the sort order, 隐藏超时节点 and the 代理集合
+// section survive a restart, and an unknown stored order falls back to the
+// subscription's order.
+func TestDisplayPrefsRemembered(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	tt := ui.NewTester(p.View, 900, 700)
+	if err := tt.Click("排序"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.ChooseMenuItem("按名称"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("排序"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.ChooseMenuItem("隐藏超时节点"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if err := tt.Click("代理集合"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	u := api.UIState()
+	if u.ProxySort != "name" || !u.ProxyHideTimeout || !u.ProxyProvidersOpen {
+		t.Fatalf("not saved: %+v", u)
+	}
+
+	q := New(e) // as after a restart
+	ui.NewTester(q.View, 900, 700)
+	if q.sort != sortName || !q.hideTimeout || !q.provOpen {
+		t.Fatalf("not restored: sort=%d hide=%v prov=%v", q.sort, q.hideTimeout, q.provOpen)
+	}
+
+	_ = api.SaveUIState(model.UIState{ProxySort: "bogus"})
+	r := New(e)
+	ui.NewTester(r.View, 900, 700)
+	if r.sort != sortDefault || r.hideTimeout || r.provOpen {
+		t.Fatalf("fallback: sort=%d hide=%v prov=%v", r.sort, r.hideTimeout, r.provOpen)
+	}
+}

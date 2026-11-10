@@ -110,6 +110,10 @@ func (s *Service) checkSettingsChange(old, in model.Settings) error {
 // storeSettings makes in the current settings in memory and on disk.
 func (s *Service) storeSettings(in model.Settings, running bool) error {
 	s.mu.Lock()
+	// The remembered UI state belongs to UpdateUIState: a settings page
+	// saving the snapshot it opened with must not roll back a sort order or
+	// view picked on another page since.
+	in.UI = copyUIState(s.state.settings.UI)
 	s.state.settings = copySettings(in)
 	i18n.SetLang(in.Language)
 	if !running {
@@ -129,6 +133,7 @@ func (s *Service) storeSettings(in model.Settings, running bool) error {
 // the UI shows what the core actually runs, and returns err.
 func (s *Service) revertSettings(old model.Settings, err error) error {
 	s.mu.Lock()
+	old.UI = copyUIState(s.state.settings.UI)
 	s.state.settings = copySettings(old)
 	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, old.MainGroup)
 	s.mu.Unlock()

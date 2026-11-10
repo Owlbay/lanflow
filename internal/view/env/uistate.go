@@ -84,11 +84,14 @@ func (s *UIStateSaver) write() {
 	if len(order) == 0 {
 		return
 	}
-	u := s.api.UIState()
-	for _, k := range order {
-		pending[k](&u)
-	}
-	if err := s.api.SaveUIState(u); err != nil {
+	// Applied under the settings lock, so a page saving through the API
+	// directly (or another window) is never overwritten by a stale copy.
+	err := s.api.UpdateUIState(func(u *model.UIState) {
+		for _, k := range order {
+			pending[k](u)
+		}
+	})
+	if err != nil {
 		log.Printf("lanflow: save UI state: %v", err)
 	}
 }
