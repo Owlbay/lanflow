@@ -3,6 +3,7 @@ package settings
 import (
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -23,6 +24,31 @@ type coresUI struct {
 	loading     bool
 	loadErr     string
 	busy        string // version a 使用 / 删除 job runs for ("" = none)
+
+	// installed is API.InstalledCores (which looks at the files), read
+	// again only when TopicCores or TopicCoreDownload says it changed.
+	installed []model.InstalledCore
+	stale     *env.Stale
+}
+
+// installedStale is the flag that has installedCores read the list again.
+func (p *Page) installedStale() *env.Stale {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cores.stale == nil {
+		p.cores.stale = env.Watch(p.e.API, app.TopicCores, app.TopicCoreDownload)
+	}
+	return p.cores.stale
+}
+
+// installedCores returns the installed versions, read again only after a
+// change.
+func (p *Page) installedCores() []model.InstalledCore {
+	cu := &p.cores
+	if p.installedStale().Take() {
+		cu.installed = p.e.API.InstalledCores()
+	}
+	return cu.installed
 }
 
 var (
@@ -55,7 +81,7 @@ func activeInstalled(list []model.InstalledCore) (model.InstalledCore, bool) {
 func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, st model.Status) {
 	e := p.e
 	dl := e.API.CoreDownload()
-	installed := e.API.InstalledCores()
+	installed := p.installedCores()
 	active, hasActive := activeInstalled(installed)
 	p.mu.Lock()
 	latest := p.latest
@@ -222,6 +248,7 @@ func (p *Page) coreJob(version string, job func() error, ok string) {
 		p.mu.Lock()
 		p.cores.busy = ""
 		p.mu.Unlock()
+		p.installedStale().Mark() // the list changed, announced or not
 		return err
 	}, ok)
 }
@@ -376,7 +403,9 @@ func (p *Page) releaseRow(c *ui.Context, t *ui.Theme, r model.CoreRelease, downl
 		default:
 			ui.Button(c, i18n.T("安装")).Disabled(downloading).OnClick(func() {
 				e.Run(func() error {
-					if err := e.API.InstallCore(r.Channel, r.Version); err != nil {
+					err := e.API.InstallCore(r.Channel, r.Version)
+					p.installedStale().Mark()
+					if err != nil {
 						return err
 					}
 					// re-read the list so the row shows 已安装 (the service

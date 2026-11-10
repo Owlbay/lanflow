@@ -40,6 +40,8 @@ type Page struct {
 	// sub caches which subscription rules match the query, in the order
 	// shown; see subRows.
 	sub subCache
+	// customList is the virtual list of a long custom rule list.
+	customList ui.ListState
 
 	mu         sync.Mutex // guards the fields below, written by jobs
 	testResult *model.RuleMatch
@@ -130,6 +132,10 @@ func matches(q string, parts ...string) bool {
 
 // ---- custom rules ----
 
+// bigCustom is the custom rule count from which they show in a virtual
+// list.
+const bigCustom = 50
+
 func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 	e := p.e
 	all := e.API.CustomRules()
@@ -156,6 +162,14 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(10, 12)
 			return
 		}
+		if len(list) > bigCustom {
+			// Many rules: a virtual list builds only the rows in view.
+			p.customList.Key = func(i int) any { return list[i].ID }
+			ui.List(c.Key("custom"), &p.customList, len(list), func(i int) {
+				p.customRow(c, t, list, i, all, hits, q)
+			}).Height(5*40 + 20).FillWidth().Label(i18n.T("自定义规则"))
+			return
+		}
 		ui.Scroll(c).MaxHeight(5*40 + 20).Children(func() {
 			ui.Column(c).Dividers(1, t.Border).Children(func() { p.customRows(c, t, list, all, hits, q) })
 		})
@@ -164,41 +178,45 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 
 // customRows draws the custom rules as rows.
 func (p *Page) customRows(c *ui.Context, t *ui.Theme, list, all []model.CustomRule, hits map[string]model.Rule, q string) {
-	e := p.e
-	{
-		for i, r := range list {
-			rule := r
-			first := i == 0 && len(all) > 0 && all[0].ID == r.ID
-			h, hasHit := hits[r.Type+","+r.Payload]
-			ui.Row(c.Key(r.ID)).Gap(10).MinHeight(40).PaddingX(12).Children(func() {
-				e.Kit.Tag(c, env.RuleTypeName(rule.Type), "gray")
-				env.Highlight(c, rule.Payload, q, t.Text).Font("monospace").Grow(1).SingleLine()
-				ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
-				hitText := i18n.T("命中 0")
-				if hasHit {
-					hitText = fmt.Sprintf(i18n.T("命中 %s"), env.FmtInt(h.HitCount))
-					if h.HitCount > 0 {
-						hitText += " · " + env.FmtAgo(h.HitAt)
-					}
-				}
-				ui.Text(c, hitText).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Width(130).TextAlign(ui.End)
-				ui.Button(c, "⋯").Label(i18n.T("规则操作")).Tooltip(i18n.T("更多")).PopoverMenuButton(func(m *ui.Menu) {
-					if m.Item(i18n.T("编辑…")).Chosen() {
-						p.form.Open(rule)
-					}
-					if m.Item(i18n.T("上移")).Disabled(first).Chosen() {
-						e.Run(func() error { return e.API.MoveCustomRule(rule.ID, -1) }, "")
-					}
-					m.Separator()
-					if m.Item(i18n.T("删除…")).Danger().Chosen() {
-						e.Confirm(i18n.Tf("删除规则「%s」？", ruleform.Describe(rule)), i18n.T("删除后会重新生成配置并让内核重新加载。"), i18n.T("删除"), true, func() {
-							e.Run(func() error { return e.API.DeleteCustomRule(rule.ID) }, i18n.T("规则已删除"))
-						})
-					}
-				}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-			})
-		}
+	for i := range list {
+		p.customRow(c, t, list, i, all, hits, q)
 	}
+}
+
+// customRow draws the custom rule list[i].
+func (p *Page) customRow(c *ui.Context, t *ui.Theme, list []model.CustomRule, i int, all []model.CustomRule, hits map[string]model.Rule, q string) {
+	e := p.e
+	r := list[i]
+	rule := r
+	first := i == 0 && len(all) > 0 && all[0].ID == r.ID
+	h, hasHit := hits[r.Type+","+r.Payload]
+	ui.Row(c.Key(r.ID)).Gap(10).MinHeight(40).PaddingX(12).Children(func() {
+		e.Kit.Tag(c, env.RuleTypeName(rule.Type), "gray")
+		env.Highlight(c, rule.Payload, q, t.Text).Font("monospace").Grow(1).SingleLine()
+		ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
+		hitText := i18n.T("命中 0")
+		if hasHit {
+			hitText = fmt.Sprintf(i18n.T("命中 %s"), env.FmtInt(h.HitCount))
+			if h.HitCount > 0 {
+				hitText += " · " + env.FmtAgo(h.HitAt)
+			}
+		}
+		ui.Text(c, hitText).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Width(130).TextAlign(ui.End)
+		ui.Button(c, "⋯").Label(i18n.T("规则操作")).Tooltip(i18n.T("更多")).PopoverMenuButton(func(m *ui.Menu) {
+			if m.Item(i18n.T("编辑…")).Chosen() {
+				p.form.Open(rule)
+			}
+			if m.Item(i18n.T("上移")).Disabled(first).Chosen() {
+				e.Run(func() error { return e.API.MoveCustomRule(rule.ID, -1) }, "")
+			}
+			m.Separator()
+			if m.Item(i18n.T("删除…")).Danger().Chosen() {
+				e.Confirm(i18n.Tf("删除规则「%s」？", ruleform.Describe(rule)), i18n.T("删除后会重新生成配置并让内核重新加载。"), i18n.T("删除"), true, func() {
+					e.Run(func() error { return e.API.DeleteCustomRule(rule.ID) }, i18n.T("规则已删除"))
+				})
+			}
+		}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
+	})
 }
 
 // ---- subscription rules ----

@@ -63,6 +63,7 @@ func (p *Page) View(c *ui.Context) {
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
 	sites := e.API.Sites()
+	net := e.API.NetInfo() // once a build, for the two parts that show it
 	testing := false
 	for _, s := range sites {
 		if s.ViaProxy == -2 || s.Direct == -2 {
@@ -90,7 +91,7 @@ func (p *Page) View(c *ui.Context) {
 		// table and the leak results are the only parts that scroll.
 		ui.Column(c).Grow(1).Padding(4, 24, 20, 24).Gap(16).Clip().Children(func() {
 			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
-				p.directCard(c, t)
+				p.directCard(c, t, net)
 				p.exitCard(c, t, st)
 			})
 			ui.Row(c).Gap(16).Grow(1).AlignItems(ui.Stretch).Children(func() {
@@ -99,7 +100,7 @@ func (p *Page) View(c *ui.Context) {
 					p.dnsSection(c, t, running)
 				})
 				ui.Column(c).Grow(1).Basis(0).Gap(16).Children(func() {
-					p.localSection(c, t)
+					p.localSection(c, t, net)
 					p.proxySection(c, t, st)
 					p.leakSection(c, t, running)
 				})
@@ -175,10 +176,9 @@ func (p *Page) retest() {
 	}, "")
 }
 
-func (p *Page) directCard(c *ui.Context, t *ui.Theme) {
+func (p *Page) directCard(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 	e := p.e
 	you := e.API.You()
-	n := e.API.NetInfo()
 	fetching := n.PublicIPStatus == "fetching"
 	env.InfoCard(c, i18n.T("直连 · 本机公网"), func() {
 		if you != nil && !fetching {
@@ -444,9 +444,7 @@ func (p *Page) addSite() {
 
 // ---- local network & proxy status ----
 
-func (p *Page) localSection(c *ui.Context, t *ui.Theme) {
-	e := p.e
-	n := e.API.NetInfo()
+func (p *Page) localSection(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 	p.panel(c, t, i18n.T("本机网络"), func() {
 		ipv6 := n.IPv6
 		if ipv6 == "" {
