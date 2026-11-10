@@ -50,6 +50,11 @@ func main() {
 	// rules, for the app's own texts (i18n) and MyGo's (SetLocale).
 	mygo.App.SetLanguages("zh-Hans", "en")
 	api := backend(i18n.FromSystem(mygo.App.PreferredLanguages()))
+	// A panic on the main goroutine (UI callbacks run here) is recorded in
+	// errors.jsonl, then raised again (internal/app/errlog.go).
+	if c, ok := api.(interface{ CatchPanic(where string) }); ok {
+		defer c.CatchPanic("main")
+	}
 	// Lanflow's own log.Printf lines also go to lanflow.log (internal/applog).
 	if w, ok := api.(interface{ AppLogWriter() io.Writer }); ok {
 		log.SetOutput(io.MultiWriter(os.Stderr, w.AppLogWriter()))
