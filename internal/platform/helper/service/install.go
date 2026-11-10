@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"lanflow/internal/platform/helper/protocol"
 )
 
 // InstallOptions are the arguments of `lanflow-helper install`, which runs
@@ -17,6 +19,10 @@ type InstallOptions struct {
 	DataDir string
 	// UID identifies the installing user: decimal uid (macOS) or SID (Windows).
 	UID string
+	// Version is the version of the installing helper binary.
+	Version string
+	// AllowDowngrade permits replacing a newer installed helper.
+	AllowDowngrade bool
 }
 
 // Logf is the logging callback used by the install and run entry points.
@@ -33,6 +39,23 @@ func (o InstallOptions) check() error {
 	}
 	if fi, err := os.Stat(o.CoreBin); err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("内核文件不可用: %s", o.CoreBin)
+	}
+	return nil
+}
+
+// checkDowngrade refuses to replace the helper recorded in configPath when
+// it is newer than o.Version (both must be release versions; "dev" or a
+// missing record never blocks).
+func checkDowngrade(configPath string, o InstallOptions) error {
+	if o.AllowDowngrade {
+		return nil
+	}
+	cur, err := LoadConfig(configPath)
+	if err != nil {
+		return nil
+	}
+	if c, ok := protocol.CompareVersions(cur.HelperVersion, o.Version); ok && c > 0 {
+		return fmt.Errorf("已安装的权限组件 %s 比要安装的 %s 更新，拒绝降级（如确需降级请加 --allow-downgrade）", cur.HelperVersion, o.Version)
 	}
 	return nil
 }

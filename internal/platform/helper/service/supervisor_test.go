@@ -105,7 +105,8 @@ func TestSupervisorLifecycle(t *testing.T) {
 	args := strings.Join(fs.last.Args, " ")
 	resolvedWork, _ := filepath.EvalSymlinks(f.spec.WorkDir)
 	resolvedCfg, _ := filepath.EvalSymlinks(f.spec.Config)
-	want := "-d " + resolvedWork + " -f " + resolvedCfg + " -ext-ctl-unix " + f.spec.Controller
+	resolvedCtl, _ := filepath.EvalSymlinks(filepath.Dir(f.spec.Controller))
+	want := "-d " + resolvedWork + " -f " + resolvedCfg + " -ext-ctl-unix " + filepath.Join(resolvedCtl, filepath.Base(f.spec.Controller))
 	if args != want || fs.last.Path != f.core || fs.last.Dir != resolvedWork {
 		t.Fatalf("command = %s %s (dir %s), want %s", fs.last.Path, args, fs.last.Dir, want)
 	}
@@ -223,7 +224,7 @@ func TestSupervisorKillsAfterGrace(t *testing.T) {
 }
 
 func TestLogRotation(t *testing.T) {
-	dir := t.TempDir()
+	dir := resolvedTempDir(t)
 	path := filepath.Join(dir, "core.log")
 	if err := os.WriteFile(path, make([]byte, LogRotateSize), 0o600); err != nil {
 		t.Fatal(err)

@@ -36,34 +36,36 @@ func ownerMatches(path string, uid string) (bool, error) {
 // its parent directory must exist and be owned by the installing user
 // (Mihomo removes whatever is at the path before listening, so a root
 // Mihomo must never be pointed at a directory another user controls), and
-// the path itself must be absent or an existing socket.
-func checkController(p *Policy, controller string) error {
+// the path itself must be absent or an existing socket. It returns the
+// path with its parent directory resolved.
+func checkController(p *Policy, controller string) (string, error) {
 	if controller == "" {
-		return errors.New("控制器地址未指定")
+		return "", errors.New("控制器地址未指定")
 	}
 	if !filepath.IsAbs(controller) {
-		return fmt.Errorf("控制器地址必须是绝对路径: %s", controller)
+		return "", fmt.Errorf("控制器地址必须是绝对路径: %s", controller)
 	}
 	controller = filepath.Clean(controller)
 	dir, err := filepath.EvalSymlinks(filepath.Dir(controller))
 	if err != nil {
-		return fmt.Errorf("控制器所在目录不可用: %w", err)
+		return "", fmt.Errorf("控制器所在目录不可用: %w", err)
 	}
 	if p.OwnerMatches != nil {
 		ok, err := p.OwnerMatches(dir, p.Config.UID)
 		if err != nil {
-			return fmt.Errorf("无法检查控制器目录属主: %w", err)
+			return "", fmt.Errorf("无法检查控制器目录属主: %w", err)
 		}
 		if !ok {
-			return fmt.Errorf("控制器所在目录不属于当前用户: %s", dir)
+			return "", fmt.Errorf("控制器所在目录不属于当前用户: %s", dir)
 		}
 	}
-	if fi, err := os.Lstat(filepath.Join(dir, filepath.Base(controller))); err == nil {
+	resolved := filepath.Join(dir, filepath.Base(controller))
+	if fi, err := os.Lstat(resolved); err == nil {
 		if fi.Mode()&os.ModeSocket == 0 {
-			return fmt.Errorf("控制器路径已被占用且不是套接字: %s", controller)
+			return "", fmt.Errorf("控制器路径已被占用且不是套接字: %s", controller)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
+		return "", err
 	}
-	return nil
+	return resolved, nil
 }

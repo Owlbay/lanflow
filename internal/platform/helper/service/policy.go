@@ -18,9 +18,11 @@ type Policy struct {
 	// resolved) is owned by the installing user. Used for the controller
 	// socket's parent directory on macOS. Nil skips the check.
 	OwnerMatches func(path string, uid string) (bool, error)
-	// CheckController validates the controller endpoint. Nil means the
-	// platform default (set by policy_<os>.go).
-	CheckController func(p *Policy, controller string) error
+	// CheckController validates the controller endpoint and returns the
+	// form the helper uses (on unix: its parent directory resolved, so the
+	// socket hand-over later never re-resolves user-controlled symlinks).
+	// Nil means the platform default (set by policy_<os>.go).
+	CheckController func(p *Policy, controller string) (string, error)
 }
 
 // NewPolicy returns a policy for c with platform defaults.
@@ -89,7 +91,8 @@ func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	if check == nil {
 		check = checkController
 	}
-	if err := check(p, spec.Controller); err != nil {
+	out.Controller, err = check(p, spec.Controller)
+	if err != nil {
 		return out, err
 	}
 
@@ -156,24 +159,16 @@ func isWithin(dir, path string) bool {
 	return hasPathPrefix(path, dir)
 }
 
-// Environment policy. Mihomo honours a handful of variables; everything
-// else (DYLD_*, LD_*, PATH, GODEBUG, CLASH_POST_UP, controller overrides…)
-// could redirect a root process and is refused.
-var (
-	allowedEnvExact = map[string]bool{
-		"SAFE_PATHS":                true,
-		"SKIP_SAFE_PATH_CHECK":      true,
-		"DISABLE_LOOPBACK_DETECTOR": true,
-		"GOGC":                      true,
-		"GOMEMLIMIT":                true,
-	}
-	deniedEnvPrefixes = []string{
-		"CLASH_POST_",     // -post-up / -post-down scripts run as root
-		"CLASH_OVERRIDE_", // controller / secret / ext-ui overrides
-		"CLASH_HOME_DIR",  // the helper sets -d itself
-		"CLASH_CONFIG_",   // -f / -config are set by the helper
-	}
-)
+// Environment policy. Only an exact list of harmless tuning variables is
+// passed to the root Mihomo. Everything else is refused, in particular
+// SAFE_PATHS / SKIP_SAFE_PATH_CHECK (they widen the paths Mihomo may read
+// and write as root), every CLASH_* variable (post-up/down scripts run as
+// root, controller/secret/config overrides), DYLD_*, LD_*, PATH, GODEBUG.
+var allowedEnv = map[string]bool{
+	"DISABLE_LOOPBACK_DETECTOR": true,
+	"GOGC":                      true,
+	"GOMEMLIMIT":                true,
+}
 
 // FilterEnv returns the subset of env the helper passes to Mihomo, or an
 // error naming the first refused variable.
@@ -192,17 +187,4 @@ func FilterEnv(env []string) ([]string, error) {
 	return out, nil
 }
 
-func envAllowed(key string) bool {
-	if allowedEnvExact[key] {
-		return true
-	}
-	if !strings.HasPrefix(key, "CLASH_") {
-		return false
-	}
-	for _, p := range deniedEnvPrefixes {
-		if strings.HasPrefix(key, p) {
-			return false
-		}
-	}
-	return true
-}
+func envAllowed(key string) bool { return allowedEnv[key] }

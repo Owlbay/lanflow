@@ -4,7 +4,7 @@
 // Usage:
 //
 //	lanflow-helper run                                     service entry (launchd / SCM)
-//	lanflow-helper install --core <path> --data-dir <dir> --uid <uid|sid>
+//	lanflow-helper install --core <path> --data-dir <dir> --uid <uid|sid> [--allow-downgrade]
 //	lanflow-helper uninstall
 //	lanflow-helper version
 //
@@ -49,9 +49,11 @@ func main() {
 		fs.StringVar(&o.CoreBin, "core", "", "Mihomo binary to allow")
 		fs.StringVar(&o.DataDir, "data-dir", "", "user's Lanflow data directory")
 		fs.StringVar(&o.UID, "uid", "", "installing user's uid (macOS) or SID (Windows)")
+		fs.BoolVar(&o.AllowDowngrade, "allow-downgrade", false, "replace a newer installed helper")
 		if err = fs.Parse(os.Args[2:]); err != nil {
 			os.Exit(2)
 		}
+		o.Version = version
 		logger := newLogger(filepath.Join(service.LogDir, "install.log"))
 		logger.Printf("install %s core=%s dataDir=%s uid=%s", version, o.CoreBin, o.DataDir, o.UID)
 		if err = service.Install(ctx, o, logger.Printf); err != nil {
@@ -78,7 +80,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: lanflow-helper run | install --core <path> --data-dir <dir> --uid <uid> | uninstall | version")
+	fmt.Fprintln(os.Stderr, "usage: lanflow-helper run | install --core <path> --data-dir <dir> --uid <uid> [--allow-downgrade] | uninstall | version")
 }
 
 // newLogger logs to stderr and to path. Under launchd stderr already is
@@ -89,10 +91,15 @@ func newLogger(path string) *log.Logger {
 	if fi, err := os.Stderr.Stat(); err == nil && fi.Mode().IsRegular() && path == service.LogPath {
 		return log.New(os.Stderr, "", log.LstdFlags)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-		if f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644); err == nil {
-			writers = append(writers, f)
-		}
+	// LogDir is created (or re-secured) for SYSTEM/root only, and the
+	// file is opened without following links: install runs elevated, so a
+	// log path redirected by an unprivileged user must not be written.
+	if err := service.PrepareLogDir(); err != nil {
+		fmt.Fprintln(os.Stderr, "lanflow-helper: log dir:", err)
+	} else if f, err := service.OpenAdminLog(path); err == nil {
+		writers = append(writers, f)
+	} else {
+		fmt.Fprintln(os.Stderr, "lanflow-helper: log file:", err)
 	}
 	return log.New(io.MultiWriter(writers...), "", log.LstdFlags)
 }

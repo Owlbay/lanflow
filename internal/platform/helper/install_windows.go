@@ -26,6 +26,9 @@ func install(ctx context.Context, o InstallOptions) error {
 	if fi, err := os.Stat(o.HelperBin); err != nil || !fi.Mode().IsRegular() {
 		return fmt.Errorf("找不到权限组件程序: %s", o.HelperBin)
 	}
+	if err := checkDowngrade(ctx, o.HelperBin); err != nil {
+		return err
+	}
 	sid, err := currentUserSID()
 	if err != nil {
 		return err
@@ -49,11 +52,7 @@ func uninstall(ctx context.Context) error {
 
 // helperBinary prefers the installed copy, else the one next to the app.
 func helperBinary() (string, error) {
-	pf := os.Getenv("ProgramFiles")
-	if pf == "" {
-		pf = `C:\Program Files`
-	}
-	installedBin := filepath.Join(pf, "Lanflow Helper", "lanflow-helper.exe")
+	installedBin := installedHelperPath()
 	if fi, err := os.Stat(installedBin); err == nil && fi.Mode().IsRegular() {
 		return installedBin, nil
 	}

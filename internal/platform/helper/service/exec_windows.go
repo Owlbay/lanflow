@@ -68,8 +68,4 @@ func PipeSDDL(sid string) string {
 	return "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;" + sid + ")"
 }
 
-// chownToUser is a no-op on Windows: files created under the user's
-// profile inherit a DACL that already grants the user full control.
-func chownToUser(string, string) error { return nil }
-
 func defaultHooks() Hooks { return Hooks{} }

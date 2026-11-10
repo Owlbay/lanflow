@@ -93,8 +93,9 @@ func TestInstallBuildsOsascriptAndMapsCancel(t *testing.T) {
 
 	var gotName string
 	var gotArgs []string
-	oldExec, oldUID := execCommand, currentUID
-	t.Cleanup(func() { execCommand, currentUID = oldExec, oldUID })
+	oldExec, oldUID, oldVer := execCommand, currentUID, helperVersionOf
+	t.Cleanup(func() { execCommand, currentUID, helperVersionOf = oldExec, oldUID, oldVer })
+	helperVersionOf = func(context.Context, string) (string, error) { return "", errors.New("not a real helper") }
 	currentUID = func() int { return 501 }
 	execCommand = func(_ context.Context, name string, args ...string) ([]byte, error) {
 		gotName, gotArgs = name, args
@@ -109,7 +110,8 @@ func TestInstallBuildsOsascriptAndMapsCancel(t *testing.T) {
 		t.Fatalf("command = %s %v", gotName, gotArgs)
 	}
 	script := gotArgs[1]
-	wantShell := shellCommand([]string{helperBin, "install", "--core", coreBin, "--data-dir", dataDir, "--uid", "501"})
+	sum, _ := fileSHA256(helperBin)
+	wantShell := verifiedExec(helperBin, sum, []string{"install", "--core", coreBin, "--data-dir", dataDir, "--uid", "501"})
 	if !strings.Contains(script, appleQuote(wantShell)) {
 		t.Fatalf("script %q does not contain %q", script, wantShell)
 	}
@@ -137,5 +139,70 @@ func TestInstallBuildsOsascriptAndMapsCancel(t *testing.T) {
 func TestIsUserCanceled(t *testing.T) {
 	if !isUserCanceled("execution error: User canceled. (-128)") || isUserCanceled("other error (-1)") {
 		t.Fatal("cancel detection wrong")
+	}
+}
+
+// fakeHelperScript writes a shell script that prints its arguments, one
+// per line, standing in for lanflow-helper.
+func fakeHelperScript(t *testing.T, dir string) string {
+	t.Helper()
+	p := filepath.Join(dir, "lanflow-helper")
+	if err := os.WriteFile(p, []byte("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// TestVerifiedExecRunsVerifiedCopy runs the generated script through
+// /bin/sh (unprivileged): with the right digest the copy runs with the
+// arguments intact; with a wrong digest, or when the source changes after
+// the digest was taken, nothing runs.
+func TestVerifiedExecRunsVerifiedCopy(t *testing.T) {
+	if _, err := os.Stat("/private/var/tmp"); err != nil {
+		t.Skip("no /private/var/tmp")
+	}
+	dir := t.TempDir()
+	bin := fakeHelperScript(t, dir)
+	sum, err := fileSHA256(bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"install", "--data-dir", `/Users/o'neil/$HOME/` + "`id`"}
+	out, err := exec.Command("/bin/sh", "-c", verifiedExec(bin, sum, args)).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	if got := strings.Split(strings.TrimSuffix(string(out), "\n"), "\n"); strings.Join(got, "\x00") != strings.Join(args, "\x00") {
+		t.Fatalf("got %q want %q", got, args)
+	}
+
+	// Swapped after hashing (the TOCTOU the copy closes): refused.
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\necho pwned\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out, err = exec.Command("/bin/sh", "-c", verifiedExec(bin, sum, args)).CombinedOutput()
+	if err == nil || strings.Contains(string(out), "pwned") || !strings.Contains(string(out), verifyFailed) {
+		t.Fatalf("tampered helper ran: %v %s", err, out)
+	}
+}
+
+func TestHelperDigestPinned(t *testing.T) {
+	dir := t.TempDir()
+	bin := fakeHelperScript(t, dir)
+	sum, _ := fileSHA256(bin)
+	old := ExpectedHelperSHA256
+	t.Cleanup(func() { ExpectedHelperSHA256 = old })
+
+	ExpectedHelperSHA256 = ""
+	if got, err := helperDigest(bin); err != nil || got != sum {
+		t.Fatalf("unpinned: %s %v", got, err)
+	}
+	ExpectedHelperSHA256 = strings.ToUpper(sum)
+	if got, err := helperDigest(bin); err != nil || got != sum {
+		t.Fatalf("pinned: %s %v", got, err)
+	}
+	ExpectedHelperSHA256 = strings.Repeat("0", 64)
+	if _, err := helperDigest(bin); err == nil {
+		t.Fatal("mismatching helper accepted")
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 	"time"
 
@@ -244,22 +243,4 @@ func NewHandler(s *Supervisor, version string) protocol.Handler {
 			return protocol.Response{Error: fmt.Sprintf("未知操作: %q", req.Op)}
 		}
 	}
-}
-
-// openLogFile rotates path at LogRotateSize (keeping path.1) and opens it
-// for appending; the file is then handed to the user (unix).
-func openLogFile(path string, uid string) (io.WriteCloser, error) {
-	if fi, err := os.Stat(path); err == nil && fi.Size() >= LogRotateSize {
-		_ = os.Rename(path, path+".1")
-	}
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	if err := chownToUser(path, uid); err != nil {
-		_ = f.Close()
-		return nil, err
-	}
-	_ = chownToUser(path+".1", uid)
-	return f, nil
 }
