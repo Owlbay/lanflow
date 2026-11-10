@@ -392,8 +392,8 @@ func pickTestConnState(conns []model.Connection, closed *ring[model.Connection],
 	if best != nil {
 		return best, true
 	}
-	for i := closed.len() - 1; i >= 0; i-- { // newest closed first
-		c := closed.at(i)
+	for i := closed.Len() - 1; i >= 0; i-- { // newest closed first
+		c := closed.At(i)
 		if match(&c) {
 			return &c, false
 		}

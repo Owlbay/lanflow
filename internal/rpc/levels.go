@@ -9,26 +9,30 @@ package rpc
 // refreshes, DNS queries) count as reads: they only measure.
 var methodLevels = map[string]Level{
 	// ---- reads ----
-	"Status":            LevelRead,
-	"TrafficHistory":    LevelRead,
-	"Proxies":           LevelRead,
-	"Subscriptions":     LevelRead, // URLs removed for agents
-	"Connections":       LevelSensitive,
-	"ClosedConnections": LevelSensitive,
-	"Logs":              LevelSensitive,
-	"Rules":             LevelRead,
-	"CustomRules":       LevelRead,
-	"RuleProviders":     LevelRead,
-	"ExitRoutes":        LevelRead,
-	"You":               LevelRead,
-	"NetInfo":           LevelRead,
-	"Sites":             LevelRead,
-	"Settings":          LevelRead, // redacted for agents
-	"Overrides":         LevelRead,
-	"TakeNotices":       LevelUI, // clears the queue the window shows
-	"ConfigDir":         LevelRead,
-	"LogDir":            LevelRead,
-	"OnChange":          LevelRead, // served as subscribe
+	"Status":                 LevelRead,
+	"TrafficHistory":         LevelRead,
+	"Proxies":                LevelRead,
+	"Subscriptions":          LevelRead, // URLs removed for agents
+	"Connections":            LevelSensitive,
+	"ClosedConnections":      LevelSensitive,
+	"Logs":                   LevelSensitive,
+	"ConnectionsSince":       LevelSensitive,
+	"ClosedConnectionsSince": LevelSensitive,
+	"LogsSince":              LevelSensitive,
+	"AppLogsSince":           LevelRead, // redacted when written, like AppLogs
+	"Rules":                  LevelRead,
+	"CustomRules":            LevelRead,
+	"RuleProviders":          LevelRead,
+	"ExitRoutes":             LevelRead,
+	"You":                    LevelRead,
+	"NetInfo":                LevelRead,
+	"Sites":                  LevelRead,
+	"Settings":               LevelRead, // redacted for agents
+	"Overrides":              LevelRead,
+	"TakeNotices":            LevelUI, // clears the queue the window shows
+	"ConfigDir":              LevelRead,
+	"LogDir":                 LevelRead,
+	"OnChange":               LevelRead, // served as subscribe
 
 	// ---- core & switches ----
 	"StartCore":          LevelWrite,

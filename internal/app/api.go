@@ -61,7 +61,15 @@ type API interface {
 	Connections() []model.Connection       // active
 	ClosedConnections() []model.Connection // most recent first, at most 500
 	Logs() []model.LogEntry                // at most 1000, oldest first
-	Rules() []model.Rule                   // runtime rules incl. custom ones first
+	// The incremental forms of Connections, ClosedConnections, Logs and
+	// AppLogs, for a window in another process (model/page.go): since is
+	// the Cursor of the previous answer (0 = everything), limit caps a
+	// page (<= 0: no cap).
+	ConnectionsSince(since uint64) model.ConnDelta
+	ClosedConnectionsSince(since uint64, limit int) model.ConnPage
+	LogsSince(since uint64, limit int) model.LogPage
+	AppLogsSince(since uint64, limit int) model.LogPage
+	Rules() []model.Rule // runtime rules incl. custom ones first
 	CustomRules() []model.CustomRule
 	RuleProviders() []model.RuleProvider
 	ExitRoutes() []model.ExitRoute // main group first

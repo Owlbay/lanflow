@@ -29,9 +29,11 @@ const (
 	trayErrState                  // error: with a red badge
 )
 
-// tray is the menu bar / notification area icon and its menu.
+// tray is the menu bar / notification area icon and its menu. It acts
+// through its host: the window's shell in the single process, the
+// service process's Background otherwise (host.go).
 type tray struct {
-	s     *Shell
+	h     host
 	t     *mygo.Tray
 	mu    sync.Mutex
 	menu  *mygo.Menu
@@ -45,17 +47,25 @@ type tray struct {
 
 // StartTray creates the tray icon; call it once the app is ready.
 func (s *Shell) StartTray() error {
-	tr := &tray{s: s, pngs: map[trayState][]byte{}}
-	t, err := mygo.NewTray(mygo.TrayOptions{ID: "lanflow", ToolTip: i18n.T("澜流 Lanflow")})
+	tr, err := startTray(s)
 	if err != nil {
 		return err
 	}
-	tr.t = t
 	s.tray = tr
+	return nil
+}
+
+func startTray(h host) (*tray, error) {
+	tr := &tray{h: h, pngs: map[trayState][]byte{}}
+	t, err := mygo.NewTray(mygo.TrayOptions{ID: "lanflow", ToolTip: i18n.T("澜流 Lanflow")})
+	if err != nil {
+		return nil, err
+	}
+	tr.t = t
 	t.OnAppearanceChange(func() { tr.setIcon(tr.icon, true) })
 	if runtime.GOOS == "windows" {
 		// Left click opens the window, right click the menu.
-		t.OnClick(s.ShowWindow)
+		t.OnClick(func() { h.showWindow("") })
 		t.OnRightClick(func() {
 			tr.mu.Lock()
 			m := tr.menu
@@ -69,7 +79,7 @@ func (s *Shell) StartTray() error {
 		})
 	}
 	tr.refresh(true)
-	return nil
+	return tr, nil
 }
 
 func (tr *tray) destroy() {
@@ -83,7 +93,7 @@ func (tr *tray) changed(t app.Topic) {
 	switch t {
 	case app.TopicTraffic:
 		// Every second: only the speed beside the icon can have changed.
-		tr.setTitle(tr.s.api.Status())
+		tr.setTitle(tr.h.hostAPI().Status())
 	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings:
 		tr.refresh(false)
 	}
@@ -92,10 +102,11 @@ func (tr *tray) changed(t app.Topic) {
 // refresh rebuilds the menu when what it shows changed, and updates the
 // status line otherwise.
 func (tr *tray) refresh(force bool) {
-	st := tr.s.api.Status()
-	px := tr.s.api.Proxies()
-	subs := tr.s.api.Subscriptions()
-	acc := tr.s.api.Settings().GlobalShortcut
+	api := tr.h.hostAPI()
+	st := api.Status()
+	px := api.Proxies()
+	subs := api.Subscriptions()
+	acc := api.Settings().GlobalShortcut
 	state := trayOff
 	switch {
 	case st.Core == model.CoreError || st.Core == model.CoreMissing:
@@ -108,8 +119,12 @@ func (tr *tray) refresh(force bool) {
 	tr.setIcon(state, false)
 	tr.setTitle(st)
 
+	extra := tr.h.extraItems()
 	var sig strings.Builder
-	fmt.Fprintf(&sig, "%s|%v|%s|%s|%s|%s|", st.Core, st.SystemProxy, st.Mode, st.CurrentSubscription, acc, i18n.Lang())
+	fmt.Fprintf(&sig, "%s|%v|%s|%s|%s|%s|%d|", st.Core, st.SystemProxy, st.Mode, st.CurrentSubscription, acc, i18n.Lang(), len(extra))
+	for _, it := range extra {
+		sig.WriteString(it.Label + ";")
+	}
 	g, ok := mainGroup(px, st)
 	if ok {
 		fmt.Fprintf(&sig, "%s=%s;%v;", g.Name, g.Now, tr.menuIcon(g.Icon) != nil)
@@ -126,7 +141,7 @@ func (tr *tray) refresh(force bool) {
 	menu := tr.menu
 	tr.mu.Unlock()
 	if rebuild {
-		menu = tr.build(st, px, subs, g, ok, acc)
+		menu = tr.build(st, px, subs, g, ok, acc, extra)
 		tr.mu.Lock()
 		tr.menu = menu
 		tr.mu.Unlock()
@@ -176,19 +191,26 @@ func statusLine(st model.Status) string {
 
 // build makes the menu template (docs/design.md §7). acc is the global
 // shortcut of the settings, shown beside 系统代理 ("" = none).
-func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subscription, g model.ProxyGroup, hasGroup bool, acc string) *mygo.Menu {
-	s := tr.s
+func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subscription, g model.ProxyGroup, hasGroup bool, acc string, extra []*mygo.MenuItem) *mygo.Menu {
+	h := tr.h
+	api := h.hostAPI()
 	run := st.Core == model.CoreRunning
 	busy := st.Core == model.CoreStarting || st.Core == model.CoreMissing
 	items := []*mygo.MenuItem{
 		{ID: "status", Label: statusLine(st), Disabled: true},
 		mygo.Separator(),
+	}
+	if len(extra) > 0 {
+		items = append(items, extra...)
+		items = append(items, mygo.Separator())
+	}
+	items = append(items, []*mygo.MenuItem{
 		{ID: "core", Label: i18n.T("内核"), Type: mygo.MenuItemCheckbox, Checked: run || st.Core == model.CoreStarting, Disabled: busy,
 			Click: func(it *mygo.MenuItem, _ *mygo.Window) {
 				if it.Checked {
-					s.run(s.api.StartCore, i18n.T("内核已启动"))
+					h.runJob(api.StartCore, i18n.T("内核已启动"))
 				} else {
-					s.run(s.api.StopCore, i18n.T("内核已停止"))
+					h.runJob(api.StopCore, i18n.T("内核已停止"))
 				}
 			}},
 		{ID: "sysproxy", Label: i18n.T("系统代理"), Type: mygo.MenuItemCheckbox, Checked: run && st.SystemProxy, Disabled: busy, Accelerator: acc,
@@ -198,24 +220,20 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 				if on {
 					msg = i18n.T("系统代理已开启")
 				}
-				s.run(func() error { return s.api.SetSystemProxy(on) }, msg)
+				h.runJob(func() error { return api.SetSystemProxy(on) }, msg)
 			}},
 		{ID: "tun", Label: i18n.T("TUN 模式"), Type: mygo.MenuItemCheckbox, Checked: st.TUN, Disabled: busy,
 			Click: func(it *mygo.MenuItem, _ *mygo.Window) {
-				on := it.Checked
-				if on && !s.api.TUNHelperInstalled() {
-					s.ShowWindow() // the helper install asks in the window first
-				}
-				env.SetTUN(s.Env(), on)
+				h.setTUN(it.Checked)
 			}},
 		{Label: i18n.T("模式"), Submenu: tr.modeItems(st)},
-	}
+	}...)
 	if hasGroup {
 		items = append(items,
 			&mygo.MenuItem{Label: i18n.Tf("%s：%s", g.Name, g.Now), Disabled: !run, Icon: tr.menuIcon(g.Icon), Submenu: tr.nodeItems(g, px)},
 			&mygo.MenuItem{Label: i18n.T("测试当前组延迟"), Disabled: !run, Click: func(*mygo.MenuItem, *mygo.Window) {
 				name := g.Name
-				s.run(func() error { return s.api.TestGroupDelay(name) }, i18n.Tf("「%s」测速完成", name))
+				h.runJob(func() error { return api.TestGroupDelay(name) }, i18n.Tf("「%s」测速完成", name))
 			}},
 		)
 	}
@@ -229,23 +247,23 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 		&mygo.MenuItem{Label: i18n.Tf("订阅：%s", curSub), Disabled: len(subs) == 0, Submenu: tr.subItems(subs)},
 		mygo.Separator(),
 		&mygo.MenuItem{Label: i18n.T("复制终端代理命令"), Submenu: tr.commandItems(st.MixedPort)},
-		&mygo.MenuItem{Label: i18n.T("打开澜流"), Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { s.ShowWindow() }},
-		&mygo.MenuItem{ID: "feedback", Label: i18n.T("反馈问题…"), Click: func(*mygo.MenuItem, *mygo.Window) { s.OpenFeedback("") }},
+		&mygo.MenuItem{Label: i18n.T("打开澜流"), Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { h.showWindow("") }},
+		&mygo.MenuItem{ID: "feedback", Label: i18n.T("反馈问题…"), Click: func(*mygo.MenuItem, *mygo.Window) { h.showWindow(OpenFeedback) }},
 		mygo.Separator(),
-		&mygo.MenuItem{Label: i18n.T("退出澜流"), Accelerator: "CmdOrCtrl+Q", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
+		&mygo.MenuItem{Label: i18n.T("退出澜流"), Accelerator: "CmdOrCtrl+Q", Click: func(*mygo.MenuItem, *mygo.Window) { h.quit() }},
 	)
 	return mygo.NewMenu(items)
 }
 
 // commandItems is the 复制终端代理命令 submenu: one entry per shell family.
 func (tr *tray) commandItems(port int) []*mygo.MenuItem {
-	s := tr.s
+	h := tr.h
 	var out []*mygo.MenuItem
 	for _, sc := range shellCommands(port) {
 		cmd := sc.Cmd
 		out = append(out, &mygo.MenuItem{Label: sc.Label, ToolTip: cmd, Click: func(*mygo.MenuItem, *mygo.Window) {
 			if err := mygo.Clipboard.Write(transfer.TextData(cmd)); err == nil {
-				s.toast(toastReq{msg: i18n.T("已复制")})
+				h.note(i18n.T("已复制"))
 			}
 		}})
 	}
@@ -253,20 +271,20 @@ func (tr *tray) commandItems(port int) []*mygo.MenuItem {
 }
 
 func (tr *tray) modeItems(st model.Status) []*mygo.MenuItem {
-	s := tr.s
+	h := tr.h
 	var out []*mygo.MenuItem
 	for _, m := range []model.Mode{model.ModeRule, model.ModeGlobal, model.ModeDirect} {
 		mode := m
 		out = append(out, &mygo.MenuItem{Label: env.ModeName(m), Type: mygo.MenuItemRadio, Checked: st.Mode == m,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				s.run(func() error { return s.api.SetMode(mode) }, i18n.Tf("已切换到%s模式", env.ModeName(mode)))
+				h.runJob(func() error { return h.hostAPI().SetMode(mode) }, i18n.Tf("已切换到%s模式", env.ModeName(mode)))
 			}})
 	}
 	return out
 }
 
 func (tr *tray) nodeItems(g model.ProxyGroup, px model.ProxySnapshot) []*mygo.MenuItem {
-	s := tr.s
+	h := tr.h
 	var out []*mygo.MenuItem
 	for _, n := range g.All {
 		name := n
@@ -276,20 +294,20 @@ func (tr *tray) nodeItems(g model.ProxyGroup, px model.ProxySnapshot) []*mygo.Me
 		}
 		out = append(out, &mygo.MenuItem{Label: label, Type: mygo.MenuItemRadio, Checked: g.Now == n, Disabled: g.Type != model.GroupSelect,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				s.run(func() error { return s.api.SelectProxy(g.Name, name) }, i18n.Tf("已切换到 %s", name))
+				h.runJob(func() error { return h.hostAPI().SelectProxy(g.Name, name) }, i18n.Tf("已切换到 %s", name))
 			}})
 	}
 	return out
 }
 
 func (tr *tray) subItems(subs []model.Subscription) []*mygo.MenuItem {
-	s := tr.s
+	h := tr.h
 	var out []*mygo.MenuItem
 	for _, sub := range subs {
 		id, name := sub.ID, sub.Name
 		out = append(out, &mygo.MenuItem{Label: sub.Name, Type: mygo.MenuItemRadio, Checked: sub.Current,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
-				s.run(func() error { return s.api.UseSubscription(id) }, i18n.Tf("已切换到 %s", name))
+				h.runJob(func() error { return h.hostAPI().UseSubscription(id) }, i18n.Tf("已切换到 %s", name))
 			}})
 	}
 	return out
@@ -300,11 +318,11 @@ func (tr *tray) subItems(subs []model.Subscription) []*mygo.MenuItem {
 // setTitle shows the live speed beside the menu bar icon (macOS only,
 // docs/design.md §7) while the core runs, unless turned off in settings.
 func (tr *tray) setTitle(st model.Status) {
-	if tr.t == nil || !tr.s.opts.Mac {
+	if tr.t == nil || !tr.h.mac() {
 		return
 	}
 	title := ""
-	if st.Core == model.CoreRunning && !tr.s.api.Settings().HideTraySpeed {
+	if st.Core == model.CoreRunning && !tr.h.hostAPI().Settings().HideTraySpeed {
 		title = traySpeed(st.Up, st.Down)
 	}
 	if title == tr.title {
