@@ -99,7 +99,9 @@ func Install(ctx context.Context, o InstallOptions, logf Logf) error {
 	if err := SaveConfig(ConfigPath, cfg, 0o644); err != nil {
 		return fmt.Errorf("写入配置失败: %w", err)
 	}
-	_ = os.MkdirAll(LogDir, 0o755)
+	if err := PrepareLogDir(); err != nil {
+		return err
+	}
 
 	conf := mgr.Config{
 		DisplayName:  "Lanflow Helper",

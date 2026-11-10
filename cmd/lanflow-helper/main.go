@@ -89,10 +89,15 @@ func newLogger(path string) *log.Logger {
 	if fi, err := os.Stderr.Stat(); err == nil && fi.Mode().IsRegular() && path == service.LogPath {
 		return log.New(os.Stderr, "", log.LstdFlags)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
-		if f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0o644); err == nil {
-			writers = append(writers, f)
-		}
+	// LogDir is created (or re-secured) for SYSTEM/root only, and the
+	// file is opened without following links: install runs elevated, so a
+	// log path redirected by an unprivileged user must not be written.
+	if err := service.PrepareLogDir(); err != nil {
+		fmt.Fprintln(os.Stderr, "lanflow-helper: log dir:", err)
+	} else if f, err := service.OpenAdminLog(path); err == nil {
+		writers = append(writers, f)
+	} else {
+		fmt.Fprintln(os.Stderr, "lanflow-helper: log file:", err)
 	}
 	return log.New(io.MultiWriter(writers...), "", log.LstdFlags)
 }

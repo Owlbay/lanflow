@@ -46,3 +46,41 @@ func TestCheckNotSystemDir(t *testing.T) {
 		t.Errorf("user dir refused: %v", err)
 	}
 }
+
+func TestOpenLogFileWindowsRefusesLinks(t *testing.T) {
+	d, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(d, "target")
+	if err := os.WriteFile(target, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	hard := filepath.Join(d, "hard.log")
+	if err := os.Link(target, hard); err != nil {
+		t.Fatal(err)
+	}
+	if w, err := openLogFile(hard, ""); err == nil {
+		_ = w.Close()
+		t.Fatal("opened a hard-linked log")
+	}
+	sym := filepath.Join(d, "sym.log")
+	if err := os.Symlink(target, sym); err == nil {
+		if w, err := openLogFile(sym, ""); err == nil {
+			_ = w.Close()
+			t.Fatal("opened a symlinked log")
+		}
+	}
+	if b, _ := os.ReadFile(target); string(b) != "keep" {
+		t.Fatalf("target changed: %q", b)
+	}
+	ok := filepath.Join(d, "core.log")
+	w, err := openLogFile(ok, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("a")); err != nil {
+		t.Fatal(err)
+	}
+	_ = w.Close()
+}
