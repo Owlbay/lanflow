@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -580,4 +581,10 @@ func (p *Page) terminalRow(c *ui.Context, st model.Status) {
 			p.e.Toast(i18n.T("已复制"), false)
 		}
 	})
+}
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicProxies, app.TopicSubs, app.TopicConns, app.TopicExits, app.TopicSettings, app.TopicCoreDownload}
 }

@@ -11,6 +11,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -466,4 +467,10 @@ func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.El
 		i += j + len(q)
 	}
 	return ui.RichText(c, spans...)
+}
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicRules, app.TopicProxies, app.TopicSubs}
 }

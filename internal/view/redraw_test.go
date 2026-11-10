@@ -7,6 +7,7 @@ import (
 
 	"lanflow/internal/app"
 	"lanflow/internal/app/fake"
+	"lanflow/internal/view/env"
 )
 
 // TestDataRedrawsAreRateLimited: the first change after a quiet spell
@@ -56,5 +57,25 @@ func TestDataRedrawsAreRateLimited(t *testing.T) {
 	}
 	if count() != 3 {
 		t.Fatalf("the inactive frame never came: %d", count())
+	}
+}
+
+// TestPageTopics: a change rebuilds the page shown only when the page
+// reads that topic; the shell's own topics always do.
+func TestPageTopics(t *testing.T) {
+	api := fake.NewInstant()
+	s := New(api, Options{Mac: true, Sync: true})
+	defer s.Close()
+	if !s.wants(app.TopicTraffic) || s.wants(app.TopicLogs) {
+		t.Fatal("概览 reads traffic, not logs")
+	}
+	s.navigate(env.Logs, "")
+	if !s.wants(app.TopicLogs) || s.wants(app.TopicTraffic) {
+		t.Fatal("日志 reads logs, not traffic")
+	}
+	for _, tp := range shellTopics {
+		if !s.wants(tp) {
+			t.Fatalf("%s should always rebuild", tp)
+		}
 	}
 }

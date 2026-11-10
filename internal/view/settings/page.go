@@ -16,6 +16,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -787,3 +788,9 @@ func joinLines(xs []string) string { return strings.Join(xs, "\n") }
 
 // yaml is the editor language for override texts.
 var yaml = editor.LanguageFor("override.yaml")
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicSettings, app.TopicSubs, app.TopicCoreDownload, app.TopicCores, app.TopicNet}
+}

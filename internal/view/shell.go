@@ -72,6 +72,16 @@ type Options struct {
 // pageView is what every page package exports.
 type pageView interface{ View(c *ui.Context) }
 
+// topicPage is a page that names the service topics its view reads
+// (Topics). A change of another topic does not rebuild it while it is
+// shown; a page without Topics is rebuilt on every change.
+type topicPage interface{ Topics() []app.Topic }
+
+// shellTopics are the topics the shell's own parts draw: the sidebar's
+// status bar and badge (Status), the queued notices (Notice) and the
+// language and appearance (Settings). They rebuild whatever page shows.
+var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSettings}
+
 // toastReq is a queued toast, shown on the next build.
 type toastReq struct {
 	msg, detail string
@@ -102,6 +112,11 @@ type Shell struct {
 	page  env.Page
 	args  map[env.Page]string
 	pages map[env.Page]pageView
+
+	// topics are the topics that rebuild each page (nil: all), fixed in
+	// New; shown is the page shown, for onChange on other goroutines.
+	topics map[env.Page]map[app.Topic]bool
+	shown  atomic.Value // env.Page
 
 	mu      sync.Mutex
 	pending []func()
@@ -185,6 +200,22 @@ func New(api app.API, opts Options) *Shell {
 		env.Probe:    probe.New(s.env),
 		env.Settings: settings.New(s.env),
 	}
+	s.topics = map[env.Page]map[app.Topic]bool{}
+	for id, p := range s.pages {
+		tp, ok := p.(topicPage)
+		if !ok {
+			continue
+		}
+		set := map[app.Topic]bool{}
+		for _, t := range shellTopics {
+			set[t] = true
+		}
+		for _, t := range tp.Topics() {
+			set[t] = true
+		}
+		s.topics[id] = set
+	}
+	s.shown.Store(s.page)
 	s.off = api.OnChange(s.onChange)
 	return s
 }
@@ -343,7 +374,17 @@ func (s *Shell) onChange(t app.Topic) {
 	if s.tray != nil {
 		s.tray.changed(t)
 	}
-	s.redrawData()
+	if s.wants(t) {
+		s.redrawData()
+	}
+}
+
+// wants reports whether a change of t rebuilds the page shown: the
+// shell's own topics always do, the rest only when the page reads them.
+func (s *Shell) wants(t app.Topic) bool {
+	page, _ := s.shown.Load().(env.Page)
+	set, ok := s.topics[page]
+	return !ok || set[t]
 }
 
 // post runs fn on the UI thread before the next build and redraws.
@@ -397,6 +438,7 @@ func (s *Shell) navigate(p env.Page, arg string) {
 		}
 	}
 	s.page = p
+	s.shown.Store(p)
 	if arg != "" {
 		s.args[p] = arg
 	}
