@@ -116,3 +116,33 @@ func TestNotRunning(t *testing.T) {
 		t.Fatalf("code %d, %q", code, errb.String())
 	}
 }
+
+func TestConfigSync(t *testing.T) {
+	s := rpctest.Start(t, nil)
+	out, errs, code := run(t, s, "config", "sync", "status")
+	if code != 0 {
+		t.Fatalf("status: %d %s", code, errs)
+	}
+	var v SyncStatusView
+	if err := json.Unmarshal([]byte(out), &v); err != nil || v.Mode != "off" || v.State != "off" {
+		t.Fatalf("status output %q: %v", out, err)
+	}
+	if err := s.Fake.SetConfigSync("folder", "/Users/demo/Sync", ""); err != nil {
+		t.Fatal(err)
+	}
+	out, _, _ = run(t, s, "config", "sync", "status", "--format", "table")
+	if !strings.Contains(out, "/Users/demo/Sync/lanflow.yaml") {
+		t.Fatalf("table:\n%s", out)
+	}
+	out, errs, code = run(t, s, "config", "sync", "apply", "lanflow.yaml", "--dry-run")
+	if code != 0 {
+		t.Fatalf("apply: %d %s", code, errs)
+	}
+	var pv PatchView
+	if err := json.Unmarshal([]byte(out), &pv); err != nil || pv.Applied {
+		t.Fatalf("apply output %q: %v", out, err)
+	}
+	if _, _, code = run(t, s, "config", "sync", "frobnicate"); code != ExitUsage {
+		t.Fatalf("unknown sub: %d", code)
+	}
+}

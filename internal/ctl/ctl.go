@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,8 @@ const usage = `用法: lanflow ctl <命令> [参数] [--format json|table]
   config get [字段路径]                 读取设置（已脱敏），如 config get DNS.TakeOver
   config set <字段路径> <值> [--dry-run] 修改一项设置，值按 JSON 解析，否则视为字符串
   config apply <文件|-> [--dry-run]      按 JSON 补丁修改设置；--dry-run 只输出差异
+  config sync status                  配置同步状态：同步文件、上次加载 / 写入、错误行号、冲突副本
+  config sync apply [lanflow.yaml] [--dry-run]  校验并加载 lanflow.yaml（默认同步文件）；--dry-run 只输出差异
   diag [--run]                        诊断摘要；--run 先重新测试网站连通性和泄漏
   undo                                撤销 ctl/MCP 最近一次配置写入
   audit [条数]                         最近的审计记录
@@ -591,6 +594,8 @@ func (r *runner) configCmd(sub string) (any, error) {
 			return nil, err
 		}
 		return r.patch(PathPatch(r.arg(2), jsonOrString(r.arg(3))))
+	case "sync":
+		return r.syncCmd(r.arg(2))
 	case "apply":
 		if err := r.need(3, "config apply <文件|->"); err != nil {
 			return nil, err
@@ -612,6 +617,64 @@ func (r *runner) configCmd(sub string) (any, error) {
 		return r.patch(p)
 	}
 	return nil, usageError("未知命令 config " + sub)
+}
+
+// syncCmd is `config sync status|apply`.
+func (r *runner) syncCmd(sub string) (any, error) {
+	switch sub {
+	case "status", "":
+		var st model.ConfigSyncStatus
+		if err := r.c.Conn().CallAPI(context.Background(), "ConfigSyncStatus", nil, &st); err != nil {
+			return nil, err
+		}
+		return syncStatusView(st), nil
+	case "apply":
+		path := r.arg(3)
+		if path != "" {
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				return nil, err
+			}
+			path = abs
+		}
+		var res model.ConfigApplyResult
+		if err := r.c.Conn().CallAPI(context.Background(), "ApplyConfigFile", []any{path, r.o.dryRun}, &res); err != nil {
+			return nil, err
+		}
+		return PatchView{Applied: res.Applied, Changed: res.Changed, Diff: DiffText(res.Diff)}, nil
+	}
+	return nil, usageError("未知命令 config sync " + sub)
+}
+
+// SyncStatusView is the output of config sync status.
+type SyncStatusView struct {
+	Mode           string   `json:"mode"`
+	State          string   `json:"state"`
+	Path           string   `json:"path,omitempty"`
+	LastAppliedAt  string   `json:"lastAppliedAt,omitempty"`
+	LastWrittenAt  string   `json:"lastWrittenAt,omitempty"`
+	Summary        string   `json:"summary,omitempty"`
+	Error          string   `json:"error,omitempty"`
+	ErrorLine      int      `json:"errorLine,omitempty"`
+	Conflicts      []string `json:"conflicts,omitempty"`
+	MissingSecrets []string `json:"missingSecrets,omitempty"`
+}
+
+// syncStatusView builds the view of st.
+func syncStatusView(st model.ConfigSyncStatus) SyncStatusView {
+	mode := st.Mode
+	if mode == "" {
+		mode = "off"
+	}
+	v := SyncStatusView{Mode: mode, State: st.State, Path: st.Path, Summary: st.Summary, Error: st.Error,
+		ErrorLine: st.ErrorLine, Conflicts: st.Conflicts, MissingSecrets: st.MissingSecrets}
+	if !st.LastAppliedAt.IsZero() {
+		v.LastAppliedAt = st.LastAppliedAt.Local().Format(time.RFC3339)
+	}
+	if !st.LastWrittenAt.IsZero() {
+		v.LastWrittenAt = st.LastWrittenAt.Local().Format(time.RFC3339)
+	}
+	return v
 }
 
 // PatchView is the output of config set/apply.

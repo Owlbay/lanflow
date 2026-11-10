@@ -143,6 +143,7 @@ var methodLevels = map[string]Level{
 	"ConfigSyncStatus":      LevelRead,
 	"SetConfigSync":         LevelDanger, // writes outside the data directory
 	"ResolveConfigConflict": LevelDanger,
+	"ApplyConfigFile":       LevelWrite, // like the settings writes; undo restores settings, rules and overrides
 
 	// ---- aTrust ----
 	"ATrustReference":    LevelRead,

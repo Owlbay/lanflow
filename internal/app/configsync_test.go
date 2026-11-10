@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -497,5 +498,59 @@ func TestSyncEnableAsksBeforeReplacing(t *testing.T) {
 	}
 	if set := h.s.Settings(); set.MixedPort != 7999 || set.LogLevel != "error" {
 		t.Fatalf("file not used: %d %s", set.MixedPort, set.LogLevel)
+	}
+}
+
+func TestApplyConfigFile(t *testing.T) {
+	h, _, dir := syncHarness(t)
+	src := buildDoc(h.s.snapshotLocal(), linksPlain) // a hand-made file with a plain link
+	src.Settings.LogLevel = "warning"
+	src.CustomRules = []syncfile.Rule{{Type: "DOMAIN-SUFFIX", Payload: "agent.example", Target: "DIRECT"}}
+	path := filepath.Join(dir, "edited.yaml")
+	os.WriteFile(path, syncfile.Encode(src), 0o600)
+
+	res, err := h.s.ApplyConfigFile(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Applied || len(res.Diff) == 0 || h.s.Settings().LogLevel == "warning" || len(h.s.CustomRules()) != 0 {
+		t.Fatalf("dry run applied or empty: %+v", res)
+	}
+	for _, l := range res.Diff {
+		if strings.Contains(l.Text, "example.com/sub") {
+			t.Fatal("the diff reveals a subscription link")
+		}
+	}
+	if !strings.Contains(strings.Join(res.Changed, ","), "settings") || !strings.Contains(strings.Join(res.Changed, ","), "customRules") {
+		t.Fatalf("changed = %v", res.Changed)
+	}
+	res, err = h.s.ApplyConfigFile(path, false)
+	if err != nil || !res.Applied {
+		t.Fatalf("apply: %+v %v", res, err)
+	}
+	if h.s.Settings().LogLevel != "warning" || len(h.s.CustomRules()) != 1 {
+		t.Fatal("not applied")
+	}
+	// again: nothing to do
+	if res, _ := h.s.ApplyConfigFile(path, false); res.Applied || len(res.Changed) != 0 {
+		t.Fatalf("second apply: %+v", res)
+	}
+	// errors carry the line
+	bad := strings.Replace(string(syncfile.Encode(src)), "payload: agent.example", "payload: agent.example\n    target2: x", 1)
+	os.WriteFile(path, []byte(bad), 0o600)
+	if _, err := h.s.ApplyConfigFile(path, false); err != nil {
+		t.Fatalf("unknown key must only warn: %v", err)
+	}
+	bad = strings.Replace(string(syncfile.Encode(src)), "type: DOMAIN-SUFFIX", "type: NOT-A-RULE", 1)
+	os.WriteFile(path, []byte(bad), 0o600)
+	_, err = h.s.ApplyConfigFile(path, false)
+	if want := syncfile.LineOf([]byte(bad), "customRules[0]"); err == nil || want == 0 || !strings.Contains(err.Error(), fmt.Sprintf("第 %d 行", want)) {
+		t.Fatalf("invalid rule: %v (want line %d)", err, want)
+	}
+	if _, err := h.s.ApplyConfigFile("relative.yaml", true); err == nil {
+		t.Fatal("relative path accepted")
+	}
+	if _, err := h.s.ApplyConfigFile("", true); err == nil {
+		t.Fatal("empty path without sync accepted")
 	}
 }

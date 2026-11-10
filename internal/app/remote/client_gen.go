@@ -530,6 +530,11 @@ func (cl *Client) ResolveConfigConflict(name string, keepCopy bool) (err error) 
 	return
 }
 
+func (cl *Client) ApplyConfigFile(path string, dryRun bool) (res0 model.ConfigApplyResult, err error) {
+	err = cl.call("ApplyConfigFile", []any{path, dryRun}, &res0)
+	return
+}
+
 func (cl *Client) ATrustReference() (res0 string) {
 	_ = cl.call("ATrustReference", nil, &res0)
 	return

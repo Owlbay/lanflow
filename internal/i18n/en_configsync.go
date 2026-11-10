@@ -116,6 +116,11 @@ func init() {
 		"使用文件中的配置":                "Use the file",
 		"同步文件有冲突副本（%s），请选择保留哪一个。": "The sync file has conflict copies (%s); choose which to keep.",
 		"查看": "View",
+
+		// internal/app/configapply.go: ApplyConfigFile
+		"配置同步未开启，请指定要加载的文件。": "Configuration sync is off; name the file to load.",
+		"请使用文件的绝对路径。":        "Use the file's absolute path.",
+		"第 %d 行：%w":          "Line %d: %w",
 	} {
 		en[k] = v
 	}

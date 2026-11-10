@@ -116,6 +116,22 @@ func (s *Server) prepareUndo(method string, args []reflect.Value) undoPrep {
 		return func([]any) (func() error, string) {
 			return func() error { return restoreOverrides(api, old) }, "恢复之前的覆写"
 		}
+	case method == "ApplyConfigFile":
+		if len(args) > 1 && args[1].Kind() == reflect.Bool && args[1].Bool() {
+			return nil // a dry run changes nothing
+		}
+		oldSet, oldRules, oldOvs := api.Settings(), api.CustomRules(), api.OverrideList()
+		return func([]any) (func() error, string) {
+			return func() error {
+				if err := restoreOverrides(api, oldOvs); err != nil {
+					return err
+				}
+				if err := restoreRules(api, oldRules); err != nil {
+					return err
+				}
+				return restoreSettings(api, oldSet)
+			}, "恢复加载配置文件之前的设置、覆写和自定义规则（订阅不恢复）"
+		}
 	case method == "SetRuleDisabled":
 		idx := int(args[0].Int())
 		rules := api.Rules()

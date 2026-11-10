@@ -289,6 +289,12 @@ type API interface {
 	// loaded and becomes lanflow.yaml) or the current file; the copy not
 	// kept moves to <DataDir>/sync-backups.
 	ResolveConfigConflict(name string, keepCopy bool) error
+	// ApplyConfigFile loads a lanflow.yaml (path absolute; "" = the sync
+	// file) the way an external change of the sync file loads: validated
+	// with the core, nothing stored on failure, errors with the line.
+	// dryRun only returns what would change. The diff shows links as
+	// keychain references.
+	ApplyConfigFile(path string, dryRun bool) (model.ConfigApplyResult, error)
 
 	// ---- aTrust 兼容 (atrustcfg.go) ----
 	// ATrustReference is a commented YAML template of the aTrust lists

@@ -82,3 +82,10 @@ func (f *Fake) ResolveConfigConflict(name string, keepCopy bool) error {
 		return nil
 	}, app.TopicSettings)
 }
+
+func (f *Fake) ApplyConfigFile(path string, dryRun bool) (model.ConfigApplyResult, error) {
+	if path == "" {
+		return model.ConfigApplyResult{}, errors.New("配置同步未开启，请指定要加载的文件。")
+	}
+	return model.ConfigApplyResult{Summary: "文件与本机配置一致，没有需要加载的内容。"}, nil
+}

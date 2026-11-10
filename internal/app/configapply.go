@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -373,4 +375,65 @@ func (s *Service) downloadSynced(id string) {
 			s.alog.Warnf("config sync: use %s: %v", id, err)
 		}
 	}
+}
+
+// ApplyConfigFile implements API.ApplyConfigFile: loads a lanflow.yaml
+// (path "" = the sync file) like an external change of the sync file —
+// checked with the core first, nothing stored when anything fails. A dry
+// run returns the diff only. The diff is this machine's lanflow.yaml
+// text, links as keychain references, so it never reveals them.
+func (s *Service) ApplyConfigFile(path string, dryRun bool) (res model.ConfigApplyResult, err error) {
+	defer func() {
+		if !dryRun {
+			s.logOp("apply config file "+filepath.Base(path), err)
+		}
+	}()
+	syncPath := ""
+	if dir := s.syncDir(s.Settings().Sync); dir != "" {
+		syncPath = filepath.Join(dir, syncfile.FileName)
+	}
+	if strings.TrimSpace(path) == "" {
+		if syncPath == "" {
+			return res, errors.New(i18n.T("配置同步未开启，请指定要加载的文件。"))
+		}
+		path = syncPath
+	}
+	if !filepath.IsAbs(path) {
+		return res, errors.New(i18n.T("请使用文件的绝对路径。"))
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return res, fmt.Errorf(i18n.T("读取文件失败：%v"), err)
+	}
+	if fi.Size() > 8<<20 {
+		return res, errors.New(i18n.T("文件过大，不像是澜流的设置文件。"))
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return res, fmt.Errorf(i18n.T("读取文件失败：%v"), err)
+	}
+	doc, err := syncfile.Decode(data, defaultSettings())
+	if err != nil {
+		return res, err
+	}
+	s.cs.runMu.Lock()
+	defer s.cs.runMu.Unlock()
+	res, err = s.applyDoc(doc, dryRun)
+	if err != nil {
+		var de *docError
+		if errors.As(err, &de) {
+			if line := syncfile.LineOf(data, de.path); line > 0 {
+				err = fmt.Errorf(i18n.T("第 %d 行：%w"), line, err)
+			}
+		}
+		return res, err
+	}
+	if !dryRun && path == syncPath {
+		// loaded: the poller must not load it again
+		s.rememberHash(path, syncfile.Hash(data))
+		s.cs.mu.Lock()
+		s.cs.canon, s.cs.dirty = syncfile.Encode(doc), true
+		s.cs.mu.Unlock()
+	}
+	return res, nil
 }

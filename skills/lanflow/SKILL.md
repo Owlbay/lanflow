@@ -51,6 +51,16 @@ Sensitive reads (`connections`, `logs`, `subscription_raw`, `runtime_config`) ne
 - **DNS leak** → `run_leak_check` then `leak_check`. If DNS leaks while the system proxy is used, the usual fix is TUN (`set_tun true`; needs the privileged helper — if it is missing, tell the user to install it in Lanflow) or letting Lanflow take over DNS: `patch_settings {"DNS":{"TakeOver":true}, dryRun:true}`, show the diff, apply, re-run the leak check. For IPv6 leaks, report the finding's advice; do not disable IPv6 system-wide.
 - **Mode** → `set_mode rule` is the normal mode; `global` sends everything through the main group, `direct` turns the proxy off for all traffic. Say which one you set.
 
+## Editing lanflow.yaml (configuration sync)
+
+When the user has turned on 配置同步 (Settings › General › Configuration sync), the whole configuration also lives in one declarative file, `lanflow.yaml`, in the sync folder. `config_sync_status` [`ctl config sync status`] gives its `Path`, whether the last change loaded, and the error with its line when it did not.
+
+You may edit that file directly (settings, `overrides`, `customRules`, `subscriptions`); the structure is described by `docs/schema/lanflow.schema.json`, and a missing key means the default value. Lanflow notices the change within a few seconds, validates it (the file's own rules and `mihomo -t` on the composed config) and loads it — hot, by reloading the core, or by restarting it, as each change needs. An invalid change is refused and nothing changes; read `config_sync_status` afterwards and fix the line it names. To preview first, write your version to another file and call `apply_config_file {path, dryRun: true}` [`ctl config sync apply <file> --dry-run`], which returns the diff; without `dryRun` it loads that file the same way (undoable).
+
+- Keep `format: 1`. Subscription links are written `keychain:sub-<id>`; never replace a reference with the real link, and never put links, passwords or tokens into the file.
+- Machine-local items (TUN, the core path, interface names, UI state, agent grants, the sync setting) are not in the file and are ignored if you add them.
+- Lanflow rewrites the file in its canonical form after loading it, so comments you add are not kept.
+
 ## Never
 
 - Never export, reveal or ask for subscription links or node credentials (`subscription_raw`, `runtime_config` only when the user explicitly needs them and approves).
