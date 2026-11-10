@@ -230,6 +230,7 @@ func (tr *tray) build(st model.Status, px model.ProxySnapshot, subs []model.Subs
 		mygo.Separator(),
 		&mygo.MenuItem{Label: i18n.T("复制终端代理命令"), Submenu: tr.commandItems(st.MixedPort)},
 		&mygo.MenuItem{Label: i18n.T("打开澜流"), Accelerator: "CmdOrCtrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { s.ShowWindow() }},
+		&mygo.MenuItem{ID: "feedback", Label: i18n.T("反馈问题…"), Click: func(*mygo.MenuItem, *mygo.Window) { s.OpenFeedback("") }},
 		mygo.Separator(),
 		&mygo.MenuItem{Label: i18n.T("退出澜流"), Accelerator: "CmdOrCtrl+Q", Click: func(*mygo.MenuItem, *mygo.Window) { mygo.App.Quit() }},
 	)

@@ -91,6 +91,9 @@ type Page struct {
 	// 全局快捷键 (hotkey.go), Wi-Fi 规则, 下载镜像, 备份与同步 (feat2.go)
 	f2 feat2UI
 
+	// 反馈问题 / 反馈上报 of 关于 (feedback.go)
+	fbk feedbackUI
+
 	// 应用更新 (update.go)
 	upd      Updater
 	relaunch func()
@@ -368,6 +371,7 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				})
 			})
 			p.updateRows(c, t, s)
+			p.feedbackRows(c, t, s)
 		})
 	})
 }

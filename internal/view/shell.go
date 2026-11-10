@@ -122,6 +122,7 @@ type Shell struct {
 	recoveryHit bool
 	consents    []*consentReq // agents waiting for the user (agents.go)
 	consentOpen bool
+	fb          feedbackDialog // 反馈问题 and the crash prompt (feedback.go)
 	hiddenOnce  bool
 	hiddenFlag  string // file that records the tray notice was shown (ConfigDir); "" = memory only
 	updateStamp string // file that records the last launch-time update check; "" = check every launch
@@ -171,6 +172,7 @@ func New(api app.API, opts Options) *Shell {
 		Kit:     NewKit(),
 
 		SetGlobalShortcut: s.SetGlobalShortcut,
+		OpenFeedback:      func() { s.OpenFeedback("") },
 	}
 	if !opts.Sync {
 		// Tests (Sync) save at once; the app saves half a second after
@@ -701,6 +703,8 @@ func (s *Shell) handleNotice(c *ui.Context, n app.Notice) {
 		s.invalid, s.invalidOpen = &nn, true
 	case "recovery":
 		s.recovery = true
+	case "crash-report":
+		s.crashNotice()
 	case "error":
 		s.errorToast(firstNonEmpty(n.Title, n.Detail), detailIf(n))
 	default:

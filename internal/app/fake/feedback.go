@@ -49,6 +49,14 @@ func (f *Fake) FeedbackInfo() model.FeedbackInfo {
 	return info
 }
 
+// SimulateCrash makes FeedbackInfo report a crash of the previous run
+// (tests; LANFLOW_FAKE_CRASH=1 does it at start).
+func (f *Fake) SimulateCrash() {
+	fb.mu.Lock()
+	fb.crashed = true
+	fb.mu.Unlock()
+}
+
 func (f *Fake) SetFeedbackToken(token string) error {
 	f.wait()
 	fb.mu.Lock()
