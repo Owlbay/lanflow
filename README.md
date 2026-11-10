@@ -11,6 +11,23 @@
 - **macOS**：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
 - **Windows**：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
 
+### 验证下载
+
+每个 Release 附带 `SHA256SUMS.txt`。把它和安装包放在同一目录后：
+
+```sh
+shasum -a 256 -c SHA256SUMS.txt --ignore-missing     # macOS
+sha256sum -c SHA256SUMS.txt --ignore-missing         # Linux、Git Bash
+```
+
+Windows PowerShell 可用 `Get-FileHash .\lanflow-setup-<版本>-amd64.exe -Algorithm SHA256` 与 `SHA256SUMS.txt` 中的值对照。
+
+安装包由 GitHub Actions 构建并带有构建来源证明，可用 [GitHub CLI](https://cli.github.com/) 确认它出自本仓库的发布流程：
+
+```sh
+gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
+```
+
 ## 功能
 
 - **开关与模式**：内核、系统代理（全局或 PAC）、TUN 三个独立开关，规则 / 全局 / 直连；TUN 通过权限组件 `lanflow-helper` 运行，应用本身不提权，IPv4 与 IPv6 一并接管
@@ -50,8 +67,10 @@
 需要 Go 1.27.3+。先下载官方 Mihomo（固定 v1.19.33）与地理数据库到 `bin/`：
 
 ```sh
-scripts/fetch-core.sh
+scripts/fetch-core.sh                 # 宿主平台；也可 scripts/fetch-core.sh windows amd64
 ```
+
+脚本按 SHA-256 校验每个文件（内核用脚本内置的官方哈希，地理数据用 GitHub API 给出的 asset digest），不符即退出。内核写到 `bin/<goos>-<goarch>/`，宿主平台另复制一份到 `bin/mihomo`；地理数据写到 `bin/geo/`。网络受限时可设 `GITHUB_MIRROR`，镜像下载的文件同样要通过校验。
 
 运行（真实服务 / 模拟数据）：
 
@@ -60,12 +79,19 @@ go tool mygo dev
 LANFLOW_FAKE=1 go tool mygo dev
 ```
 
-测试（含使用 `bin/mihomo` 的端到端测试，不会改动系统代理）：
+测试与检查（与 CI 相同）：
 
 ```sh
-CGO_ENABLED=0 go test ./...
 go vet ./... && go tool mygo vet .
+CGO_ENABLED=0 go test ./...
+go test -race ./...                   # 需要 cgo（macOS 自带的工具链即可）
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+go mod tidy -diff
 ```
+
+`internal/app`、`internal/core` 中的端到端测试使用 `bin/mihomo`，`internal/locate` 的部分测试使用 `bin/geo/`；没有这些文件时自动跳过，其余测试不需要网络。端到端测试不会改动系统代理；改动真实系统设置的测试需显式开启（见下文 `LANFLOW_LIVE_SYSPROXY`，以及 `scripts/vm-e2e.sh` 在虚拟机里运行的 `LANFLOW_LIVE_E2E`）。
+
+CI（`.github/workflows/ci.yml`）在 PR 和推送到 main 时于 macOS、Windows 上运行以上检查（`-race` 只在 macOS 上跑），并先用 `fetch-core.sh` 下载内核以运行端到端测试；仓库变量 `CI_SKIP_CORE=1` 可跳过下载。
 
 ## 打包
 
@@ -84,7 +110,7 @@ Windows：`scripts/prepare-resources.sh windows amd64` 后在 Windows 上执行 
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一致，运行测试，构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，生成 `SHA256SUMS.txt`，并创建带自动更新说明的 Release。带 `-` 的 tag（如 `v0.2.0-beta.1`）发布为预发布版。
+GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一致，在 macOS 和 Windows 上运行 vet 与测试，构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，附上 SBOM（`lanflow-<tag>.spdx.json`）和各二进制的 `go version -m` 构建信息，生成 `SHA256SUMS.txt` 与构建来源证明（attestation），并创建带自动更新说明的 Release。带 `-` 的 tag（如 `v0.2.0-beta.1`）发布为预发布版。发布流程不使用 Go 构建缓存，所用 action 固定到 commit SHA，由 Dependabot 更新。
 
 ### 应用自动更新
 
