@@ -90,7 +90,9 @@ func (s *Service) recordCoreExit(cause error) {
 	s.elog.AddExit(msg, code, tail)
 }
 
-// errorRecorded is called after every new error record.
+// errorRecorded is called after every new error record, possibly by code
+// holding s.mu (an Error line logged under the lock): the automatic report
+// reads the settings on its own goroutine.
 func (s *Service) errorRecorded(model.ErrorRecord) {
-	s.kickAutoReport()
+	s.goBackground(s.kickAutoReport)
 }

@@ -62,9 +62,10 @@ type feedbackState struct {
 	reports   []*builtReport     // newest last, at most feedbackKeep
 	lastSent  time.Time
 
-	token       string
-	tokenLoaded bool
-	tokenFile   bool // no keychain: the obfuscated file holds it
+	token        string
+	tokenLoaded  bool
+	tokenFile    bool // no keychain: the obfuscated file holds it
+	tokenLoading bool // FeedbackInfo started a background read
 
 	autoTimer *time.Timer
 	autoAfter time.Time // records after this are not reported yet
@@ -122,14 +123,25 @@ func clipRunes(s string, n int) string {
 // FeedbackInfo implements API.FeedbackInfo.
 func (s *Service) FeedbackInfo() model.FeedbackInfo {
 	set := s.Settings().Feedback
-	tok, _ := s.feedbackToken()
 	count := s.elog.Count()
 	s.fb.mu.Lock()
 	defer s.fb.mu.Unlock()
+	if !s.fb.tokenLoaded && !s.fb.tokenLoading {
+		// The token is read lazily (the keychain may ask the user); the
+		// read lands with TopicSettings and the next call sees it.
+		s.fb.tokenLoading = true
+		s.goBackground(func() {
+			_, _ = s.feedbackToken()
+			s.fb.mu.Lock()
+			s.fb.tokenLoading = false
+			s.fb.mu.Unlock()
+			s.em.emit(TopicSettings)
+		})
+	}
 	info := model.FeedbackInfo{
 		Endpoint:   set.Endpoint,
 		AutoReport: set.AutoReport,
-		TokenSet:   tok != "",
+		TokenSet:   s.fb.token != "",
 		Errors:     count,
 		LastSentAt: s.fb.lastSent,
 	}
