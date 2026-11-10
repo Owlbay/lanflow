@@ -154,6 +154,11 @@ func (s *Shell) dialogs(c *ui.Context, st model.Status) {
 	}
 	s.consentDialog(c)
 	s.feedbackDialogs(c)
+	if s.recovery && !st.PendingRecovery {
+		// Answered elsewhere (ctl, a new service process that took over
+		// the core): nothing left to decide.
+		s.recovery = false
+	}
 	if s.recovery {
 		ui.Modal(c, &s.recovery, func() {
 			ui.Column(c).Width(440).Gap(12).Children(func() {

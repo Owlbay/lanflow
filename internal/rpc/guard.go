@@ -34,8 +34,9 @@ type Consent struct {
 // ctx ends.
 type PromptFunc func(ctx context.Context, c Consent) (Answer, error)
 
-// consentTimeout bounds how long a call waits for the user.
-var consentTimeout = 2 * time.Minute
+// consentTimeout bounds how long a call waits for the user; the call is
+// refused then, whatever the prompt is doing.
+var consentTimeout = time.Minute
 
 // guard applies the permission table of docs/service-split.md §4:
 //
@@ -171,14 +172,29 @@ func (g *guard) askLocked(ss *session, c Consent) (Answer, error) {
 	}
 	ctx, cancel := context.WithTimeout(ss.ctx, consentTimeout)
 	defer cancel()
-	a, err := g.prompt(ctx, c)
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", refused("等待用户授权超时")
-		}
-		return "", refused("无法请求用户授权: %v", err)
+	type result struct {
+		a   Answer
+		err error
 	}
-	return a, nil
+	ch := make(chan result, 1)
+	// The prompt runs apart: one stuck behind a dialog or a busy main
+	// thread must not hold the caller past the timeout.
+	go func() {
+		a, err := g.prompt(ctx, c)
+		ch <- result{a, err}
+	}()
+	select {
+	case r := <-ch:
+		if r.err != nil {
+			if ctx.Err() != nil {
+				return "", refused("等待界面确认超时")
+			}
+			return "", refused("无法请求用户授权: %v", r.err)
+		}
+		return r.a, nil
+	case <-ctx.Done():
+		return "", refused("等待界面确认超时")
+	}
 }
 
 // grant returns the stored answer for agent.

@@ -246,7 +246,9 @@ func (cl *Client) UpdateUIState(fn func(*model.UIState)) error {
 	if conn == nil {
 		return ErrDisconnected
 	}
-	err := conn.Call(context.Background(), "PatchUIState", []any{u}, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := conn.Call(ctx, "PatchUIState", []any{u}, nil)
 	if cl.cache != nil {
 		cl.cache.drop("UIState")
 	}

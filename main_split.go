@@ -253,6 +253,28 @@ func runWindow(args split.Args) {
 		}
 	}
 	var client interface{ QuitService() error }
+	var detachFn atomic.Pointer[func()] // DetachUI, once connected
+	detach := func() {
+		if fn := detachFn.Load(); fn != nil {
+			(*fn)()
+		}
+	}
+	// leaving: this window process is on its way out while the service
+	// stays (the window was closed, a signal).
+	leaving := func() bool {
+		return closingWindow.Load() || signaled.Load() || (quitting.Load() && !serviceQuitting.Load())
+	}
+	// handOff passes a request for the window to a new window process
+	// when this one is leaving: the service forgets this one first, so the
+	// new one becomes the window.
+	handOff := func(arg string) {
+		go func() {
+			detach()
+			if err := split.StartWindow(exe, arg); err != nil {
+				log.Printf("lanflow: start the window: %v", err)
+			}
+		}()
+	}
 	quitAll := func() {
 		go func() {
 			serviceQuitting.Store(true)
@@ -278,8 +300,16 @@ func runWindow(args split.Args) {
 	onUI := func(c rpc.UICommand) {
 		switch c.Cmd {
 		case rpc.UIShow:
+			if leaving() {
+				handOff(c.Arg)
+				return
+			}
 			open(c.Arg)
 		case rpc.UIToggle:
+			if leaving() {
+				handOff("")
+				return
+			}
 			withShell(func(s *view.Shell) { s.ToggleWindow() })
 		case rpc.UIAskQuit:
 			askQuitAll()
@@ -336,6 +366,9 @@ func runWindow(args split.Args) {
 		return
 	}
 	client = cl
+	var detachOnce sync.Once
+	detachUI := func() { detachOnce.Do(func() { _ = cl.DetachUI() }) }
+	detachFn.Store(&detachUI)
 	i18n.SetLang(cl.Settings().Language)
 	view.ApplyLanguage(cl.Settings().Language)
 	view.ApplyAppearance(cl.Settings().Appearance)
@@ -350,12 +383,12 @@ func runWindow(args split.Args) {
 	go func() {
 		<-sigs
 		signaled.Store(true)
+		if !serviceQuitting.Load() {
+			go detach() // at once: a new window may be asked for meanwhile
+		}
 		mygo.App.Quit()
 		time.Sleep(quitWatchdog) // the main thread may be stuck: leave anyway
 		log.Printf("lanflow: window: quit did not finish in %s; exiting", quitWatchdog)
-		if !serviceQuitting.Load() {
-			_ = cl.DetachUI()
-		}
 		os.Exit(0)
 	}()
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
@@ -370,6 +403,9 @@ func runWindow(args split.Args) {
 		// too, after the usual confirmation.
 		if quitting.Load() || closingWindow.Load() || serviceQuitting.Load() || signaled.Load() {
 			quitting.Store(true)
+			if !serviceQuitting.Load() {
+				go detach() // at once: a new window may be asked for meanwhile
+			}
 			return
 		}
 		e.PreventDefault()
@@ -377,9 +413,17 @@ func runWindow(args split.Args) {
 	})
 	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
 		if !serviceQuitting.Load() {
-			_ = cl.DetachUI()
+			detach()
 		}
-		sh.Close()
+		// Saving the UI state goes to the service; wait for it a moment,
+		// not for a service that does not answer.
+		done := make(chan struct{})
+		go func() { sh.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			log.Printf("lanflow: window: saving the UI state timed out")
+		}
 		_ = cl.Close()
 	})
 	mygo.App.WhenReady(func() {
@@ -407,7 +451,7 @@ func runWindow(args split.Args) {
 				return
 			}
 			closingWindow.Store(true)
-			go func() { _ = cl.DetachUI() }() // a new window may attach while this one goes
+			go detach() // a new window may attach while this one goes
 			sh.HiddenToTray()
 		})
 		shellMu.Lock()

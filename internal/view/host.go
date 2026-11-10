@@ -111,6 +111,15 @@ func (s *Shell) Open(arg string) {
 // process (up false) or got it back (Remote).
 func (s *Shell) ServiceConnection(up bool) {
 	if up {
+		// A new service process: what the old one had asked is void; the
+		// recovery prompt comes back from the new one's Status if due.
+		s.post(func() {
+			s.recovery, s.recoveryHit = false, false
+			s.invalid, s.invalidOpen = nil, false
+		})
+		s.mu.Lock()
+		s.notices = nil
+		s.mu.Unlock()
 		s.toast(toastReq{msg: i18n.T("已重新连接澜流后台服务")})
 		return
 	}

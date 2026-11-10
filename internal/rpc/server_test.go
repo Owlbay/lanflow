@@ -414,3 +414,24 @@ func TestFeedbackPermissions(t *testing.T) {
 		t.Fatal("feedback levels changed")
 	}
 }
+
+// A prompt that never returns (a dialog stuck behind another, a busy main
+// thread) still ends the caller's wait at the timeout.
+func TestConsentTimesOutWhenPromptHangs(t *testing.T) {
+	defer rpc.SetConsentTimeout(200 * time.Millisecond)()
+	block := make(chan struct{})
+	defer close(block)
+	h := start(t, func(context.Context, rpc.Consent) (rpc.Answer, error) {
+		<-block // ignores its context
+		return rpc.AnswerOnce, nil
+	})
+	c := h.dial(t, "mcp:test", false)
+	start := time.Now()
+	err := c.SetMode(model.ModeGlobal)
+	if err == nil || !strings.Contains(err.Error(), "等待界面确认超时") {
+		t.Fatalf("err = %v", err)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("waited %s", d)
+	}
+}
