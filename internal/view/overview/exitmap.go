@@ -2,9 +2,6 @@ package overview
 
 import (
 	"math"
-	"sort"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/egoist/mygo/ui"
@@ -55,9 +52,6 @@ const (
 	hitRadius = 7.0
 )
 
-// routeColors are the colors of the routes after the main one (系统紫、粉、青、橙).
-var routeColors = []ui.Color{ui.Hex("#AF52DE"), ui.Hex("#FF2D55"), ui.Hex("#30B0C7"), ui.Hex("#FF9500")}
-
 // flow is the request animation of one route: one request at a time,
 // drawn from "you" to the exit, fading with a ripple, then a pause.
 type flow struct {
@@ -103,36 +97,6 @@ func samePlace(a, b model.Place) bool {
 func lerpPlace(a, b model.Place, k float64) model.Place {
 	lon := unwrap(b.Lon, a.Lon)
 	return model.Place{Country: b.Country, City: b.City, Lat: a.Lat + (b.Lat-a.Lat)*k, Lon: normLon(a.Lon + (lon-a.Lon)*k)}
-}
-
-// dest is one destination country of a route.
-type dest struct {
-	place model.Place
-	conns int
-	speed int64
-	seen  time.Time
-}
-
-// destState caches the destination countries by route and the IP lookups.
-type destState struct {
-	at    time.Time
-	by    map[string]map[string]*dest // group → country → dest
-	lists map[string][]dest           // group → top destinations
-	geo   map[string]*model.Place     // IP → country place (nil = unknown)
-}
-
-// hitArc is a drawn arc kept for click testing, in absolute coordinates.
-type hitArc struct {
-	group  string
-	pts    [][2]float32
-	ex, ey float32
-}
-
-// route is one line of the map and the list.
-type route struct {
-	model.ExitRoute
-	place *model.Place
-	color ui.Color
 }
 
 func unwrap(lon, around float64) float64 {
@@ -195,212 +159,6 @@ func easeInOut(t float32) float32 {
 }
 
 // ---- data ----
-
-// youPlace returns the user's place and whether it is a guess.
-func (p *Page) youPlace() (*model.Place, bool) {
-	if y := p.e.API.You(); y != nil && y.Place != nil {
-		return y.Place, false
-	}
-	// Before a measurement 「你」 sits at the system time zone's city,
-	// marked 「推测」 (docs/design.md §5.1 页面状态); geo.LocalZone knows
-	// where each OS keeps the zone, Windows registry included.
-	if pl := localPlace(); pl != nil {
-		return pl, true
-	}
-	return nil, true
-}
-
-// localPlace is the city of the system time zone, nil if unknown; looked
-// up once, as finding the zone reads files (and on Windows the registry).
-var localPlace = sync.OnceValue(func() *model.Place {
-	if pl, ok := geo.FromTimeZone(geo.LocalZone()); ok {
-		return &pl
-	}
-	return nil
-})
-
-// routes collects the exit routes with their places and colors, and
-// eases the smoothed speeds towards the measured ones by the time since
-// the last call (k = 1 − e^(−dt/τ)), so the easing does not depend on
-// how often the page is built.
-func (p *Page) routes(now time.Time) []route {
-	rs := p.e.API.ExitRoutes()
-	out := make([]route, 0, len(rs))
-	k := 0
-	seen := map[string]bool{}
-	for i, r := range rs {
-		rt := route{ExitRoute: r, place: r.Exit.Place}
-		if i == 0 || r.Main {
-			rt.color = ui.Color{}
-		} else {
-			rt.color = routeColors[k%len(routeColors)]
-			k++
-		}
-		out = append(out, rt)
-		seen[r.Group] = true
-		f := p.flows[r.Group]
-		if f == nil {
-			f = &flow{speed: float64(r.Speed), eased: now}
-			p.flows[r.Group] = f
-		}
-		f.ease(float64(r.Speed), now)
-	}
-	for g := range p.flows {
-		if !seen[g] {
-			delete(p.flows, g)
-		}
-	}
-	return out
-}
-
-// ease moves the shown speed towards target by the time since the last
-// easing; a flow drawn before it had a speed (eased zero) takes it at once.
-func (f *flow) ease(target float64, now time.Time) {
-	if f.eased.IsZero() {
-		f.speed, f.eased = target, now
-		return
-	}
-	dt := now.Sub(f.eased)
-	if dt <= 0 {
-		return
-	}
-	f.eased = now
-	k := 1 - math.Exp(-float64(dt)/float64(speedTau))
-	f.speed += (target - f.speed) * k
-}
-
-// destinations returns the destination countries of each route's live
-// connections (docs/exit-map.md §4 layer B), resolved offline through the
-// GeoIP database and cached by IP. It recomputes at most every destEvery.
-func (p *Page) destinations(rs []route, mode model.Mode, now time.Time) map[string][]dest {
-	d := &p.dests
-	if d.by == nil {
-		d.by = map[string]map[string]*dest{}
-		d.geo = map[string]*model.Place{}
-	}
-	if !d.at.IsZero() && now.Sub(d.at) < destEvery {
-		return d.lists
-	}
-	d.at = now
-	routeOf := map[string]bool{}
-	for _, r := range rs {
-		routeOf[r.Group] = true
-	}
-	for _, m := range d.by {
-		for _, x := range m {
-			x.conns, x.speed = 0, 0
-		}
-	}
-	for _, cn := range p.e.API.Connections() {
-		if len(cn.Chains) == 0 || cn.DstIP == "" {
-			continue
-		}
-		g := cn.Chains[0]
-		if mode == model.ModeGlobal {
-			g = "GLOBAL"
-		}
-		if !routeOf[g] {
-			continue
-		}
-		pl := p.countryOf(cn.DstIP)
-		if pl == nil {
-			continue
-		}
-		m := d.by[g]
-		if m == nil {
-			m = map[string]*dest{}
-			d.by[g] = m
-		}
-		x := m[pl.Country]
-		if x == nil {
-			x = &dest{place: *pl}
-			m[pl.Country] = x
-		}
-		x.conns++
-		x.speed += cn.UpSpeed + cn.DownSpeed
-		x.seen = now
-	}
-	lists := map[string][]dest{}
-	for g, m := range d.by {
-		if !routeOf[g] {
-			delete(d.by, g)
-			continue
-		}
-		var ds []dest
-		for c, x := range m {
-			if now.Sub(x.seen) > destKeep {
-				delete(m, c)
-				continue
-			}
-			ds = append(ds, *x)
-		}
-		sort.Slice(ds, func(i, j int) bool {
-			if ds[i].conns != ds[j].conns {
-				return ds[i].conns > ds[j].conns
-			}
-			if !ds[i].seen.Equal(ds[j].seen) {
-				return ds[i].seen.After(ds[j].seen)
-			}
-			return ds[i].place.Country < ds[j].place.Country
-		})
-		if len(ds) > maxDests {
-			ds = ds[:maxDests]
-		}
-		if len(ds) > 0 {
-			lists[g] = ds
-		}
-	}
-	d.lists = lists
-	return lists
-}
-
-// countryOf resolves a destination IP to its country's place, nil when
-// unknown; results are cached per IP.
-func (p *Page) countryOf(ip string) *model.Place {
-	if pl, ok := p.dests.geo[ip]; ok {
-		return pl
-	}
-	if len(p.dests.geo) > 4096 {
-		p.dests.geo = map[string]*model.Place{}
-	}
-	var pl *model.Place
-	if ep := p.e.API.LookupIP(ip); ep.Place != nil && ep.Place.Country != "" {
-		cp := *ep.Place
-		pl = &cp
-	}
-	p.dests.geo[ip] = pl
-	return pl
-}
-
-// hitRoute returns the group whose arc or exit marker is under the
-// pointer (coordinates relative to the map box), or "".
-func (p *Page) hitRoute(x, y float32) string {
-	x += p.hitOrigin[0]
-	y += p.hitOrigin[1]
-	best, bestD := "", float32(hitRadius)
-	for _, h := range p.hits {
-		// The nearest of the route's marker (which counts a little
-		// closer) and its visible samples; a hidden one is NaN and never
-		// nearer.
-		d := float32(math.Inf(1))
-		if m := dist(x, y, h.ex, h.ey) - 2; m < d {
-			d = m
-		}
-		for _, pt := range h.pts {
-			if s := dist(x, y, pt[0], pt[1]); s < d {
-				d = s
-			}
-		}
-		if d < bestD {
-			best, bestD = h.group, d
-		}
-	}
-	return best
-}
-
-func dist(x0, y0, x1, y1 float32) float32 {
-	return float32(math.Hypot(float64(x1-x0), float64(y1-y0)))
-}
 
 // ---- the card ----
 
@@ -515,21 +273,6 @@ func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route) {
 	})
 }
 
-// routeCard is the list of routes beside the globe: 当前出口, then 其他路由.
-func (p *Page) routeCard(c *ui.Context, st model.Status, rs []route) {
-	t := c.Theme()
-	run := st.Core == model.CoreRunning
-	direct := st.Mode == model.ModeDirect
-	p.mu.Lock()
-	probing := p.probing
-	p.mu.Unlock()
-	ui.Scroll(c).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Grow(1).Shrink(1).MinHeight(96).Children(func() {
-		ui.Column(c).Padding(10, 12).Gap(2).Children(func() {
-			p.routeList(c, st, rs, run, direct, probing)
-		})
-	})
-}
-
 // zoomButton is one of the small round buttons over the map: an icon of
 // the kit, or a glyph where it has none.
 func (p *Page) zoomButton(c *ui.Context, icon, glyph, label string, fn func()) {
@@ -548,34 +291,6 @@ func (p *Page) zoomButton(c *ui.Context, icon, glyph, label string, fn func()) {
 	}
 }
 
-func mapDescription(you *model.Place, rs []route, dests map[string][]dest) string {
-	var b strings.Builder
-	b.WriteString(i18n.T("出口地图"))
-	if you != nil {
-		b.WriteString(i18n.Tf("：从你所在的%s", you.City))
-	}
-	var cities, countries []string
-	seen := map[string]bool{}
-	for _, r := range rs {
-		if r.place != nil {
-			cities = append(cities, r.place.City)
-		}
-		for _, d := range dests[r.Group] {
-			if !seen[d.place.Country] {
-				seen[d.place.Country] = true
-				countries = append(countries, d.place.City)
-			}
-		}
-	}
-	if len(cities) > 0 {
-		b.WriteString(i18n.Tf("到%s", strings.Join(cities, i18n.T("、"))))
-	}
-	if len(countries) > 0 {
-		b.WriteString(i18n.Tf("；目标国家：%s", strings.Join(countries, i18n.T("、"))))
-	}
-	return b.String()
-}
-
 func (p *Page) probe() {
 	p.mu.Lock()
 	p.probing = true
@@ -587,27 +302,6 @@ func (p *Page) probe() {
 		p.mu.Unlock()
 		return err
 	}, i18n.T("已更新出口位置"))
-}
-
-func routeColor(r route, t *ui.Theme) ui.Color {
-	if r.color == (ui.Color{}) {
-		return t.Accent
-	}
-	return r.color
-}
-
-// addHit keeps an arc of this frame for click testing, reusing the memory
-// of the frame before.
-func (p *Page) addHit(group string, a *arc, ex, ey float32) {
-	n := len(p.hits)
-	if cap(p.hits) > n {
-		p.hits = p.hits[:n+1]
-	} else {
-		p.hits = append(p.hits, hitArc{})
-	}
-	h := &p.hits[n]
-	h.group, h.ex, h.ey = group, ex, ey
-	h.pts = a.hitPoints(h.pts)
 }
 
 // exitDraw is an exit of this frame: its route, where its marker glides,
@@ -698,237 +392,12 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			ground := over(t.Surface, t.TextMuted.Alpha(0.07))
 			p.ground.draw(pt, b, r, g, p.land.points(step), step, dotR, t.TextMuted, over(ground, t.TextMuted.Alpha(gratAlpha)))
 
-			// Where everything is on the screen.
-			var yv vec3
-			var yx, yy, yvis float32
-			if you != nil {
-				yv = placeVec(*you)
-				yx, yy, yvis = g.project(yv)
-				if yvis > 0 {
-					b.reserve(yx, yy, 6)
-				}
-			}
-			seen, cities := b.seen, b.cities
-			for i := range exits {
-				ed := &exits[i]
-				ed.x, ed.y, ed.vis = g.project(ed.vec)
-				cities[ed.place.City] = true
-				if ed.vis > 0 {
-					b.reserve(ed.x, ed.y, 5)
-				}
-				if you != nil && live {
-					n := seen[ed.place.City]
-					seen[ed.place.City] = n + 1
-					ed.f.arc.build(g, yv, ed.vec, arcLift(yv, ed.vec, n), arcSamples)
-					ed.hasArc = true
-				}
-			}
-			// Destination countries: a thin dashed great circle from the
-			// exit to the country's representative city, fainter once no
-			// connection is left; drawn under the request animation.
-			destMarks := b.destMarks
-			for _, ed := range exits {
-				col := routeColor(ed.r, t)
-				for _, d := range dests[ed.r.Group] {
-					if d.place.Country == ed.place.Country {
-						continue
-					}
-					dv := placeVec(d.place)
-					alpha := float32(0.3)
-					if d.conns == 0 {
-						alpha = 0.14
-					}
-					b.dest.build(g, ed.vec, dv, arcLift(ed.vec, dv, 0)*0.6, destSamples)
-					b.dest.dashed(pt, b, 1, col.Alpha(alpha))
-					if dx, dy, vis := g.project(dv); vis > 0 && !cities[d.place.City] {
-						cities[d.place.City] = true
-						destMarks = append(destMarks, destMark{dx, dy, vis, d.place.City, ed.r.Group, d.conns > 0})
-						b.reserve(dx, dy, 4)
-					}
-				}
-			}
-			for _, m := range destMarks {
-				a := 0.4 + 0.6*m.vis
-				pt.Fill(circle(m.x, m.y, 3.5), t.Surface, 3.5)
-				pt.StrokePath(b.path.Reset().Circle(m.x, m.y, 3.5), 1.4, t.TextMuted.Alpha(a))
-			}
-			// The request animation along each route's arc: the route
-			// solid in its colour, requests travelling over it as glowing
-			// dots (more at once on a busy route), a ring spreading at the
-			// exit and at the route's destinations as one arrives.
-			arrivals, speeds, speedIn := b.arrivals, b.speeds, b.speedIn
-			for i := range exits {
-				ed := &exits[i]
-				if !ed.hasArc {
-					continue
-				}
-				ex, ey := ed.x, ed.y
-				if ed.vis <= 0 {
-					ex, ey = hidden[0], hidden[1]
-				}
-				p.addHit(ed.r.Group, &ed.f.arc, ex, ey)
-				col := routeColor(ed.r, t)
-				f := ed.f
-				a := &f.arc
-				w := arcWidth(f.speed)
-				live := active(f.speed)
-				// The route itself, the main one strongest; a route with
-				// traffic stronger and thicker still.
-				base := float32(0.4)
-				if ed.r.color == (ui.Color{}) {
-					base = 0.55
-				}
-				if !live {
-					w = 1.6
-				} else {
-					base += 0.2
-				}
-				a.stroke(pt, b, 1, w, col.Alpha(base))
-				if live {
-					// The speed beside the arc's middle, after the markers
-					// and their labels have taken their room; a short arc
-					// carries it in the exit's label instead.
-					txt := "↓ " + env.FmtSpeed(int64(f.speed))
-					if a.length < shortArc {
-						speedIn[ed.r.Group] = txt
-					} else if mx, my, mv := a.pointAt(0.5); mv > 0 {
-						x0, y0, _ := a.pointAt(0.45)
-						x1, y1, _ := a.pointAt(0.55)
-						nx, ny := -(y1 - y0), x1-x0
-						if n := dist(0, 0, nx, ny); n > 0 {
-							nx, ny = nx/n, ny/n
-						}
-						speeds = append(speeds, speedLabel{mx, my, nx, ny, w, mv, txt, col})
-					}
-				}
-				if reduce || !focused || !live {
-					// No request animation behind another app's window, nor
-					// on a route without traffic (under 512 B/s): the route,
-					// its width and its speed say what moves. Played for a
-					// quiet route too, the animation would restart at every
-					// data frame and keep the window drawing all day.
-					continue
-				}
-				if !f.armed {
-					f.armed = true
-					f.start = now.Add(time.Duration(200+len(ed.r.Group)*97%600) * time.Millisecond)
-				}
-				dur := flowDur(a.length)
-				total := dur + fadeDur + flowGap(f.speed)
-				el := now.Sub(f.start)
-				dot := func(x, y, vis, o float32) {
-					glow := w*2 + 8
-					pt.Fill(circle(x, y, glow), col.Alpha(0.14*vis*o), glow)
-					pt.Fill(circle(x, y, w+4), col.Alpha(0.3*vis*o), w+4)
-					pt.Fill(circle(x, y, w/2+2.5), t.Surface.Alpha(vis*o), w/2+2.5)
-					pt.Fill(circle(x, y, w/2+1.2), col.Alpha(vis*o), w/2+1.2)
-				}
-				switch {
-				case el < 0:
-					// Waiting for the first request.
-					animating = animating || live
-				case el < dur:
-					e := easeInOut(float32(el) / float32(dur))
-					a.stroke(pt, b, e, w, col)
-					for k := flowDots(f.speed) - 1; k >= 0; k-- {
-						if at := e - float32(k)*dotTrail; at > 0 {
-							if hx, hy, hv := a.pointAt(at); hv > 0 {
-								dot(hx, hy, hv, 1)
-							}
-						}
-					}
-					animating = true
-				case el < dur+fadeDur:
-					fp := float32(el-dur) / float32(fadeDur)
-					o := 1 - fp
-					a.stroke(pt, b, 1, w, col.Alpha(o))
-					if ed.vis > 0 {
-						dot(ed.x, ed.y, ed.vis, o)
-						rr := float32(rippleFrom + (rippleTo-rippleFrom)*float64(easeInOut(fp)))
-						pt.StrokePath(b.path.Reset().Circle(ed.x, ed.y, rr), 2, col.Alpha(0.9*o))
-					}
-					arrivals = append(arrivals, arrival{ed.r.Group, o, fp})
-					animating = true
-				case el < total:
-					// Pause between requests.
-					animating = true
-				default:
-					if live {
-						f.start = now
-						animating = true
-					} else {
-						f.start = now.Add(200 * time.Millisecond)
-					}
-				}
-			}
-			// The ring at the destinations of an arriving request.
-			for _, ar := range arrivals {
-				for _, m := range destMarks {
-					if m.group != ar.group || !m.live {
-						continue
-					}
-					var col ui.Color
-					for _, ed := range exits {
-						if ed.r.Group == ar.group {
-							col = routeColor(ed.r, t)
-						}
-					}
-					rr := float32(rippleFrom-1) + float32(rippleTo-rippleFrom)*0.7*easeInOut(ar.fp)
-					pt.StrokePath(b.path.Reset().Circle(m.x, m.y, rr), 1.5, col.Alpha(0.8*ar.o*m.vis))
-				}
-			}
-			// Marks, then every label last over a surface-coloured pill so
-			// that it reads over arcs and dots: you first, then the exits,
-			// the speeds and the destination countries, each where it is
-			// clear of the others; a speed or a country's label gives way.
-			// The pulse around 「你」 stays under its label, which sits
-			// outside the pulse's reach.
-			back := t.Surface.Alpha(0.82)
-			if you != nil && yvis > 0 {
-				if ambient {
-					ph := float32(now.UnixNano()%int64(pulseDur)) / float32(pulseDur)
-					rr := float32(youRadius+2) + youPulse*ph
-					pt.StrokePath(b.path.Reset().Circle(yx, yy, rr), 1.5, t.Text.Alpha(0.5*(1-ph)*yvis))
-				}
-				pt.Fill(circle(yx, yy, youRadius+2), t.Surface.Alpha(yvis), youRadius+2)
-				pt.Fill(circle(yx, yy, youRadius), t.Text.Alpha(0.4+0.6*yvis), youRadius)
-			}
-			for _, ed := range exits {
-				if ed.vis <= 0 {
-					continue
-				}
-				a := 0.4 + 0.6*ed.vis
-				pt.Fill(circle(ed.x, ed.y, exitRadius+2), t.Surface.Alpha(a), exitRadius+2)
-				pt.Fill(circle(ed.x, ed.y, exitRadius), routeColor(ed.r, t).Alpha(a), exitRadius)
-			}
-			if you != nil && yvis > 0 {
-				txt := i18n.Tf("你 · %s", you.City)
-				if guessed {
-					txt = i18n.Tf("你 · %s（推测）", you.City)
-				}
-				placeLabel(pt, b, r, yx, yy, youRadius+2+youPulse, txt, t.Text.Alpha(0.5+0.5*yvis), back, labelSize, true, true)
-			}
-			for _, ed := range exits {
-				if ed.vis <= 0 {
-					continue
-				}
-				name := ed.place.City
-				if f := geo.Flag(ed.place.Country); f != "" {
-					name = f + " " + name
-				}
-				if s := speedIn[ed.r.Group]; s != "" {
-					name += " · " + s
-				}
-				placeLabel(pt, b, r, ed.x, ed.y, exitRadius+6, name, t.Text.Alpha(0.4+0.6*ed.vis), back, labelSize, false, true)
-			}
-			for _, s := range speeds {
-				labelBeside(pt, b, r, s.x, s.y, s.nx, s.ny, s.w/2, s.txt, s.col.Alpha(0.6+0.4*s.vis), back, destSize, true)
-			}
-			for _, m := range destMarks {
-				placeLabel(pt, b, r, m.x, m.y, 8, m.city, t.TextMuted.Alpha(0.4+0.6*m.vis), back, destSize, false, false)
-			}
-			// Keep what the appends grew for the next frame.
-			b.destMarks, b.arrivals, b.speeds = destMarks, arrivals, speeds
+			fr := &mapFrame{pt: pt, t: t, b: b, r: r, g: g, now: now, reduce: reduce, focused: focused, ambient: ambient, live: live,
+				you: you, guessed: guessed, exits: exits, dests: dests}
+			p.drawRoutes(fr)
+			p.drawFlows(fr)
+			p.drawLabels(fr)
+			animating = animating || fr.animating
 		})
 		switch {
 		case animating && focused:
@@ -945,6 +414,286 @@ func (p *Page) drawMap(c *ui.Context, box ui.Element, rs []route, dests map[stri
 			pt.After(autoDelay)
 		}
 	})
+}
+
+// mapFrame is what the parts of a frame of the map share: drawRoutes
+// places everything and draws the routes to the destination countries,
+// drawFlows the routes and their request animation, drawLabels the
+// markers and labels over them.
+type mapFrame struct {
+	pt                             *ui.Painter
+	t                              *ui.Theme
+	b                              *globeBuffers
+	r                              ui.Rect
+	g                              globeProj
+	now                            time.Time
+	reduce, focused, ambient, live bool
+	you                            *model.Place
+	guessed                        bool
+	exits                          []exitDraw
+	dests                          map[string][]dest
+	yv                             vec3    // 「你」 on the sphere
+	yx, yy, yvis                   float32 // and on the screen
+	animating                      bool    // set by drawFlows
+}
+
+// drawRoutes projects 「你」 and the exits, builds the arcs between them
+// and draws the dashed lines to the destination countries with their
+// markers.
+func (p *Page) drawRoutes(fr *mapFrame) {
+	pt, t, b, g := fr.pt, fr.t, fr.b, fr.g
+	you, exits, dests, live := fr.you, fr.exits, fr.dests, fr.live
+	b.destMarks = b.destMarks[:0]
+	// Where everything is on the screen.
+	var yv vec3
+	var yx, yy, yvis float32
+	if you != nil {
+		yv = placeVec(*you)
+		yx, yy, yvis = g.project(yv)
+		if yvis > 0 {
+			b.reserve(yx, yy, 6)
+		}
+	}
+	seen, cities := b.seen, b.cities
+	for i := range exits {
+		ed := &exits[i]
+		ed.x, ed.y, ed.vis = g.project(ed.vec)
+		cities[ed.place.City] = true
+		if ed.vis > 0 {
+			b.reserve(ed.x, ed.y, 5)
+		}
+		if you != nil && live {
+			n := seen[ed.place.City]
+			seen[ed.place.City] = n + 1
+			ed.f.arc.build(g, yv, ed.vec, arcLift(yv, ed.vec, n), arcSamples)
+			ed.hasArc = true
+		}
+	}
+	// Destination countries: a thin dashed great circle from the
+	// exit to the country's representative city, fainter once no
+	// connection is left; drawn under the request animation.
+	destMarks := b.destMarks
+	for _, ed := range exits {
+		col := routeColor(ed.r, t)
+		for _, d := range dests[ed.r.Group] {
+			if d.place.Country == ed.place.Country {
+				continue
+			}
+			dv := placeVec(d.place)
+			alpha := float32(0.3)
+			if d.conns == 0 {
+				alpha = 0.14
+			}
+			b.dest.build(g, ed.vec, dv, arcLift(ed.vec, dv, 0)*0.6, destSamples)
+			b.dest.dashed(pt, b, 1, col.Alpha(alpha))
+			if dx, dy, vis := g.project(dv); vis > 0 && !cities[d.place.City] {
+				cities[d.place.City] = true
+				destMarks = append(destMarks, destMark{dx, dy, vis, d.place.City, ed.r.Group, d.conns > 0})
+				b.reserve(dx, dy, 4)
+			}
+		}
+	}
+	for _, m := range destMarks {
+		a := 0.4 + 0.6*m.vis
+		pt.Fill(circle(m.x, m.y, 3.5), t.Surface, 3.5)
+		pt.StrokePath(b.path.Reset().Circle(m.x, m.y, 3.5), 1.4, t.TextMuted.Alpha(a))
+	}
+	fr.yv, fr.yx, fr.yy, fr.yvis = yv, yx, yy, yvis
+	b.destMarks = destMarks
+}
+
+// drawFlows draws each route's arc and its request animation, and the
+// rings at the destinations of an arriving request.
+func (p *Page) drawFlows(fr *mapFrame) {
+	pt, t, b, now := fr.pt, fr.t, fr.b, fr.now
+	exits, reduce, focused := fr.exits, fr.reduce, fr.focused
+	destMarks := b.destMarks
+	animating := false
+	// The request animation along each route's arc: the route
+	// solid in its colour, requests travelling over it as glowing
+	// dots (more at once on a busy route), a ring spreading at the
+	// exit and at the route's destinations as one arrives.
+	arrivals, speeds, speedIn := b.arrivals, b.speeds, b.speedIn
+	for i := range exits {
+		ed := &exits[i]
+		if !ed.hasArc {
+			continue
+		}
+		ex, ey := ed.x, ed.y
+		if ed.vis <= 0 {
+			ex, ey = hidden[0], hidden[1]
+		}
+		p.addHit(ed.r.Group, &ed.f.arc, ex, ey)
+		col := routeColor(ed.r, t)
+		f := ed.f
+		a := &f.arc
+		w := arcWidth(f.speed)
+		live := active(f.speed)
+		// The route itself, the main one strongest; a route with
+		// traffic stronger and thicker still.
+		base := float32(0.4)
+		if ed.r.color == (ui.Color{}) {
+			base = 0.55
+		}
+		if !live {
+			w = 1.6
+		} else {
+			base += 0.2
+		}
+		a.stroke(pt, b, 1, w, col.Alpha(base))
+		if live {
+			// The speed beside the arc's middle, after the markers
+			// and their labels have taken their room; a short arc
+			// carries it in the exit's label instead.
+			txt := "↓ " + env.FmtSpeed(int64(f.speed))
+			if a.length < shortArc {
+				speedIn[ed.r.Group] = txt
+			} else if mx, my, mv := a.pointAt(0.5); mv > 0 {
+				x0, y0, _ := a.pointAt(0.45)
+				x1, y1, _ := a.pointAt(0.55)
+				nx, ny := -(y1 - y0), x1-x0
+				if n := dist(0, 0, nx, ny); n > 0 {
+					nx, ny = nx/n, ny/n
+				}
+				speeds = append(speeds, speedLabel{mx, my, nx, ny, w, mv, txt, col})
+			}
+		}
+		if reduce || !focused || !live {
+			// No request animation behind another app's window, nor
+			// on a route without traffic (under 512 B/s): the route,
+			// its width and its speed say what moves. Played for a
+			// quiet route too, the animation would restart at every
+			// data frame and keep the window drawing all day.
+			continue
+		}
+		if !f.armed {
+			f.armed = true
+			f.start = now.Add(time.Duration(200+len(ed.r.Group)*97%600) * time.Millisecond)
+		}
+		dur := flowDur(a.length)
+		total := dur + fadeDur + flowGap(f.speed)
+		el := now.Sub(f.start)
+		dot := func(x, y, vis, o float32) {
+			glow := w*2 + 8
+			pt.Fill(circle(x, y, glow), col.Alpha(0.14*vis*o), glow)
+			pt.Fill(circle(x, y, w+4), col.Alpha(0.3*vis*o), w+4)
+			pt.Fill(circle(x, y, w/2+2.5), t.Surface.Alpha(vis*o), w/2+2.5)
+			pt.Fill(circle(x, y, w/2+1.2), col.Alpha(vis*o), w/2+1.2)
+		}
+		switch {
+		case el < 0:
+			// Waiting for the first request.
+			animating = animating || live
+		case el < dur:
+			e := easeInOut(float32(el) / float32(dur))
+			a.stroke(pt, b, e, w, col)
+			for k := flowDots(f.speed) - 1; k >= 0; k-- {
+				if at := e - float32(k)*dotTrail; at > 0 {
+					if hx, hy, hv := a.pointAt(at); hv > 0 {
+						dot(hx, hy, hv, 1)
+					}
+				}
+			}
+			animating = true
+		case el < dur+fadeDur:
+			fp := float32(el-dur) / float32(fadeDur)
+			o := 1 - fp
+			a.stroke(pt, b, 1, w, col.Alpha(o))
+			if ed.vis > 0 {
+				dot(ed.x, ed.y, ed.vis, o)
+				rr := float32(rippleFrom + (rippleTo-rippleFrom)*float64(easeInOut(fp)))
+				pt.StrokePath(b.path.Reset().Circle(ed.x, ed.y, rr), 2, col.Alpha(0.9*o))
+			}
+			arrivals = append(arrivals, arrival{ed.r.Group, o, fp})
+			animating = true
+		case el < total:
+			// Pause between requests.
+			animating = true
+		default:
+			if live {
+				f.start = now
+				animating = true
+			} else {
+				f.start = now.Add(200 * time.Millisecond)
+			}
+		}
+	}
+	// The ring at the destinations of an arriving request.
+	for _, ar := range arrivals {
+		for _, m := range destMarks {
+			if m.group != ar.group || !m.live {
+				continue
+			}
+			var col ui.Color
+			for _, ed := range exits {
+				if ed.r.Group == ar.group {
+					col = routeColor(ed.r, t)
+				}
+			}
+			rr := float32(rippleFrom-1) + float32(rippleTo-rippleFrom)*0.7*easeInOut(ar.fp)
+			pt.StrokePath(b.path.Reset().Circle(m.x, m.y, rr), 1.5, col.Alpha(0.8*ar.o*m.vis))
+		}
+	}
+	fr.animating = animating
+	b.arrivals, b.speeds = arrivals, speeds
+}
+
+// drawLabels draws the markers of 「你」 and the exits, then every label.
+func (p *Page) drawLabels(fr *mapFrame) {
+	pt, t, b, r, now := fr.pt, fr.t, fr.b, fr.r, fr.now
+	you, guessed, exits, ambient := fr.you, fr.guessed, fr.exits, fr.ambient
+	yx, yy, yvis := fr.yx, fr.yy, fr.yvis
+	destMarks, speeds, speedIn := b.destMarks, b.speeds, b.speedIn
+	// Marks, then every label last over a surface-coloured pill so
+	// that it reads over arcs and dots: you first, then the exits,
+	// the speeds and the destination countries, each where it is
+	// clear of the others; a speed or a country's label gives way.
+	// The pulse around 「你」 stays under its label, which sits
+	// outside the pulse's reach.
+	back := t.Surface.Alpha(0.82)
+	if you != nil && yvis > 0 {
+		if ambient {
+			ph := float32(now.UnixNano()%int64(pulseDur)) / float32(pulseDur)
+			rr := float32(youRadius+2) + youPulse*ph
+			pt.StrokePath(b.path.Reset().Circle(yx, yy, rr), 1.5, t.Text.Alpha(0.5*(1-ph)*yvis))
+		}
+		pt.Fill(circle(yx, yy, youRadius+2), t.Surface.Alpha(yvis), youRadius+2)
+		pt.Fill(circle(yx, yy, youRadius), t.Text.Alpha(0.4+0.6*yvis), youRadius)
+	}
+	for _, ed := range exits {
+		if ed.vis <= 0 {
+			continue
+		}
+		a := 0.4 + 0.6*ed.vis
+		pt.Fill(circle(ed.x, ed.y, exitRadius+2), t.Surface.Alpha(a), exitRadius+2)
+		pt.Fill(circle(ed.x, ed.y, exitRadius), routeColor(ed.r, t).Alpha(a), exitRadius)
+	}
+	if you != nil && yvis > 0 {
+		txt := i18n.Tf("你 · %s", you.City)
+		if guessed {
+			txt = i18n.Tf("你 · %s（推测）", you.City)
+		}
+		placeLabel(pt, b, r, yx, yy, youRadius+2+youPulse, txt, t.Text.Alpha(0.5+0.5*yvis), back, labelSize, true, true)
+	}
+	for _, ed := range exits {
+		if ed.vis <= 0 {
+			continue
+		}
+		name := ed.place.City
+		if f := geo.Flag(ed.place.Country); f != "" {
+			name = f + " " + name
+		}
+		if s := speedIn[ed.r.Group]; s != "" {
+			name += " · " + s
+		}
+		placeLabel(pt, b, r, ed.x, ed.y, exitRadius+6, name, t.Text.Alpha(0.4+0.6*ed.vis), back, labelSize, false, true)
+	}
+	for _, s := range speeds {
+		labelBeside(pt, b, r, s.x, s.y, s.nx, s.ny, s.w/2, s.txt, s.col.Alpha(0.6+0.4*s.vis), back, destSize, true)
+	}
+	for _, m := range destMarks {
+		placeLabel(pt, b, r, m.x, m.y, 8, m.city, t.TextMuted.Alpha(0.4+0.6*m.vis), back, destSize, false, false)
+	}
 }
 
 // anyLive reports whether a route carries traffic now (active): the
@@ -967,100 +716,3 @@ func (p *Page) Hidden() {
 }
 
 func circle(cx, cy, r float32) ui.Rect { return ui.Rect{X: cx - r, Y: cy - r, W: 2 * r, H: 2 * r} }
-
-// pathNote is the line under a route about its path, and its colour. Only
-// a contradiction (PathSuspicious: 「名称为台湾，实测出口在香港」) is a warning
-// in orange (docs/design.md §5.1 名不副实提示); a relay (「经中转 · 入口 上海
-// 电信 → 落地 洛杉矶」) or a chain (「3 跳链式代理」) is plain information in
-// the muted colour (docs/exit-map.md §4A). Path notes of a measured exit
-// only: a name-guessed relay is itself a guess.
-func pathNote(ex model.ExitInfo, t *ui.Theme) (string, ui.Color) {
-	if ex.PathNote == "" {
-		return "", ui.Color{}
-	}
-	switch {
-	case ex.Path == model.PathSuspicious:
-		return ex.PathNote, t.Warning
-	case ex.Source != model.LocateProbe:
-		return "", ui.Color{}
-	case ex.Path == model.PathRelay:
-		return i18n.Tf("经中转 · %s", ex.PathNote), t.TextMuted
-	default:
-		return ex.PathNote, t.TextMuted
-	}
-}
-
-// routeList is the right-hand list: 当前出口, then 其他路由.
-func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct, probing bool) {
-	t := c.Theme()
-	k := p.e.Kit
-	switch {
-	case !run:
-		ui.Text(c, i18n.T("内核未启动")).FontSize(12).TextColor(t.TextMuted).Padding(20, 0).TextAlign(ui.Center)
-		return
-	case direct:
-		ui.Column(c).Gap(4).Padding(20, 0).Children(func() {
-			ui.Text(c, i18n.T("直连模式")).FontSize(12).TextColor(t.TextMuted).TextAlign(ui.Center)
-			ui.Text(c, i18n.T("流量不经过节点，无出口可显示")).FontSize(11).TextColor(t.TextMuted).TextAlign(ui.Center)
-		})
-		return
-	case len(rs) == 0:
-		ui.Text(c, i18n.T("暂无路由")).FontSize(12).TextColor(t.TextMuted).Padding(20, 0).TextAlign(ui.Center)
-		return
-	}
-	px := p.e.API.Proxies()
-	for i, r := range rs {
-		if i == 0 {
-			ui.Text(c, i18n.T("当前出口")).FontSize(11).TextColor(t.TextMuted).Padding(0, 6, 2, 6)
-		} else if i == 1 {
-			ui.Text(c, i18n.T("其他路由")).FontSize(11).TextColor(t.TextMuted).Padding(10, 6, 2, 6)
-		}
-		rt := r
-		col := routeColor(rt, t)
-		item := env.ClickableColumn(c.Key("route:"+rt.Group), i18n.Tf("%s：%s，在代理页查看", rt.Group, rt.Node)).Padding(6).Gap(3).Radius(6)
-		if item.Hovered() {
-			item.Background(t.SurfaceHover)
-		}
-		item.Children(func() {
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Box(c).Size(10, 10).Radius(2).Background(col).Shrink(0)
-				name := rt.Node
-				if rt.place != nil {
-					if f := geo.Flag(rt.place.Country); f != "" {
-						name = f + " " + name
-					}
-				}
-				size := float32(13)
-				if i > 0 {
-					size = 12
-				}
-				ui.Text(c, name).FontSize(size).FontWeight(600).SingleLine().Grow(1)
-				pr := px.Proxies[rt.Node]
-				k.Delay(c, pr.Delay, pr.Testing)
-			})
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				city := i18n.T("位置未知")
-				if rt.place != nil {
-					city = rt.place.City
-				}
-				ui.Text(c, rt.Group+" · "+city).FontSize(11).TextColor(t.TextMuted).SingleLine().Grow(1)
-				switch {
-				case rt.place == nil:
-				case probing:
-					k.Tag(c, i18n.T("实测中…"), "gray")
-				case rt.Exit.Source == model.LocateProbe:
-					k.Tag(c, i18n.T("实测"), "green")
-				default:
-					k.Tag(c, i18n.T("推测"), "gray")
-				}
-			})
-			if note, col := pathNote(rt.Exit, t); note != "" {
-				ui.Text(c, note).FontSize(11).TextColor(col)
-			}
-			ui.Text(c, i18n.Tf("%s · %d 个连接", env.FmtSpeed(rt.Speed), rt.Connections)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
-		})
-		if item.Clicked() {
-			p.e.Navigate(env.Proxies, rt.Group)
-		}
-	}
-}
