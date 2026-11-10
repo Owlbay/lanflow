@@ -407,3 +407,35 @@ func TestHaystackFindsSourceAndPayload(t *testing.T) {
 		}
 	}
 }
+
+// countConns counts the reads of the two connection lists.
+type countConns struct {
+	*fake.Fake
+	active, closed int
+}
+
+func (c *countConns) Connections() []model.Connection { c.active++; return c.Fake.Connections() }
+func (c *countConns) ClosedConnections() []model.Connection {
+	c.closed++
+	return c.Fake.ClosedConnections()
+}
+
+// TestReadsOnlyShownList: the list view reads only the tab it shows.
+func TestReadsOnlyShownList(t *testing.T) {
+	f := fake.NewInstant()
+	api := &countConns{Fake: f}
+	e, _ := testEnv(f)
+	e.API = api
+	p := New(e)
+	tt := ui.NewTester(p.View, 1000, 700)
+	tt.Frame()
+	if api.closed != 0 || api.active == 0 {
+		t.Fatalf("活动 tab read active %d, closed %d", api.active, api.closed)
+	}
+	p.tab = 1
+	a := api.active
+	tt.Frame()
+	if api.active != a || api.closed == 0 {
+		t.Fatalf("已关闭 tab read active %d more, closed %d", api.active-a, api.closed)
+	}
+}
