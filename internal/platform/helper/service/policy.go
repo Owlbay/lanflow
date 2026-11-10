@@ -18,9 +18,11 @@ type Policy struct {
 	// resolved) is owned by the installing user. Used for the controller
 	// socket's parent directory on macOS. Nil skips the check.
 	OwnerMatches func(path string, uid string) (bool, error)
-	// CheckController validates the controller endpoint. Nil means the
-	// platform default (set by policy_<os>.go).
-	CheckController func(p *Policy, controller string) error
+	// CheckController validates the controller endpoint and returns the
+	// form the helper uses (on unix: its parent directory resolved, so the
+	// socket hand-over later never re-resolves user-controlled symlinks).
+	// Nil means the platform default (set by policy_<os>.go).
+	CheckController func(p *Policy, controller string) (string, error)
 }
 
 // NewPolicy returns a policy for c with platform defaults.
@@ -89,7 +91,8 @@ func (p *Policy) Validate(spec protocol.Spec) (protocol.Spec, error) {
 	if check == nil {
 		check = checkController
 	}
-	if err := check(p, spec.Controller); err != nil {
+	out.Controller, err = check(p, spec.Controller)
+	if err != nil {
 		return out, err
 	}
 

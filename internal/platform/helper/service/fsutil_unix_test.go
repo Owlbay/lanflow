@@ -4,6 +4,7 @@ package service
 
 import (
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -256,3 +257,118 @@ func TestHandOverWorkDirOnlyRootOwned(t *testing.T) {
 }
 
 func protocolSpec(workDir string) protocol.Spec { return protocol.Spec{WorkDir: workDir} }
+
+// listenSocket creates a unix socket at path and returns its listener.
+func listenSocket(t *testing.T, path string) {
+	t.Helper()
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	if err := os.Chmod(path, 0o666); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func modeOf(t *testing.T, path string) os.FileMode {
+	t.Helper()
+	fi, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Mode().Perm()
+}
+
+func TestFixSocket(t *testing.T) {
+	d := resolvedShortTempDir(t)
+	sock := filepath.Join(d, "c.sock")
+	listenSocket(t, sock)
+	if err := fixSocket(d, "c.sock", os.Getuid()); err != nil {
+		t.Fatal(err)
+	}
+	if m := modeOf(t, sock); m != 0o600 {
+		t.Fatalf("mode = %o", m)
+	}
+}
+
+// TestFixSocketRecheckEachPass is the TOCTOU regression: after the first
+// pass the entry is replaced by a symlink to another socket; the second
+// pass must notice and leave the target alone.
+func TestFixSocketRecheckEachPass(t *testing.T) {
+	d := resolvedShortTempDir(t)
+	sock := filepath.Join(d, "c.sock")
+	other := filepath.Join(d, "o.sock")
+	listenSocket(t, sock)
+	listenSocket(t, other)
+	if err := fixSocket(d, "c.sock", os.Getuid()); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(sock); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, sock); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixSocket(d, "c.sock", os.Getuid()); err == nil {
+		t.Fatal("second pass followed a symlink")
+	}
+	if m := modeOf(t, other); m != 0o666 {
+		t.Fatalf("symlink target mode changed to %o", m)
+	}
+}
+
+func TestFixSocketRefusesHardLinkAndFile(t *testing.T) {
+	d := resolvedShortTempDir(t)
+	other := filepath.Join(d, "o.sock")
+	listenSocket(t, other)
+	if err := os.Link(other, filepath.Join(d, "c.sock")); err != nil {
+		t.Skip("cannot hard-link a socket here:", err)
+	}
+	if err := fixSocket(d, "c.sock", os.Getuid()); err == nil {
+		t.Fatal("handed over a hard-linked socket")
+	}
+	if m := modeOf(t, other); m != 0o666 {
+		t.Fatalf("hard link target mode changed to %o", m)
+	}
+	if err := os.WriteFile(filepath.Join(d, "f"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixSocket(d, "f", os.Getuid()); err == nil {
+		t.Fatal("handed over a regular file")
+	}
+}
+
+func TestFixSocketRefusesSymlinkedDir(t *testing.T) {
+	d := resolvedShortTempDir(t)
+	real := filepath.Join(d, "r")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	listenSocket(t, filepath.Join(real, "c.sock"))
+	if err := os.Symlink(real, filepath.Join(d, "l")); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixSocket(filepath.Join(d, "l"), "c.sock", os.Getuid()); err == nil {
+		t.Fatal("followed a symlinked controller directory")
+	}
+	if m := modeOf(t, filepath.Join(real, "c.sock")); m != 0o666 {
+		t.Fatalf("mode changed to %o", m)
+	}
+}
+
+// resolvedShortTempDir is a short, symlink-free temp dir (unix socket
+// paths are limited to ~100 bytes).
+func resolvedShortTempDir(t *testing.T) string {
+	t.Helper()
+	d, err := os.MkdirTemp("/tmp", "lf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(d) })
+	r, err := filepath.EvalSymlinks(d)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
