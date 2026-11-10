@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/url"
@@ -79,15 +80,29 @@ func (c *client) streamOnce(ctx context.Context, u string, onFrame func([]byte))
 	defer conn.CloseNow()
 	conn.SetReadLimit(readLimit)
 
+	// One buffer serves every frame of the session: a /connections frame
+	// (hundreds of KB every second) no longer costs a fresh allocation.
+	// onFrame must not keep the slice (stream decodes it at once).
+	var buf bytes.Buffer
 	for {
-		_, data, err := conn.Read(ctx)
+		_, r, err := conn.Reader(ctx)
 		if err != nil {
 			return gotFrame
 		}
+		buf.Reset()
+		if _, err := buf.ReadFrom(r); err != nil {
+			return gotFrame
+		}
 		gotFrame = true
-		onFrame(data)
+		onFrame(buf.Bytes())
+		if buf.Cap() > maxKeptFrameBuf {
+			buf = bytes.Buffer{} // do not pin one exceptional frame's memory
+		}
 	}
 }
+
+// maxKeptFrameBuf is the largest frame buffer kept between frames.
+const maxKeptFrameBuf = 4 << 20
 
 func (c *client) streamTraffic(ctx context.Context, fn func(Traffic)) error {
 	return stream(ctx, c, "/traffic", nil, fn)

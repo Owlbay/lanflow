@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"net"
 	"sort"
@@ -141,10 +140,7 @@ func (s *Service) systemChanged(reason string) {
 	if s.recheckTimer != nil {
 		s.recheckTimer.Stop()
 	}
-	s.recheckTimer = time.AfterFunc(recheckDebounce, func() {
-		if s.rootCtx.Err() != nil {
-			return
-		}
+	s.recheckTimer = s.afterFunc(recheckDebounce, func() {
 		s.alog.Infof("%s: rechecking core, system proxy and network", reason)
 		s.recheck()
 	})
@@ -199,7 +195,7 @@ func (s *Service) recheck() {
 // corePings reports whether the controller answers, trying twice.
 func (s *Service) corePings() bool {
 	for i := 0; i < 2; i++ {
-		ctx, cancel := context.WithTimeout(s.rootCtx, pingTimeout)
+		ctx, cancel := s.ctrlCtx(nil, pingTimeout)
 		_, err := s.d.ctrl.Version(ctx)
 		cancel()
 		if err == nil {

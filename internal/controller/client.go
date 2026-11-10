@@ -163,6 +163,9 @@ func (c *client) do(ctx context.Context, r request) error {
 	if err := dec.Decode(r.out); err != nil {
 		return &Error{Op: r.op, Status: resp.StatusCode, Message: "内核返回了无法解析的数据：" + err.Error(), cause: err}
 	}
+	// Drain what follows the value (a trailing newline) so the keep-alive
+	// connection can be reused.
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 	return nil
 }
 

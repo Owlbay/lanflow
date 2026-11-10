@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/platform/sysproxy"
@@ -172,24 +173,35 @@ func saveSettings(dir string, s model.Settings) error {
 	return nil
 }
 
-// writeFileAtomic writes data to a temp file in the same directory and renames it over path.
+// persistSettings writes the in-memory settings to settings.json.
+// settingsMu serializes "snapshot + write", so concurrent callers can never
+// write an older snapshot after a newer one: the file always ends up with
+// the latest state. Call without mu held.
+func (s *Service) persistSettings() error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.mu.Lock()
+	set := copySettings(s.state.settings)
+	s.mu.Unlock()
+	return saveSettings(s.opt.DataDir, set)
+}
+
+// updateSettings applies fn to the in-memory settings under mu and persists
+// the result; fn must not block. It is the read-modify-write form of
+// persistSettings for changes that do not need the core.
+func (s *Service) updateSettings(fn func(*model.Settings)) error {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	s.mu.Lock()
+	fn(&s.state.settings)
+	set := copySettings(s.state.settings)
+	s.mu.Unlock()
+	return saveSettings(s.opt.DataDir, set)
+}
+
+// writeFileAtomic writes data atomically and durably (fsx.WriteFile).
 func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, perm); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp, perm); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
-		return err
-	}
-	return nil
+	return fsx.WriteFile(path, data, perm)
 }
 
 // marker file: records that Lanflow set the system proxy, so a later start

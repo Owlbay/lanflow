@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -125,7 +124,7 @@ func (s *Service) ImportSubscriptionURL(rawURL, name, userAgent string, viaProxy
 	}
 	s.setImportPhase(model.ImportDownloading)
 	defer s.setImportPhase("")
-	ctx, cancel := context.WithTimeout(s.rootCtx, defaultSubTimeout)
+	ctx, cancel := s.ctrlCtx(nil, defaultSubTimeout)
 	defer cancel()
 	f, err := s.d.prof.Fetch(ctx, s.fetchClient(viaProxy, defaultSubTimeout), rawURL, userAgent)
 	if err != nil {
@@ -217,7 +216,7 @@ func (s *Service) validateStored(id string) error {
 	if err != nil {
 		return err
 	}
-	os.Remove(p.tmp)
+	p.discard()
 	return nil
 }
 
@@ -241,8 +240,9 @@ func (s *Service) UseSubscription(id string) (err error) {
 	bin := s.state.coreBin
 	running := s.state.st.Core == model.CoreRunning
 	s.mu.Unlock()
+	var p prepared
 	if bin != "" {
-		if _, err := s.prepare(composeArgs{subID: id}); err != nil {
+		if p, err = s.prepare(composeArgs{subID: id}); err != nil {
 			detail := err.Error()
 			msg := fmt.Sprintf(i18n.T("「%s」的配置未通过校验"), sub.Name)
 			if hadPrev {
@@ -253,24 +253,32 @@ func (s *Service) UseSubscription(id string) (err error) {
 		}
 	}
 	if err := s.d.store.SetCurrent(id); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("切换订阅失败：%v"), err)
 	}
 	s.refreshStore(TopicSubs)
-	switch {
-	case running:
-		if err := s.reloadLocked(); err != nil {
-			if hadPrev {
-				_ = s.d.store.SetCurrent(prev.ID)
-				s.refreshStore(TopicSubs)
-			}
-			s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: err.Error(), Subject: id})
-			return err
+	if !running {
+		p.discard() // a stopped core composes afresh when it starts
+		if !hadPrev {
+			// first subscription: start the core; the system proxy stays off
+			return s.startLocked()
 		}
-	case !hadPrev:
-		// first subscription: start the core; the system proxy stays off
-		if err := s.startLocked(); err != nil {
-			return err
+		return nil
+	}
+	if p.tmp != "" {
+		// p composes exactly the now-current subscription: reload it
+		// without composing and validating a second time.
+		err = s.reloadPrepared(p)
+	} else {
+		err = s.reloadLocked()
+	}
+	if err != nil {
+		if hadPrev {
+			_ = s.d.store.SetCurrent(prev.ID)
+			s.refreshStore(TopicSubs)
 		}
+		s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: err.Error(), Subject: id})
+		return err
 	}
 	return nil
 }
@@ -304,7 +312,7 @@ func (s *Service) updateOne(sub model.Subscription) error {
 	switch sub.Source {
 	case urlSubscriptionK:
 		timeout := subTimeout(sub)
-		ctx, cancel := context.WithTimeout(s.rootCtx, timeout)
+		ctx, cancel := s.ctrlCtx(nil, timeout)
 		f, err := s.d.prof.Fetch(ctx, s.fetchClient(sub.ViaProxy, timeout), sub.URL, sub.UserAgent)
 		cancel()
 		if err != nil {
@@ -334,34 +342,47 @@ func (s *Service) updateOne(sub model.Subscription) error {
 		return fail(errors.New(i18n.T("未知的订阅来源")))
 	}
 
+	// opMu covers validate → store → reload, so the validated config is
+	// the one reloaded (no switch or edit can slip in between) and is
+	// composed and checked once.
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 	s.mu.Lock()
 	bin := s.state.coreBin
 	s.mu.Unlock()
+	var p prepared
 	if bin != "" {
-		p, err := s.prepare(composeArgs{subID: sub.ID, content: data})
-		if err != nil {
+		var err error
+		if p, err = s.prepare(composeArgs{subID: sub.ID, content: data}); err != nil {
 			// §6.3: the dialog, not a toast; the stored content is unchanged.
 			msg := fmt.Sprintf(i18n.T("「%s」更新后的配置未通过校验，仍在使用上次的配置"), sub.Name)
 			s.notify(Notice{Kind: "invalid-config", Title: i18n.T("配置无法使用"), Detail: msg + i18n.T("。") + "\n" + err.Error(), Subject: sub.ID})
 			return fail(fmt.Errorf(i18n.T("「%s」更新后的%w：%v。仍在使用上次的配置。"), sub.Name, ErrInvalidConfig, err))
 		}
-		os.Remove(p.tmp) // validated only; the reload below composes again
 	}
 	if err := s.d.store.SetContent(sub.ID, data); err != nil {
+		p.discard()
 		return fail(fmt.Errorf(i18n.T("保存订阅内容失败：%v"), err))
 	}
 	if _, err := s.d.store.Put(sub); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("保存订阅失败：%v"), err)
 	}
-	if cur, ok := s.d.store.Current(); ok && cur.ID == sub.ID {
-		s.opMu.Lock()
-		err := s.reloadLocked()
-		s.opMu.Unlock()
-		if err != nil {
-			sub.LastError = err.Error()
-			_, _ = s.d.store.Put(sub)
-			return err
-		}
+	cur, ok := s.d.store.Current()
+	if !ok || cur.ID != sub.ID {
+		p.discard()
+		return nil
+	}
+	var err error
+	if p.tmp != "" {
+		err = s.reloadPrepared(p)
+	} else {
+		err = s.reloadLocked()
+	}
+	if err != nil {
+		sub.LastError = err.Error()
+		_, _ = s.d.store.Put(sub)
+		return err
 	}
 	return nil
 }
@@ -397,24 +418,77 @@ func (s *Service) autoUpdateLoop() {
 	}
 }
 
+// autoUpdateFailure remembers failed automatic updates of a subscription,
+// whose UpdatedAt does not move on failure: without it a failing update
+// would be retried (and notified) on every 10-minute tick.
+type autoUpdateFailure struct {
+	lastAttempt time.Time
+	failures    int    // consecutive failures
+	notified    string // the error last raised as a system notification
+}
+
+// autoRetryMin is the first wait after a failed automatic update; it
+// doubles with each further failure, up to the subscription's own interval.
+const autoRetryMin = time.Hour
+
+// retryAfter is the wait after n consecutive failures of a subscription
+// updating every interval.
+func retryAfter(n int, interval time.Duration) time.Duration {
+	d := autoRetryMin
+	for i := 1; i < n && d < interval; i++ {
+		d *= 2
+	}
+	if d > interval && interval >= autoRetryMin {
+		d = interval
+	}
+	return d
+}
+
 // runAutoUpdates updates the subscriptions whose interval has elapsed and
-// reports failures as notices.
+// reports failures as notices: once per distinct error, retrying with an
+// exponential backoff (at least an hour) rather than on every tick.
 func (s *Service) runAutoUpdates() {
 	now := s.d.now()
 	for _, sub := range s.d.store.List() {
 		if sub.Source != urlSubscriptionK || sub.AutoUpdateHours <= 0 {
 			continue
 		}
-		if now.Sub(sub.UpdatedAt) < time.Duration(sub.AutoUpdateHours)*time.Hour {
+		interval := time.Duration(sub.AutoUpdateHours) * time.Hour
+		if now.Sub(sub.UpdatedAt) < interval {
+			continue
+		}
+		s.mu.Lock()
+		f, failed := s.state.autoFail[sub.ID]
+		s.mu.Unlock()
+		if failed && now.Sub(f.lastAttempt) < retryAfter(f.failures, interval) {
 			continue
 		}
 		if s.rootCtx.Err() != nil {
 			return
 		}
 		s.alog.Infof("subscription %q due for its %dh auto update", sub.Name, sub.AutoUpdateHours)
-		if err := s.UpdateSubscription(sub.ID); err != nil {
-			s.notify(Notice{Kind: "error", Title: fmt.Sprintf(i18n.T("订阅「%s」自动更新失败"), sub.Name), Detail: err.Error(), Subject: sub.ID, System: true})
+		err := s.UpdateSubscription(sub.ID)
+		s.mu.Lock()
+		if err == nil {
+			delete(s.state.autoFail, sub.ID)
+			s.mu.Unlock()
+			continue
 		}
+		if s.state.autoFail == nil {
+			s.state.autoFail = map[string]autoUpdateFailure{}
+		}
+		f = s.state.autoFail[sub.ID]
+		f.lastAttempt = now
+		f.failures++
+		repeat := f.notified == err.Error()
+		f.notified = err.Error()
+		s.state.autoFail[sub.ID] = f
+		s.mu.Unlock()
+		if repeat {
+			s.alog.Warnf("subscription %q auto update failed again (%d in a row): %v", sub.Name, f.failures, err)
+			continue
+		}
+		s.notify(Notice{Kind: "error", Title: fmt.Sprintf(i18n.T("订阅「%s」自动更新失败"), sub.Name), Detail: err.Error(), Subject: sub.ID, System: true})
 	}
 }
 
@@ -463,20 +537,25 @@ func (s *Service) EditSubscription(in model.Subscription) error {
 	s.mu.Unlock()
 	cur, hasCur := s.d.store.Current()
 	affects := hasCur && cur.ID == sub.ID
+	var p prepared
 	if bin != "" {
-		p, err := s.prepare(composeArgs{subID: sub.ID, subOverrides: &selection})
-		if err != nil {
+		var err error
+		if p, err = s.prepare(composeArgs{subID: sub.ID, subOverrides: &selection}); err != nil {
 			return fmt.Errorf(i18n.T("覆写未保存，%v"), err)
 		}
-		os.Remove(p.tmp)
 	}
 	if _, err := s.d.store.Put(sub); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("保存订阅失败：%v"), err)
 	}
 	s.refreshStore(TopicSubs, TopicSettings)
-	if affects {
+	switch {
+	case affects && p.tmp != "":
+		return s.reloadPrepared(p) // p composes the stored selection
+	case affects:
 		return s.reloadLocked()
 	}
+	p.discard()
 	return nil
 }
 

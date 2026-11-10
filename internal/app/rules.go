@@ -1,12 +1,12 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -48,21 +48,41 @@ func mapRules(raw []controller.Rule, customCount int) []model.Rule {
 	return out
 }
 
-// refreshRules reloads GET /rules.
+// refreshRules reloads GET /rules, emitting only when they changed. It
+// runs after every config change and on demand (Rules, when the list is
+// older than refreshInterval): a long rule list is not worth fetching
+// every 10 s while nobody looks at it.
 func (s *Service) refreshRules() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	raw, err := s.d.ctrl.Rules(ctx)
 	cancel()
+	s.mu.Lock()
+	s.state.rulesBusy = false
 	if err != nil {
+		s.mu.Unlock()
 		return
 	}
-	s.mu.Lock()
-	s.state.rules = mapRules(raw, len(s.state.custom))
+	rules := mapRules(raw, len(s.state.custom))
+	changed := !reflect.DeepEqual(rules, s.state.rules)
+	s.state.rules = rules
+	s.state.rulesAt = s.d.now()
 	s.mu.Unlock()
-	s.em.emit(TopicRules)
+	if changed {
+		s.em.emit(TopicRules)
+	}
+}
+
+// refreshRulesIfStaleLocked starts a background refreshRules when the
+// rules (hit counts) are older than refreshInterval; call with mu held.
+func (s *Service) refreshRulesIfStaleLocked() {
+	if s.state.st.Core != model.CoreRunning || s.state.rulesBusy || s.d.now().Sub(s.state.rulesAt) < refreshInterval {
+		return
+	}
+	s.state.rulesBusy = true
+	s.goBackground(s.refreshRules)
 }
 
 // refreshProviders reloads GET /providers/rules.
@@ -70,7 +90,7 @@ func (s *Service) refreshProviders() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	raw, err := s.d.ctrl.RuleProviders(ctx)
 	cancel()
 	if err != nil {
@@ -82,9 +102,12 @@ func (s *Service) refreshProviders() {
 	}
 	sort.Slice(provs, func(i, j int) bool { return provs[i].Name < provs[j].Name })
 	s.mu.Lock()
+	changed := !reflect.DeepEqual(provs, s.state.provs)
 	s.state.provs = provs
 	s.mu.Unlock()
-	s.em.emit(TopicRules)
+	if changed {
+		s.em.emit(TopicRules)
+	}
 }
 
 // validateCustomRule checks a rule the user typed.
@@ -228,7 +251,7 @@ func (s *Service) SetRuleDisabled(index int, disabled bool) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	err := s.d.ctrl.DisableRules(ctx, map[int]bool{index: disabled})
 	cancel()
 	if err != nil {
@@ -253,7 +276,7 @@ func (s *Service) UpdateRuleProvider(name string) error {
 		s.mu.Unlock()
 		s.em.emit(TopicRules)
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
 	err := s.d.ctrl.UpdateRuleProvider(ctx, name)
 	cancel()
 	s.refreshProviders()
@@ -322,59 +345,60 @@ func (s *Service) TestRule(input string) (model.RuleMatch, error) {
 			resp.Body.Close()
 		}
 	}()
-	deadline := time.Now().Add(testRuleWait)
-	var found *controller.Connection
-	for found == nil && time.Now().Before(deadline) {
-		time.Sleep(testRulePoll)
-		ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
-		snap, err := s.d.ctrl.Connections(ctx)
-		cancel()
-		if err != nil {
-			continue
-		}
-		found = pickTestConn(snap.Connections, host, started)
+	// The connections stream already reports every connection each
+	// second (connInterval): watch its state instead of asking the core
+	// for the whole list five times a second.
+	wait := testRuleWait
+	if iv := 2*s.connInterval() + time.Second; iv > wait {
+		wait = iv // the window is in the background: the stream is slower
 	}
-	if found == nil {
-		// the connection may have closed already: look at the closed ring
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		time.Sleep(testRulePoll)
 		s.mu.Lock()
-		for _, c := range s.state.closed {
-			if connHost(c.Host) == host && !c.Start.Before(started.Add(-time.Second)) {
-				cc := c
-				s.mu.Unlock()
-				return matchFrom(cc.Rule, cc.RulePayload, cc.Chains, host, rules, customCount), nil
-			}
+		found, open := pickTestConnState(s.state.conns, &s.state.closed, host, started)
+		var m model.Connection
+		if found != nil {
+			m = *found
+			m.Chains = append([]string(nil), found.Chains...)
 		}
 		s.mu.Unlock()
-		<-done
-		return model.RuleMatch{}, errors.New(i18n.T("3 秒内没有在连接列表中看到这次请求，无法得知命中的规则。请检查内核是否正常，然后重试。"))
+		if found == nil {
+			continue
+		}
+		if open {
+			ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+			_ = s.d.ctrl.CloseConnection(ctx, m.ID)
+			cancel()
+		}
+		return matchFrom(m.Rule, m.RulePayload, m.Chains, host, rules, customCount), nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
-	_ = s.d.ctrl.CloseConnection(ctx, found.ID)
-	cancel()
-	m := toConnection(*found)
-	return matchFrom(m.Rule, m.RulePayload, m.Chains, host, rules, customCount), nil
+	<-done
+	return model.RuleMatch{}, errors.New(i18n.T("3 秒内没有在连接列表中看到这次请求，无法得知命中的规则。请检查内核是否正常，然后重试。"))
 }
 
-// pickTestConn returns the newest connection to host started after since.
-func pickTestConn(conns []controller.Connection, host string, since time.Time) *controller.Connection {
-	var best *controller.Connection
+// pickTestConnState returns the newest connection to host started after
+// since, among the open connections (open = true) or else the closed ring.
+// Call with mu held; the result points into state.
+func pickTestConnState(conns []model.Connection, closed *ring[model.Connection], host string, since time.Time) (best *model.Connection, open bool) {
+	match := func(c *model.Connection) bool {
+		return (connHost(c.Host) == host || c.DstIP == host) && !c.Start.Before(since.Add(-time.Second))
+	}
 	for i := range conns {
-		c := &conns[i]
-		h := c.Metadata.Host
-		if h == "" {
-			h = c.Metadata.SniffHost
-		}
-		if h != host && c.Metadata.DestinationIP != host {
-			continue
-		}
-		if c.Start.Before(since.Add(-time.Second)) {
-			continue
-		}
-		if best == nil || c.Start.After(best.Start) {
+		if c := &conns[i]; match(c) && (best == nil || c.Start.After(best.Start)) {
 			best = c
 		}
 	}
-	return best
+	if best != nil {
+		return best, true
+	}
+	for i := closed.len() - 1; i >= 0; i-- { // newest closed first
+		c := closed.at(i)
+		if match(&c) {
+			return &c, false
+		}
+	}
+	return nil, false
 }
 
 func connHost(hostPort string) string {

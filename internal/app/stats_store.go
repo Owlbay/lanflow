@@ -152,25 +152,22 @@ func (f *statsDayFile) day() *statsDay {
 	return d
 }
 
-// encode folds the day to the cap and marshals it, compressed.
-func (d *statsDay) encode(now time.Time) ([]byte, error) {
-	return gzipJSON(d.toFile(now))
-}
-
-// encodeMonth marshals the days of one month, compressed.
-func encodeMonth(month string, days []*statsDay, now time.Time) ([]byte, error) {
+// monthToFile converts the days of one month to the month file's form
+// (a copy: it can be encoded without the store's lock).
+func monthToFile(month string, days []*statsDay, now time.Time) statsMonthFile {
 	sort.Slice(days, func(i, j int) bool { return days[i].date < days[j].date })
 	f := statsMonthFile{Month: month, Days: make([]statsDayFile, len(days)), Saved: statsTime(now)}
 	for i, d := range days {
 		f.Days[i] = d.toFile(now)
 	}
-	return gzipJSON(f)
+	return f
 }
 
-// gzipJSON marshals v as JSON and compresses it.
+// gzipJSON marshals v as JSON and compresses it. DefaultCompression: the
+// best level costs several times the CPU for a few percent.
 func gzipJSON(v any) ([]byte, error) {
 	var buf bytes.Buffer
-	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	zw, err := gzip.NewWriterLevel(&buf, gzip.DefaultCompression)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +343,7 @@ func (s *statsStore) load() error {
 		}
 	}
 	s.mu.Lock()
+	s.histGen++
 	for k, d := range days {
 		if cur, ok := s.days[k]; ok {
 			// Data recorded before load finished stays on top of the file's.
@@ -395,18 +393,28 @@ func mergeStatsDay(into, from *statsDay) {
 
 // flush writes what changed and drops the expired days: a dirty day of
 // the current month to its own file, the days of any other month with a
-// dirty day to that month's file (removing their day files). Encoding
-// runs under the lock, the disk writes outside it.
+// dirty day to that month's file (removing their day files). Only the
+// conversion to the file form (a copy) runs under the lock; marshalling,
+// compression and the disk writes run outside it. A write that fails
+// marks its days dirty again (and keeps the files it would replace), so
+// the next flush retries instead of losing them. flushMu keeps reset out
+// for the whole flush.
 func (s *statsStore) flush() error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	now := s.now()
 	oldest := retainedSince(now)
 	curMonth := now.Format(statsMonthLayout)
 	type pending struct {
-		path string
-		data []byte
+		path   string
+		file   any // statsDayFile or statsMonthFile
+		days   []*statsDay
+		files  []string // each day's file before this flush (restored on failure)
+		month  string   // a past month's file ("" for a day file)
+		remove []string // files this write replaces, removed once it succeeded
 	}
 	var writes []pending
-	var remove []string
+	var remove []string // expired files
 	s.mu.Lock()
 	months := map[string]bool{} // past months to rewrite
 	for m := range s.rewrite {
@@ -423,6 +431,7 @@ func (s *statsStore) flush() error {
 				months[monthOf(k)] = true
 			}
 			s.gen++
+			s.histGen++
 			continue
 		}
 		m := monthOf(k)
@@ -436,18 +445,14 @@ func (s *statsStore) flush() error {
 		if !d.dirty {
 			continue
 		}
-		data, err := d.encode(now)
-		if err != nil {
-			s.mu.Unlock()
-			return err
+		path := s.dayFile(k)
+		w := pending{path: path, file: d.toFile(now), days: []*statsDay{d}, files: []string{d.file}}
+		if d.file != "" && d.file != path {
+			w.remove = append(w.remove, d.file) // the first version's plain file
 		}
 		d.dirty = false
-		path := s.dayFile(k)
-		if d.file != "" && d.file != path {
-			remove = append(remove, d.file) // the first version's plain file
-		}
 		d.file = path
-		writes = append(writes, pending{path, data})
+		writes = append(writes, w)
 	}
 	for m := range months {
 		days := byMonth[m]
@@ -455,26 +460,55 @@ func (s *statsStore) flush() error {
 			remove = append(remove, s.monthFile(m))
 			continue
 		}
-		data, err := encodeMonth(m, days, now)
-		if err != nil {
-			s.mu.Unlock()
-			return err
-		}
+		w := pending{path: s.monthFile(m), file: monthToFile(m, days, now), days: days, month: m}
 		for _, d := range days {
+			w.files = append(w.files, d.file)
 			d.dirty = false
 			if d.file != "" {
-				remove = append(remove, d.file)
+				w.remove = append(w.remove, d.file)
 				d.file = ""
 			}
 		}
-		writes = append(writes, pending{s.monthFile(m), data})
+		writes = append(writes, w)
+	}
+	if len(months) > 0 {
+		s.histGen++ // past days were folded to the cap for their file
 	}
 	s.mu.Unlock()
+
 	var first error
+	var failed []pending
 	for _, w := range writes {
-		if err := writeFileAtomic(w.path, w.data, 0o600); err != nil && first == nil {
-			first = err
+		data, err := gzipJSON(w.file)
+		if err == nil {
+			err = writeFileAtomic(w.path, data, 0o600)
 		}
+		if err != nil {
+			if first == nil {
+				first = err
+			}
+			failed = append(failed, w)
+			continue
+		}
+		remove = append(remove, w.remove...)
+	}
+	if len(failed) > 0 {
+		s.mu.Lock()
+		for _, w := range failed {
+			for i, d := range w.days {
+				if s.days[d.date] != d {
+					continue // expired meanwhile
+				}
+				d.dirty = true
+				if d.file == w.path || d.file == "" {
+					d.file = w.files[i]
+				}
+			}
+			if w.month != "" {
+				s.rewrite[w.month] = true
+			}
+		}
+		s.mu.Unlock()
 	}
 	for _, p := range remove {
 		_ = os.Remove(p)
@@ -483,13 +517,19 @@ func (s *statsStore) flush() error {
 }
 
 // reset forgets everything in memory and on disk. The last byte totals of
-// the open connections are kept, so only their future bytes count.
+// the open connections are kept, so only their future bytes count. It
+// waits for a running flush, which would otherwise write the erased days
+// back.
 func (s *statsStore) reset() error {
+	s.flushMu.Lock()
+	defer s.flushMu.Unlock()
 	s.mu.Lock()
 	s.days = map[string]*statsDay{}
 	s.cache = map[string]cachedStats{}
+	s.hist = map[string]*statsAgg{}
 	s.rewrite = map[string]bool{}
 	s.gen++
+	s.histGen++
 	s.mu.Unlock()
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
@@ -501,7 +541,7 @@ func (s *statsStore) reset() error {
 	var first error
 	for _, e := range entries {
 		name := e.Name()
-		_, ok := classifyStatsFile(strings.TrimSuffix(name, statsTmpExt))
+		_, ok := classifyStatsFile(statsFileOf(name))
 		if e.IsDir() || !ok {
 			continue
 		}
@@ -510,6 +550,17 @@ func (s *statsStore) reset() error {
 		}
 	}
 	return first
+}
+
+// statsFileOf maps a temp file of a stats file write back to that file's
+// name: the first version's "<name>.tmp", fsx's ".<name>.tmp-<random>".
+func statsFileOf(name string) string {
+	if strings.HasPrefix(name, ".") {
+		if i := strings.Index(name, ".tmp-"); i > 0 {
+			return name[1:i]
+		}
+	}
+	return strings.TrimSuffix(name, statsTmpExt)
 }
 
 // diskSize is the size of the stats directory's files, in bytes.

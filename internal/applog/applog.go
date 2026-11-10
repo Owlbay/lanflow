@@ -39,11 +39,14 @@ const (
 // Logger writes the app log. The zero value and a nil *Logger are usable
 // and keep entries in memory only.
 type Logger struct {
-	mu      sync.Mutex
-	path    string
-	f       *os.File
-	size    int64
+	mu   sync.Mutex
+	path string
+	f    *os.File
+	size int64
+	// entries is a ring of the newest maxEntries entries: head is the
+	// oldest, n how many are held (allocated on the first entry).
 	entries []model.LogEntry
+	head, n int
 	onWrite func()
 	now     func() time.Time
 }
@@ -116,10 +119,7 @@ func (l *Logger) add(level, msg string) {
 	if l.now != nil {
 		now = l.now()
 	}
-	l.entries = append(l.entries, model.LogEntry{Time: now, Level: level, Payload: oneLine})
-	if len(l.entries) > maxEntries {
-		l.entries = append([]model.LogEntry(nil), l.entries[len(l.entries)-maxEntries:]...)
-	}
+	l.pushLocked(model.LogEntry{Time: now, Level: level, Payload: oneLine})
 	if l.f != nil {
 		line := fmt.Sprintf("%s %-7s %s\n", now.Format("2006-01-02 15:04:05.000"), strings.ToUpper(level), oneLine)
 		if l.size > 0 && l.size+int64(len(line)) > maxSize {
@@ -137,6 +137,20 @@ func (l *Logger) add(level, msg string) {
 	}
 }
 
+// pushLocked appends e to the ring, dropping the oldest entry when full.
+func (l *Logger) pushLocked(e model.LogEntry) {
+	if l.entries == nil {
+		l.entries = make([]model.LogEntry, maxEntries)
+	}
+	if l.n < maxEntries {
+		l.entries[(l.head+l.n)%maxEntries] = e
+		l.n++
+		return
+	}
+	l.entries[l.head] = e
+	l.head = (l.head + 1) % maxEntries
+}
+
 func (l *Logger) rotateLocked() {
 	l.f.Close()
 	l.f = nil
@@ -151,7 +165,14 @@ func (l *Logger) Entries() []model.LogEntry {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return append([]model.LogEntry(nil), l.entries...)
+	if l.n == 0 {
+		return nil
+	}
+	out := make([]model.LogEntry, l.n)
+	for i := range out {
+		out[i] = l.entries[(l.head+i)%maxEntries]
+	}
+	return out
 }
 
 // Clear forgets the entries in memory (the file is kept).
@@ -160,7 +181,7 @@ func (l *Logger) Clear() {
 		return
 	}
 	l.mu.Lock()
-	l.entries = nil
+	l.entries, l.head, l.n = nil, 0, 0
 	l.mu.Unlock()
 }
 

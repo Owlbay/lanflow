@@ -63,6 +63,19 @@ type statsStore struct {
 	gen     uint64                 // bumps on every change; the snapshot cache keys on it
 	cache   map[string]cachedStats
 	rewrite map[string]bool // past months whose file must be written again (days expired)
+
+	// histGen bumps when a day other than today changes (load, expiry,
+	// reset, a late sample for yesterday); hist caches the aggregate of a
+	// range's days before today, which the per-second recording of today
+	// therefore leaves valid.
+	histGen uint64
+	hist    map[string]*statsAgg // by rangeKey
+	keyBuf  [8]statsKey          // keysOf's result, reused (mu held)
+
+	// flushMu serializes flush and reset, so a reset cannot slip in
+	// between a flush's snapshot and its writes (which would bring the
+	// erased data back).
+	flushMu sync.Mutex
 }
 
 type cachedStats struct {
@@ -81,7 +94,7 @@ func newStatsStore(dir string, now func() time.Time, country func(ip string) str
 		country = func(string) string { return "" }
 	}
 	return &statsStore{dir: dir, now: now, country: country, days: map[string]*statsDay{}, prev: map[string]statsSample{},
-		ips: map[string]string{}, cache: map[string]cachedStats{}, rewrite: map[string]bool{}}
+		ips: map[string]string{}, cache: map[string]cachedStats{}, rewrite: map[string]bool{}, hist: map[string]*statsAgg{}}
 }
 
 // record accounts one snapshot of the active connections taken at now and
@@ -126,6 +139,9 @@ func (s *statsStore) record(conns []model.Connection, now time.Time) bool {
 	if changed {
 		day.dirty = true
 		s.gen++
+		if day.date != s.now().Format(statsDayLayout) {
+			s.histGen++ // a late sample for a day already in the history
+		}
 	}
 	return changed
 }
@@ -136,7 +152,8 @@ type statsKey struct {
 	key, detail string
 }
 
-// keysOf maps a connection to its bucket in every dimension.
+// keysOf maps a connection to its bucket in every dimension. The result
+// lives in s.keyBuf (mu held) and is valid until the next call.
 func (s *statsStore) keysOf(c model.Connection) []statsKey {
 	host := statsHost(c.Host)
 	domain := registrableDomain(host)
@@ -148,7 +165,7 @@ func (s *statsStore) keysOf(c model.Connection) []statsKey {
 	if node != group {
 		proxyKey = group + "/" + node
 	}
-	return []statsKey{
+	s.keyBuf = [8]statsKey{
 		{model.StatsDevice, c.SourceIP, ""},
 		{model.StatsDomain, domain, ""},
 		{model.StatsHost, host, domain},
@@ -158,6 +175,7 @@ func (s *statsStore) keysOf(c model.Connection) []statsKey {
 		{model.StatsCountry, s.countryLocked(c.DstIP), ""},
 		{model.StatsInbound, c.Type, ""},
 	}
+	return s.keyBuf[:]
 }
 
 // countryLocked resolves a destination IP's country through a bounded cache.
@@ -314,7 +332,89 @@ func (s *statsStore) snapshot(rangeKey string) model.TrafficStats {
 	return copyStats(st)
 }
 
-// buildLocked computes the statistics of rangeKey as of now.
+// statsAgg is the running sum of some days: totals, the earliest day and
+// the buckets merged per dimension.
+type statsAgg struct {
+	key    string // the day range it covers: sinceKey + ".." + before
+	gen    uint64 // histGen it was built at
+	totals model.StatsTotals
+	first  string
+	merged map[model.StatsDimension]map[string]*model.StatsBucket
+}
+
+func newStatsAgg() *statsAgg {
+	return &statsAgg{merged: map[model.StatsDimension]map[string]*model.StatsBucket{}}
+}
+
+// add sums one day in.
+func (a *statsAgg) add(d *statsDay) {
+	if a.first == "" || d.date < a.first {
+		a.first = d.date
+	}
+	for _, h := range d.hours {
+		a.totals.Upload += h.Upload
+		a.totals.Download += h.Download
+		a.totals.Requests += h.Requests
+	}
+	for dim, m := range d.dims {
+		a.addBuckets(dim, m)
+	}
+}
+
+func (a *statsAgg) addBuckets(dim model.StatsDimension, m map[string]*model.StatsBucket) {
+	out := a.merged[dim]
+	if out == nil {
+		out = make(map[string]*model.StatsBucket, len(m))
+		a.merged[dim] = out
+	}
+	for key, b := range m {
+		o, ok := out[key]
+		if !ok {
+			cp := *b
+			out[key] = &cp
+			continue
+		}
+		o.Requests += b.Requests
+		o.Upload += b.Upload
+		o.Download += b.Download
+		if b.LastSeen.After(o.LastSeen) {
+			o.LastSeen = b.LastSeen
+			if b.Detail != "" {
+				o.Detail = b.Detail
+			}
+		}
+	}
+}
+
+// clone returns a copy that can take more days without touching a.
+func (a *statsAgg) clone() *statsAgg {
+	out := &statsAgg{totals: a.totals, first: a.first, merged: make(map[model.StatsDimension]map[string]*model.StatsBucket, len(a.merged))}
+	for dim, m := range a.merged {
+		out.addBuckets(dim, m)
+	}
+	return out
+}
+
+// histLocked returns the aggregate of the days in [sinceKey, todayKey),
+// built once per range and day and kept until a past day changes.
+func (s *statsStore) histLocked(rangeKey, sinceKey, todayKey string) *statsAgg {
+	key := sinceKey + ".." + todayKey
+	if h := s.hist[rangeKey]; h != nil && h.key == key && h.gen == s.histGen {
+		return h
+	}
+	h := newStatsAgg()
+	h.key, h.gen = key, s.histGen
+	for k, d := range s.days {
+		if k >= sinceKey && k < todayKey {
+			h.add(d)
+		}
+	}
+	s.hist[rangeKey] = h
+	return h
+}
+
+// buildLocked computes the statistics of rangeKey as of now: the cached
+// history of the range plus today.
 func (s *statsStore) buildLocked(rangeKey string, now time.Time) model.TrafficStats {
 	since := rangeStart(rangeKey, now)
 	st := model.TrafficStats{Range: rangeKey, Since: since, Buckets: map[model.StatsDimension][]model.StatsBucket{}, Days: len(s.days)}
@@ -322,51 +422,27 @@ func (s *statsStore) buildLocked(rangeKey string, now time.Time) model.TrafficSt
 	if !since.IsZero() {
 		sinceKey = since.Format(statsDayLayout)
 	}
-	merged := map[model.StatsDimension]map[string]*model.StatsBucket{}
-	first := ""
+	today := startOfDay(now)
+	todayKey := today.Format(statsDayLayout)
+	var agg *statsAgg
+	if sinceKey >= todayKey {
+		agg = newStatsAgg() // today only: no history to keep
+	} else {
+		agg = s.histLocked(rangeKey, sinceKey, todayKey).clone()
+	}
 	for k, d := range s.days {
-		if k < sinceKey {
-			continue
-		}
-		if first == "" || k < first {
-			first = k
-		}
-		for _, h := range d.hours {
-			st.Totals.Upload += h.Upload
-			st.Totals.Download += h.Download
-			st.Totals.Requests += h.Requests
-		}
-		for dim, m := range d.dims {
-			out := merged[dim]
-			if out == nil {
-				out = map[string]*model.StatsBucket{}
-				merged[dim] = out
-			}
-			for key, b := range m {
-				o, ok := out[key]
-				if !ok {
-					cp := *b
-					out[key] = &cp
-					continue
-				}
-				o.Requests += b.Requests
-				o.Upload += b.Upload
-				o.Download += b.Download
-				if b.LastSeen.After(o.LastSeen) {
-					o.LastSeen = b.LastSeen
-					if b.Detail != "" {
-						o.Detail = b.Detail
-					}
-				}
-			}
+		// today, and any day after it (a clock that went back)
+		if k >= todayKey && k >= sinceKey {
+			agg.add(d)
 		}
 	}
-	if since.IsZero() && first != "" {
-		if t, err := time.ParseInLocation(statsDayLayout, first, now.Location()); err == nil {
+	st.Totals.Upload, st.Totals.Download, st.Totals.Requests = agg.totals.Upload, agg.totals.Download, agg.totals.Requests
+	if since.IsZero() && agg.first != "" {
+		if t, err := time.ParseInLocation(statsDayLayout, agg.first, now.Location()); err == nil {
 			st.Since = t
 		}
 	}
-	for dim, m := range merged {
+	for dim, m := range agg.merged {
 		bs := make([]*model.StatsBucket, 0, len(m))
 		for _, b := range m {
 			bs = append(bs, b)
@@ -382,11 +458,10 @@ func (s *statsStore) buildLocked(rangeKey string, now time.Time) model.TrafficSt
 		st.Buckets[dim] = out
 	}
 	// Series: the day's hours, or the last 30 days.
-	today := startOfDay(now)
 	if rangeKey == model.StatsToday {
 		st.Hourly = true
 		st.Series = make([]model.StatsPoint, 24)
-		d := s.days[today.Format(statsDayLayout)]
+		d := s.days[todayKey]
 		for h := range st.Series {
 			st.Series[h].Time = today.Add(time.Duration(h) * time.Hour)
 			if d != nil {

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/model"
 )
 
@@ -176,37 +177,10 @@ func validID(id string) bool {
 	return true
 }
 
-// atomicWrite writes data to path via a temp file in the same directory and
-// renames it into place. The file ends up 0600.
+// atomicWrite writes data to path atomically and durably (fsx.WriteFile).
+// The file ends up 0600.
 func atomicWrite(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
-	}
-	tmpName := tmp.Name()
-	cleanup := func() { _ = os.Remove(tmpName) }
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		cleanup()
-		return fmt.Errorf("无法设置 %s 的权限：%w", filepath.Base(path), err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		cleanup()
-		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		cleanup()
-		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
-	}
-	if err := tmp.Close(); err != nil {
-		cleanup()
-		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		cleanup()
+	if err := fsx.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("无法保存 %s：%w", filepath.Base(path), err)
 	}
 	return nil
@@ -358,9 +332,36 @@ func (s *store) setContent(id string, data []byte) error {
 	if !validID(id) {
 		return fmt.Errorf("订阅 ID 无效：%q", id)
 	}
+	// The (large) content is written and synced outside the lock; only the
+	// rename happens under it, so readers never wait for the disk.
+	path := s.contentPath(id)
+	f, err := fsx.CreateTemp(path, 0o600)
+	if err != nil {
+		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		os.Remove(f.Name())
+		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(f.Name())
+		return fmt.Errorf("无法写入 %s：%w", filepath.Base(path), err)
+	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return atomicWrite(s.contentPath(id), data)
+	err = os.Rename(f.Name(), path)
+	s.mu.Unlock()
+	if err != nil {
+		os.Remove(f.Name())
+		return fmt.Errorf("无法保存 %s：%w", filepath.Base(path), err)
+	}
+	fsx.SyncDir(filepath.Dir(path))
+	return nil
 }
 
 func validOverrideKey(key string) bool {

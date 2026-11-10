@@ -77,8 +77,37 @@ func TestRotatingFileRotatesAtLimit(t *testing.T) {
 		}
 	}
 	_ = rf.Close()
-	if _, err := rf.Write(line); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("write after close: err=%v, want ErrClosed", err)
+	before, _ := os.Stat(path)
+	if n, err := rf.Write(line); err != nil || n != len(line) {
+		t.Fatalf("write after close: n=%d err=%v, want discarded without error", n, err)
+	}
+	if after, _ := os.Stat(path); after.Size() != before.Size() {
+		t.Fatal("write after close reached the file")
+	}
+}
+
+// A failing disk must not fail Write: the error would end exec.Cmd's copy
+// goroutine and get the child killed by SIGPIPE. The error is kept once.
+func TestRotatingFileWriteNeverFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "core.log")
+	rf, err := openRotatingFile(path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rf.Close()
+	_, _ = rf.Write([]byte("0123456789"))
+	// Rotation now fails: the directory disappears under the file.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		if n, err := rf.Write([]byte("more\n")); err != nil || n != 5 {
+			t.Fatalf("write %d: n=%d err=%v", i, n, err)
+		}
+	}
+	if rf.Err() == nil {
+		t.Fatal("the failure was not recorded")
 	}
 }
 

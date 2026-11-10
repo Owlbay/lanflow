@@ -80,7 +80,7 @@ func (s *Service) RunLeakCheckWith(domain string) error {
 	st := s.state.st
 	port := s.state.settings.MixedPort
 	netInfo := s.state.net
-	rd := parseRuntimeDNS(s.state.runtimeYAML)
+	rd := s.state.runtimeDNS
 	var you model.EndpointInfo
 	if s.state.you != nil {
 		you = *s.state.you
@@ -94,7 +94,7 @@ func (s *Service) RunLeakCheckWith(domain string) error {
 	s.mu.Unlock()
 	s.em.emit(TopicNet)
 
-	ctx, cancel := context.WithTimeout(s.rootCtx, leakTimeout)
+	ctx, cancel := s.ctrlCtx(nil, leakTimeout)
 	defer cancel()
 	var items []model.LeakItem
 	if st.Mode == model.ModeDirect {

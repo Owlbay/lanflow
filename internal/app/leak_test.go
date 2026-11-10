@@ -95,6 +95,7 @@ func TestLeakCheckTUNAllClear(t *testing.T) {
 	h.s.state.st.TUN = true
 	h.s.state.net.DNS = []string{"223.5.5.5"}
 	h.s.state.runtimeYAML = []byte("dns:\n  enhanced-mode: fake-ip\n  fake-ip-range: 198.18.0.1/16\n")
+	h.s.state.runtimeDNS = parseRuntimeDNS(h.s.state.runtimeYAML)
 	h.s.mu.Unlock()
 
 	if err := h.s.RunLeakCheck(); err != nil {
@@ -155,6 +156,7 @@ func TestLeakCheckTUNLeaks(t *testing.T) {
 	h.s.state.net.DNS = []string{"192.168.1.1"}
 	h.s.state.net.IPv6 = "2001:db8::10"
 	h.s.state.runtimeYAML = []byte("dns:\n  enhanced-mode: fake-ip\n")
+	h.s.state.runtimeDNS = parseRuntimeDNS(h.s.state.runtimeYAML)
 	h.s.mu.Unlock()
 	if err := h.s.RunLeakCheckWith("https://Example.com/path"); err != nil {
 		t.Fatal(err)

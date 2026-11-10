@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net"
@@ -47,14 +48,21 @@ type Service struct {
 
 	opMu sync.Mutex
 
+	// settingsMu serializes settings.json writes with the snapshot they
+	// write (persistSettings); taken before mu, never while mu is held.
+	settingsMu sync.Mutex
+
 	mu    sync.Mutex
 	state state
 	em    *emitter
 
 	// streams of the running core (guarded by mu)
+	streamCtx    context.Context // parent of every stream; nil while stopped
 	streamCancel context.CancelFunc
 	logsCancel   context.CancelFunc
+	logsDone     chan struct{} // closed when the current log stream returned
 	connsCancel  context.CancelFunc
+	connsDone    chan struct{} // closed when the current connections stream returned
 	streamWG     sync.WaitGroup
 	background   atomic.Bool // the window is out of sight (SetBackground, streams.go)
 
@@ -68,6 +76,13 @@ type Service struct {
 
 	probeExitMu sync.Mutex // one 检测 probe uses the probe group at a time (probe.go)
 
+	f2 feat2State // Wi-Fi rules and WebDAV backup (feat2state.go); its own lock
+
+	// bgMu guards closing against wg.Add: once Shutdown sets closing, no
+	// new background goroutine or timer callback joins wg (Add racing Wait).
+	bgMu    sync.Mutex
+	closing bool
+
 	stats *statsStore // 流量统计 (stats.go); its own lock
 	cores coresState  // installed Mihomo versions and release lists (cores.go); its own lock
 }
@@ -80,9 +95,10 @@ type state struct {
 	totalUp  int64 // last connections snapshot totals
 	totalDn  int64
 
-	proxies  model.ProxySnapshot
-	rawProxy map[string]controller.Proxy
-	testing  map[string]bool
+	proxies     model.ProxySnapshot
+	rawProxy    map[string]controller.Proxy
+	testing     map[string]bool
+	snapPending bool // delay results wait for flushSnapshot (proxies.go)
 
 	pprovs    []model.ProxyProvider // proxy-providers, sorted by name (proxies.go)
 	pprovBusy map[string]string     // provider → "update" | "check" while an action runs
@@ -91,12 +107,14 @@ type state struct {
 	subsUpdating map[string]bool
 
 	conns   []model.Connection
-	closed  []model.Connection
+	closed  ring[model.Connection] // the newest closedRing closed connections
 	tracker connTracker
 
-	logs []model.LogEntry
+	logs ring[model.LogEntry] // the newest logRing core log lines
 
 	rules        []model.Rule
+	rulesAt      time.Time // when rules were fetched (refreshed on demand, rules.go)
+	rulesBusy    bool      // a refreshRules runs
 	custom       []model.CustomRule
 	provs        []model.RuleProvider
 	provUpdating map[string]bool
@@ -117,11 +135,14 @@ type state struct {
 	effDNS model.EffectiveDNS
 	effSnf model.EffectiveSniffer
 
+	effKey [sha256.Size]byte // what effDNS / effSnf were parsed from (effective.go)
+
 	geoInfo   model.GeoDataInfo // geo file times (geoinfo.go), re-read when geoInfoAt is stale
 	geoInfoAt time.Time
 
 	overrides    model.Overrides
 	runtimeYAML  []byte
+	runtimeDNS   runtimeDNS // the dns keys of runtimeYAML, parsed once per commit (network.go)
 	runtimeLines []model.RuntimeLine
 	groupIcons   map[string]string // proxy-group name → icon reference of the runtime config (icons.go)
 	icons        *iconCache        // decoded / downloaded icons (icons.go), allocated lazily
@@ -137,11 +158,12 @@ type state struct {
 	runningTUN    bool        // the running config has TUN enabled
 	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
 	lastAutoStart time.Time
-	youDone       bool // You() fetched (or being fetched) for this start
-	youBusy       bool // a fetchYou loop is running
-	youGen        int  // bumps to stop an older fetchYou loop
-	hintDone      bool // the system-proxy hint bubble was dismissed or the proxy was turned on once (hintFile)
-	hintSaving    bool // hintFile write in flight
+	autoFail      map[string]autoUpdateFailure // subscription ID → failed auto updates (subs.go)
+	youDone       bool                         // You() fetched (or being fetched) for this start
+	youBusy       bool                         // a fetchYou loop is running
+	youGen        int                          // bumps to stop an older fetchYou loop
+	hintDone      bool                         // the system-proxy hint bubble was dismissed or the proxy was turned on once (hintFile)
+	hintSaving    bool                         // hintFile write in flight
 }
 
 var _ API = (*Service)(nil)
@@ -242,6 +264,8 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		provUpdating: map[string]bool{},
 		exits:        map[string]model.ExitInfo{},
 		exitEntry:    map[string]string{},
+		logs:         newRing[model.LogEntry](logRing),
+		closed:       newRing[model.Connection](closedRing),
 		overrides:    model.Overrides{PerSub: map[string]string{}},
 	}
 	s.state.st = model.Status{Core: model.CoreStopped, Mode: set.Mode, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN}
@@ -257,8 +281,9 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 	}
 	s.migrateLegacyCore()
 	s.resolveBinaryLocked()
-	s.reloadStoreLocked()
-	s.state.effDNS, s.state.effSnf = s.subscriptionSections(s.d.store.Current())
+	v := s.readStore()
+	s.applyStoreLocked(v)
+	s.state.effDNS, s.state.effSnf = s.subscriptionSections(v)
 	s.detectRecovery()
 	s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
 	s.stats = newStatsStore(filepath.Join(o.DataDir, "stats"), d.now, s.statsCountry)
@@ -281,11 +306,38 @@ func (s *Service) run() {
 }
 
 func (s *Service) goBackground(fn func()) {
-	s.wg.Add(1)
+	if !s.enterBackground() {
+		return
+	}
 	go func() {
 		defer s.wg.Done()
 		fn()
 	}()
+}
+
+// enterBackground adds one to wg unless Shutdown is waiting for it; the
+// caller must call wg.Done when it returns true.
+func (s *Service) enterBackground() bool {
+	s.bgMu.Lock()
+	defer s.bgMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.wg.Add(1)
+	return true
+}
+
+// afterFunc is time.AfterFunc whose callback is tracked by wg (Shutdown
+// waits for a callback that already started) and skipped once the service
+// is shutting down.
+func (s *Service) afterFunc(d time.Duration, fn func()) *time.Timer {
+	return time.AfterFunc(d, func() {
+		if s.rootCtx.Err() != nil || !s.enterBackground() {
+			return
+		}
+		defer s.wg.Done()
+		fn()
+	})
 }
 
 // bootstrap runs once after creation: core version, helper availability,
@@ -298,7 +350,7 @@ func (s *Service) bootstrap() {
 	s.mu.Unlock()
 
 	if bin != "" {
-		ctx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+		ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
 		v, err := s.d.core.Version(ctx, bin)
 		cancel()
 		if err == nil {
@@ -328,7 +380,7 @@ func (s *Service) bootstrap() {
 
 // refreshHelper re-checks whether the privileged helper is installed.
 func (s *Service) refreshHelper() bool {
-	ctx, cancel := context.WithTimeout(s.rootCtx, 3*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
 	ok := s.d.helper.Installed(ctx)
 	cancel()
 	s.mu.Lock()
@@ -367,11 +419,27 @@ func coreMissingText(custom string, err error) string {
 	return i18n.T("未找到 Mihomo 内核。请在设置 › 内核中选择内核文件，或重新安装澜流。")
 }
 
-// reloadStoreLocked refreshes the cached subscription list, overrides and
-// custom rules from the store; call with mu held or before run.
-func (s *Service) reloadStoreLocked() {
-	subs := s.d.store.List()
-	cur, hasCur := s.d.store.Current()
+// storeView is what the service caches from the store, read in one go
+// without mu (the store has its own lock and may wait for a disk write).
+type storeView struct {
+	subs   []model.Subscription
+	cur    model.Subscription
+	hasCur bool
+	ovs    []model.Override
+	custom []model.CustomRule
+}
+
+// readStore reads the store's lists; call without mu.
+func (s *Service) readStore() storeView {
+	v := storeView{subs: s.d.store.List(), ovs: s.d.store.Overrides(), custom: s.d.store.CustomRules()}
+	v.cur, v.hasCur = s.d.store.Current()
+	return v
+}
+
+// applyStoreLocked refreshes the cached subscription list, overrides and
+// custom rules from v; call with mu held or before run.
+func (s *Service) applyStoreLocked(v storeView) {
+	subs, cur, hasCur := v.subs, v.cur, v.hasCur
 	for i := range subs {
 		subs[i].Current = hasCur && subs[i].ID == cur.ID
 		subs[i].Updating = s.state.subsUpdating[subs[i].ID]
@@ -382,17 +450,18 @@ func (s *Service) reloadStoreLocked() {
 	if hasCur {
 		s.state.st.CurrentSubscription = cur.ID
 	}
-	s.state.overrides = overridesSnapshot(s.d.store.Overrides(), subs)
-	s.state.custom = s.d.store.CustomRules()
+	s.state.overrides = overridesSnapshot(v.ovs, subs)
+	s.state.custom = v.custom
 }
 
-// refreshStore reloads the store caches under the lock and emits. The
-// effective dns / sniffer sections (effective.go) are read from disk first,
-// outside the lock.
+// refreshStore reloads the store caches and emits. The store and the
+// effective dns / sniffer sections (effective.go, cached by content) are
+// read first, outside mu; only the assignment happens under it.
 func (s *Service) refreshStore(topics ...Topic) {
-	dns, snf := s.subscriptionSections(s.d.store.Current())
+	v := s.readStore()
+	dns, snf := s.subscriptionSections(v)
 	s.mu.Lock()
-	s.reloadStoreLocked()
+	s.applyStoreLocked(v)
 	s.state.effDNS, s.state.effSnf = dns, snf
 	s.mu.Unlock()
 	s.em.emit(append(topics, TopicStatus)...)
@@ -460,7 +529,9 @@ func copyBundledGeo(src, dst string) {
 		}
 		_, cerr := io.Copy(out, in)
 		in.Close()
-		out.Close()
+		if err := out.Close(); cerr == nil {
+			cerr = err
+		}
 		if cerr != nil {
 			os.Remove(target + ".tmp")
 			continue
@@ -487,7 +558,7 @@ func (s *Service) Status() model.Status {
 		s.state.hintDone = true
 		if !s.state.hintSaving {
 			s.state.hintSaving = true
-			go s.saveHintDone()
+			s.goBackground(s.saveHintDone)
 		}
 	}
 	st.ShowProxyHint = st.Core == model.CoreRunning && !st.SystemProxy && !s.state.hintDone
@@ -567,7 +638,7 @@ func (s *Service) Connections() []model.Connection {
 func (s *Service) ClosedConnections() []model.Connection {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return copyConns(s.state.closed)
+	return copyConns(s.state.closed.newestFirst())
 }
 
 func copyConns(in []model.Connection) []model.Connection {
@@ -582,12 +653,13 @@ func copyConns(in []model.Connection) []model.Connection {
 func (s *Service) Logs() []model.LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]model.LogEntry(nil), s.state.logs...)
+	return s.state.logs.oldestFirst()
 }
 
 func (s *Service) Rules() []model.Rule {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshRulesIfStaleLocked() // the fresh list arrives with TopicRules
 	return append([]model.Rule(nil), s.state.rules...)
 }
 
@@ -658,6 +730,10 @@ func copySettings(in model.Settings) model.Settings {
 	out.Sniffer.SkipDstAddress = append([]string(nil), in.Sniffer.SkipDstAddress...)
 	out.ATrust = in.ATrust.Clone()
 	out.Advanced = in.Advanced.Clone()
+	out.UI = copyUIState(in.UI)
+	out.ConnHiddenColumns = append([]string(nil), in.ConnHiddenColumns...)
+	out.Shortcuts = append([]model.Shortcut(nil), in.Shortcuts...)
+	out.SSIDRules = append([]model.SSIDRule(nil), in.SSIDRules...)
 	return out
 }
 
@@ -730,6 +806,9 @@ func (s *Service) Shutdown() {
 		s.mu.Unlock()
 		s.opMu.Unlock()
 
+		s.bgMu.Lock()
+		s.closing = true
+		s.bgMu.Unlock()
 		s.wg.Wait()
 		s.alog.Infof("Lanflow exited cleanly (system proxy restored: %v)", ours)
 		s.alog.Close()

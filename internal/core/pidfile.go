@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"lanflow/internal/fsx"
 )
 
 // pidFileName records the PID of the Mihomo this runner started, so a core
@@ -14,7 +16,7 @@ import (
 const pidFileName = "mihomo.pid"
 
 func writePID(workDir string, pid int) {
-	_ = os.WriteFile(filepath.Join(workDir, pidFileName), []byte(strconv.Itoa(pid)), 0o600)
+	_ = fsx.WriteFile(filepath.Join(workDir, pidFileName), []byte(strconv.Itoa(pid)), 0o600)
 }
 
 func removePID(workDir string) { _ = os.Remove(filepath.Join(workDir, pidFileName)) }

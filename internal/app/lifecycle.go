@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"lanflow/internal/core"
+	"lanflow/internal/fsx"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/profile"
@@ -121,11 +122,20 @@ func substituteOverride(list []model.Override, o *model.Override) []model.Overri
 // prepared is a composed and validated config waiting to be committed.
 type prepared struct {
 	out profile.Output
-	tmp string // runtime.yaml.new
+	tmp string // a uniquely named temp file next to runtime.yaml
 }
 
-// prepare composes and validates (mihomo -t) the config, writing it next
-// to the runtime file as runtime.yaml.new. The current runtime file is untouched.
+// discard removes a prepared file that will not be committed.
+func (p prepared) discard() {
+	if p.tmp != "" {
+		os.Remove(p.tmp)
+	}
+}
+
+// prepare composes and validates (mihomo -t) the config, writing it to a
+// uniquely named temp file next to the runtime file, so concurrent prepares
+// (an import's check, a reload) never share or delete each other's file.
+// The current runtime file is untouched; commit or discard the result.
 func (s *Service) prepare(a composeArgs) (prepared, error) {
 	in, _, err := s.buildInput(a)
 	if err != nil {
@@ -144,50 +154,73 @@ func (s *Service) prepare(a composeArgs) (prepared, error) {
 	if err := os.MkdirAll(s.workDir, 0o700); err != nil {
 		return prepared{}, fmt.Errorf(i18n.T("无法创建内核工作目录：%v"), err)
 	}
-	tmp := s.runtime + ".new"
-	if err := os.WriteFile(tmp, out.YAML, 0o600); err != nil {
+	f, err := fsx.CreateTemp(s.runtime, 0o600)
+	if err != nil {
 		return prepared{}, fmt.Errorf(i18n.T("写入运行时配置失败：%v"), err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), validateTimeout)
+	p := prepared{out: out, tmp: f.Name()}
+	_, werr := f.Write(out.YAML)
+	if werr == nil {
+		werr = f.Sync() // commit is then a bare rename
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr != nil {
+		p.discard()
+		return prepared{}, fmt.Errorf(i18n.T("写入运行时配置失败：%v"), werr)
+	}
+	ctx, cancel := s.ctrlCtx(nil, validateTimeout)
 	defer cancel()
-	if err := s.d.core.Validate(ctx, bin, s.workDir, tmp); err != nil {
-		os.Remove(tmp)
+	if err := s.d.core.Validate(ctx, bin, s.workDir, p.tmp); err != nil {
+		p.discard()
 		return prepared{}, fmt.Errorf(i18n.T("配置未通过内核校验：%v"), err)
 	}
-	return prepared{out: out, tmp: tmp}, nil
+	return p, nil
 }
 
-// commit moves the prepared file over runtime.yaml, keeping the previous
-// one as runtime.yaml.bak, and records the composed lines.
+// commit moves the prepared file over runtime.yaml in one rename, keeping a
+// copy of the previous one as runtime.yaml.bak, and records the composed
+// lines. runtime.yaml exists at every moment.
 func (s *Service) commit(p prepared) error {
 	bak := s.runtime + ".bak"
-	os.Remove(bak)
-	if _, err := os.Stat(s.runtime); err == nil {
-		if err := os.Rename(s.runtime, bak); err != nil {
+	if old, err := os.ReadFile(s.runtime); err == nil {
+		if err := fsx.WriteFile(bak, old, 0o600); err != nil {
+			p.discard()
 			return fmt.Errorf(i18n.T("备份运行时配置失败：%v"), err)
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		p.discard()
+		return fmt.Errorf(i18n.T("备份运行时配置失败：%v"), err)
+	} else {
+		os.Remove(bak) // no previous config: nothing to roll back to
 	}
-	if err := os.Rename(p.tmp, s.runtime); err != nil {
-		os.Rename(bak, s.runtime)
+	if err := fsx.Rename(p.tmp, s.runtime); err != nil {
+		p.discard()
 		return fmt.Errorf(i18n.T("写入运行时配置失败：%v"), err)
 	}
 	icons := groupIconsOf(p.out.YAML)
+	rd := parseRuntimeDNS(p.out.YAML)
 	s.mu.Lock()
 	s.state.runtimeYAML = p.out.YAML
-	s.state.runtimeLines = p.out.Lines
+	s.state.runtimeDNS = rd
+	s.state.runtimeLines = nil // annotated on demand (RuntimeConfig): one entry per line adds up
 	s.state.groupIcons = icons
 	s.mu.Unlock()
 	return nil
 }
 
-// rollback restores runtime.yaml.bak after a failed reload.
-func (s *Service) rollback() {
+// rollback restores runtime.yaml.bak over runtime.yaml (one rename) after a
+// failed reload; without a backup there is nothing to restore.
+func (s *Service) rollback() error {
 	bak := s.runtime + ".bak"
 	if _, err := os.Stat(bak); err != nil {
-		return
+		return nil
 	}
-	os.Remove(s.runtime)
-	os.Rename(bak, s.runtime)
+	if err := fsx.Rename(bak, s.runtime); err != nil {
+		return fmt.Errorf("restore runtime config: %w", err) // logged only
+	}
+	return nil
 }
 
 // ---- core lifecycle ----
@@ -272,13 +305,13 @@ func (s *Service) launchLocked(bin string, set model.Settings, helperOK bool, pr
 		logFile = s.tunLogFile()
 	}
 	spec := core.Spec{Bin: bin, WorkDir: s.workDir, Config: s.runtime, Controller: s.ctrlAddr, LogFile: logFile}
-	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
+	ctx, cancel := s.ctrlCtx(nil, startTimeout)
 	err := s.d.mgr.Start(ctx, spec)
 	cancel()
 	if err != nil {
 		return fail(fmt.Errorf(i18n.T("内核启动失败：%v。可在「日志」中查看详情，或重新启动。"), err), model.CoreError)
 	}
-	vctx, vcancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	vctx, vcancel := s.ctrlCtx(nil, ctrlTimeout)
 	version, _ := s.d.ctrl.Version(vctx)
 	vcancel()
 
@@ -425,28 +458,46 @@ func (s *Service) restartLocked() (err error) {
 // reloadLocked recomposes, validates and hot-reloads the running core.
 // When the core is not running nothing happens: the next start composes
 // afresh. On failure the previous runtime file stays in place.
-func (s *Service) reloadLocked() (err error) {
-	defer func() { s.logOp("reload config", err) }()
+func (s *Service) reloadLocked() error {
 	if !s.running() {
 		return nil
 	}
 	p, err := s.prepare(composeArgs{})
 	if err != nil {
+		s.logOp("reload config", err)
 		return err
 	}
+	return s.reloadPrepared(p)
+}
+
+// reloadPrepared commits an already validated config and hot-reloads the
+// running core with it, so a caller that validated a change before storing
+// it (subscription switch, update, edit) does not validate it twice; opMu
+// must be held and p must compose what the store now says. A stopped core
+// only drops p: the next start composes afresh.
+func (s *Service) reloadPrepared(p prepared) (err error) {
+	if !s.running() {
+		p.discard()
+		return nil
+	}
+	defer func() { s.logOp("reload config", err) }()
 	s.mu.Lock()
-	prevYAML, prevLines := s.state.runtimeYAML, s.state.runtimeLines
+	prevYAML := s.state.runtimeYAML
 	s.mu.Unlock()
 	if err := s.commit(p); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout*2)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout*2)
 	err = s.d.ctrl.ReloadConfig(ctx, s.runtime)
 	cancel()
 	if err != nil {
-		s.rollback()
+		if rerr := s.rollback(); rerr != nil {
+			s.alog.Errorf("reload config: %v", rerr)
+		}
+		icons, rd := groupIconsOf(prevYAML), parseRuntimeDNS(prevYAML)
 		s.mu.Lock()
-		s.state.runtimeYAML, s.state.runtimeLines = prevYAML, prevLines
+		s.state.runtimeYAML, s.state.runtimeLines = prevYAML, nil
+		s.state.runtimeDNS, s.state.groupIcons = rd, icons
 		s.mu.Unlock()
 		return fmt.Errorf(i18n.T("内核重新加载配置失败：%v。仍在使用之前的配置。"), err)
 	}
@@ -468,6 +519,7 @@ func (s *Service) reloadLocked() (err error) {
 func (s *Service) afterConfigChange() {
 	s.refreshProxies()
 	s.restoreSelections()
+	s.pruneExits()
 	s.refreshRules()
 	s.refreshProviders()
 	s.rebuildRoutes()

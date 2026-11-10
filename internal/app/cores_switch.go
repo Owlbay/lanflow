@@ -105,7 +105,7 @@ func (s *Service) switchCore(target, desiredPath, version string) error {
 	}
 
 	// 1. Everything that can fail without touching the running core.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
 	defer cancel()
 	reported, err := s.d.core.Version(ctx, target)
 	if err != nil {
@@ -211,7 +211,7 @@ func (s *Service) registerHelper(bin string) error {
 	if bin == "" {
 		return nil
 	}
-	hctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	hctx, cancel := s.ctrlCtx(nil, 2*time.Minute)
 	defer cancel()
 	err := s.d.helper.Install(hctx, helper.InstallOptions{HelperBin: s.opt.helperBinary(), CoreBin: bin, DataDir: s.opt.DataDir})
 	s.refreshHelper()
@@ -232,13 +232,11 @@ func (s *Service) afterSwapFailure(wasRunning bool, err error) error {
 // setActiveCore persists CorePath / CoreVersion and re-resolves the
 // binary; opMu must be held.
 func (s *Service) setActiveCore(path, version string) {
-	s.mu.Lock()
-	s.state.settings.CorePath = path
-	s.state.settings.CoreVersion = version
-	s.resolveBinaryLocked()
-	set := copySettings(s.state.settings)
-	s.mu.Unlock()
-	_ = saveSettings(s.opt.DataDir, set)
+	_ = s.updateSettings(func(set *model.Settings) {
+		set.CorePath = path
+		set.CoreVersion = version
+		s.resolveBinaryLocked()
+	})
 	s.em.emit(TopicSettings, TopicStatus)
 }
 

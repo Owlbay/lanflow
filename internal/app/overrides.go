@@ -1,11 +1,9 @@
 package app
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/url"
-	"os"
 	"strings"
 
 	"lanflow/internal/i18n"
@@ -89,7 +87,7 @@ func (s *Service) validateOverrideLocked(o model.Override, args composeArgs) err
 	if err != nil {
 		return fmt.Errorf(i18n.T("覆写未保存，%v"), err)
 	}
-	os.Remove(p.tmp) // validated only; the reload composes again
+	p.discard() // validated only; the reload composes again
 	return nil
 }
 
@@ -107,7 +105,7 @@ func (s *Service) applyOverrideChangeLocked(o model.Override) error {
 
 // fetchOverride downloads a URL override's text.
 func (s *Service) fetchOverride(rawURL string) (string, error) {
-	ctx, cancel := context.WithTimeout(s.rootCtx, fetchTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
 	defer cancel()
 	text, err := profile.FetchOverride(ctx, s.fetchClient(true, 0), rawURL)
 	if err != nil {

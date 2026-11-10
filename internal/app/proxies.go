@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -179,7 +180,16 @@ func (s *Service) refreshProxies() {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	s.refreshProxiesCtx(nil)
+}
+
+// refreshProxiesCtx is refreshProxies bounded by parent (nil = rootCtx).
+// TopicProxies and the routes are only redone when the snapshot changed.
+func (s *Service) refreshProxiesCtx(parent context.Context) {
+	if !s.running() {
+		return
+	}
+	ctx, cancel := s.ctrlCtx(parent, ctrlTimeout)
 	raw, err := s.d.ctrl.Proxies(ctx)
 	cancel()
 	if err != nil {
@@ -187,11 +197,18 @@ func (s *Service) refreshProxies() {
 	}
 	s.mu.Lock()
 	s.state.rawProxy = raw
-	s.state.proxies = buildSnapshot(raw, s.state.testing, s.state.settings.MainGroup)
+	snap := buildSnapshot(raw, s.state.testing, s.state.settings.MainGroup)
+	changed := !reflect.DeepEqual(snap, s.state.proxies)
+	s.state.proxies = snap
+	s.state.snapPending = false
 	s.mu.Unlock()
-	s.em.emit(TopicProxies)
-	s.refreshProxyProviders()
-	s.rebuildRoutes()
+	if changed {
+		s.em.emit(TopicProxies)
+	}
+	s.refreshProxyProvidersCtx(parent)
+	if changed {
+		s.rebuildRoutes()
+	}
 }
 
 // setTesting marks names as being tested (or not) and emits.
@@ -231,7 +248,7 @@ func (s *Service) testNodes(names []string) {
 		go func(n string) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			ctx, cancel := context.WithTimeout(context.Background(), delayTimeout+5*time.Second)
+			ctx, cancel := s.ctrlCtx(nil, delayTimeout+5*time.Second)
 			d, err := s.d.ctrl.ProxyDelay(ctx, n, delayURL, delayTimeout)
 			cancel()
 			if err != nil || d <= 0 {
@@ -241,12 +258,15 @@ func (s *Service) testNodes(names []string) {
 		}(n)
 	}
 	wg.Wait()
+	s.flushSnapshot() // the last results, before the refresh below confirms them
 	s.refreshProxies()
 }
 
 // finishDelay records one node's result: appends it to the cached history
-// (so the snapshot shows it before the next GET /proxies), clears the
-// node's testing flag and emits.
+// (so the snapshot shows it before the next GET /proxies) and clears the
+// node's testing flag. The snapshot is rebuilt once per coalesceWindow for
+// however many results arrived (rebuilding per result made a group test
+// O(N²)); the emitter coalesces the redraws the same way.
 func (s *Service) finishDelay(name string, delay int) {
 	s.mu.Lock()
 	if p, ok := s.state.rawProxy[name]; ok {
@@ -254,6 +274,23 @@ func (s *Service) finishDelay(name string, delay int) {
 		s.state.rawProxy[name] = p
 	}
 	delete(s.state.testing, name)
+	pending := s.state.snapPending
+	s.state.snapPending = true
+	s.mu.Unlock()
+	if !pending {
+		s.afterFunc(coalesceWindow, s.flushSnapshot)
+	}
+}
+
+// flushSnapshot rebuilds the proxies snapshot after delay results and
+// emits; nothing happens when a full refresh rebuilt it meanwhile.
+func (s *Service) flushSnapshot() {
+	s.mu.Lock()
+	if !s.state.snapPending {
+		s.mu.Unlock()
+		return
+	}
+	s.state.snapPending = false
 	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, s.state.settings.MainGroup)
 	s.mu.Unlock()
 	s.em.emit(TopicProxies)
@@ -282,7 +319,7 @@ func (s *Service) SelectProxy(group, name string) error {
 	if !s.running() {
 		return errCoreNotRunning
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	err := s.d.ctrl.SelectProxy(ctx, group, name)
 	cancel()
 	if err != nil {
@@ -314,7 +351,7 @@ func (s *Service) disconnectGroup(group string) {
 	if len(ids) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
 	defer cancel()
 	closed := 0
 	for _, id := range ids {
@@ -382,11 +419,15 @@ func (s *Service) TestAllDelays() error {
 // ---- proxy providers (代理集合) ----
 
 // refreshProxyProviders reloads GET /providers/proxies.
-func (s *Service) refreshProxyProviders() {
+func (s *Service) refreshProxyProviders() { s.refreshProxyProvidersCtx(nil) }
+
+// refreshProxyProvidersCtx is refreshProxyProviders bounded by parent; it
+// emits only when the providers changed.
+func (s *Service) refreshProxyProvidersCtx(parent context.Context) {
 	if !s.running() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
+	ctx, cancel := s.ctrlCtx(parent, ctrlTimeout)
 	raw, err := s.d.ctrl.ProxyProviders(ctx)
 	cancel()
 	if err != nil {
@@ -408,9 +449,12 @@ func (s *Service) refreshProxyProviders() {
 	}
 	sort.Slice(provs, func(i, j int) bool { return provs[i].Name < provs[j].Name })
 	s.mu.Lock()
+	changed := !reflect.DeepEqual(provs, s.state.pprovs)
 	s.state.pprovs = provs
 	s.mu.Unlock()
-	s.em.emit(TopicProxies)
+	if changed {
+		s.em.emit(TopicProxies)
+	}
 }
 
 // ProxyProviders returns the proxy-providers with their busy flags.
@@ -464,7 +508,7 @@ func (s *Service) UpdateProxyProvider(name string) error {
 	}
 	s.setProviderBusy(name, "update")
 	defer s.setProviderBusy(name, "")
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout)
 	err := s.d.ctrl.UpdateProxyProvider(ctx, name)
 	cancel()
 	s.refreshProxies()
@@ -498,7 +542,7 @@ func (s *Service) HealthCheckProvider(name string) error {
 	s.setTesting(members, true)
 	defer s.setTesting(members, false)
 	_, delayTimeout := s.delayParams()
-	ctx, cancel := context.WithTimeout(context.Background(), fetchTimeout+delayTimeout)
+	ctx, cancel := s.ctrlCtx(nil, fetchTimeout+delayTimeout)
 	err := s.d.ctrl.HealthCheckProvider(ctx, name)
 	cancel()
 	s.refreshProxies()
@@ -510,13 +554,12 @@ func (s *Service) HealthCheckProvider(name string) error {
 
 // SetMainGroup records the main group and recomputes the snapshot.
 func (s *Service) SetMainGroup(group string) error {
-	s.mu.Lock()
-	s.state.settings.MainGroup = group
-	set := s.state.settings
-	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, group)
-	s.mu.Unlock()
+	err := s.updateSettings(func(set *model.Settings) {
+		set.MainGroup = group
+		s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, group)
+	})
 	s.em.emit(TopicProxies, TopicSettings)
 	s.rebuildRoutes()
 	s.scheduleMainProbe()
-	return saveSettings(s.opt.DataDir, set)
+	return err
 }

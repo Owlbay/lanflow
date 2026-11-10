@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"lanflow/internal/i18n"
@@ -100,7 +101,10 @@ func chainHops(chain []string, snap model.ProxySnapshot) int {
 
 // rebuildRoutes recomputes the exit routes from the current connections and
 // proxies, filling in exit info (name guess / cached probe + path analysis)
-// for nodes not seen before. Runs off the UI thread.
+// for nodes not seen before. Runs off the UI thread. The routes are built
+// under the lock (map lookups only, no copies of the exit tables); only
+// the guesses and path analyses of new nodes run outside it. TopicExits is
+// emitted only when the routes changed.
 func (s *Service) rebuildRoutes() {
 	s.mu.Lock()
 	if s.state.st.Core != model.CoreRunning {
@@ -115,50 +119,24 @@ func (s *Service) rebuildRoutes() {
 	conns := s.state.conns
 	snap := s.state.proxies
 	mode := s.state.st.Mode
-	exits := make(map[string]model.ExitInfo, len(s.state.exits)) // copy: read below without the lock
-	for k, v := range s.state.exits {
-		exits[k] = v
-	}
-	analyzed := make(map[string]string, len(s.state.exitEntry))
-	for k, v := range s.state.exitEntry {
-		analyzed[k] = v
+	routes := buildRoutes(conns, snap, mode, s.state.exits)
+	fills := s.routeFillsLocked(routes, conns, snap)
+	var known map[string]model.ExitInfo // the current info of the nodes to fill
+	if len(fills) > 0 {
+		known = make(map[string]model.ExitInfo, len(fills))
+		for _, f := range fills {
+			if info, ok := s.state.exits[f.node]; ok {
+				known[f.node] = info
+			}
+		}
 	}
 	s.mu.Unlock()
 
-	routes := buildRoutes(conns, snap, mode, exits)
-	// Fill in missing or stale exit info outside the lock.
-	type fill struct {
-		node  string
-		entry string
-		hops  int
-	}
-	var fills []fill
-	byGroup := map[string]model.Connection{}
-	for _, c := range conns {
-		if len(c.Chains) == 0 {
-			continue
-		}
-		if prev, ok := byGroup[c.Chains[0]]; !ok || c.Start.After(prev.Start) {
-			byGroup[c.Chains[0]] = c
-		}
-	}
-	for _, r := range routes {
-		info, known := exits[r.Node]
-		c, hasConn := byGroup[r.Group]
-		entry, hops := "", 1
-		if hasConn {
-			entry, hops = c.RemoteDestination, chainHops(c.Chains, snap)
-		}
-		_ = info
-		if !known || (entry != "" && analyzed[r.Node] != entry) {
-			fills = append(fills, fill{r.Node, entry, hops})
-		}
-	}
 	if len(fills) > 0 {
-		updated := map[string]model.ExitInfo{}
+		updated := make(map[string]model.ExitInfo, len(fills))
 		for _, f := range fills {
-			info, known := exits[f.node]
-			if !known || info.Source != model.LocateProbe {
+			info, ok := known[f.node]
+			if !ok || info.Source != model.LocateProbe {
 				info = s.d.loc.Guess(f.node)
 				info.Node = f.node
 			}
@@ -177,16 +155,74 @@ func (s *Service) rebuildRoutes() {
 		for _, f := range fills {
 			s.state.exitEntry[f.node] = f.entry
 		}
-		for n, info := range s.state.exits {
-			exits[n] = info
-		}
+		routes = buildRoutes(conns, snap, mode, s.state.exits)
 		s.mu.Unlock()
-		routes = buildRoutes(conns, snap, mode, exits)
 	}
 	s.mu.Lock()
+	changed := !reflect.DeepEqual(routes, s.state.routes)
 	s.state.routes = routes
 	s.mu.Unlock()
-	s.em.emit(TopicExits)
+	if changed {
+		s.em.emit(TopicExits)
+	}
+}
+
+// routeFill is a node whose exit info must be guessed or re-analysed.
+type routeFill struct {
+	node  string
+	entry string // the node's entry address seen in its newest connection
+	hops  int
+}
+
+// routeFillsLocked lists the route nodes with no exit info yet, or whose
+// entry address changed since the last analysis; call with mu held.
+func (s *Service) routeFillsLocked(routes []model.ExitRoute, conns []model.Connection, snap model.ProxySnapshot) []routeFill {
+	if len(routes) == 0 {
+		return nil
+	}
+	byGroup := map[string]model.Connection{}
+	for _, c := range conns {
+		if len(c.Chains) == 0 {
+			continue
+		}
+		if prev, ok := byGroup[c.Chains[0]]; !ok || c.Start.After(prev.Start) {
+			byGroup[c.Chains[0]] = c
+		}
+	}
+	var fills []routeFill
+	for _, r := range routes {
+		_, known := s.state.exits[r.Node]
+		entry, hops := "", 1
+		if c, ok := byGroup[r.Group]; ok {
+			entry, hops = c.RemoteDestination, chainHops(c.Chains, snap)
+		}
+		if !known || (entry != "" && s.state.exitEntry[r.Node] != entry) {
+			fills = append(fills, routeFill{r.Node, entry, hops})
+		}
+	}
+	return fills
+}
+
+// pruneExits drops the exit info of nodes the running config no longer
+// has (after a reload), so the tables do not grow with every
+// subscription ever used.
+func (s *Service) pruneExits() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	nodes := s.state.proxies.Proxies
+	if len(nodes) == 0 {
+		return // no snapshot (the refresh failed): keep everything
+	}
+	for n := range s.state.exits {
+		if _, ok := nodes[n]; !ok {
+			delete(s.state.exits, n)
+		}
+	}
+	for n := range s.state.exitEntry {
+		if _, ok := nodes[n]; !ok {
+			delete(s.state.exitEntry, n)
+		}
+	}
 }
 
 // storeExit records a probe result and refreshes the routes.
@@ -256,7 +292,7 @@ func (s *Service) ProbeExits() error {
 			continue
 		}
 		seen[r.Node] = true
-		ctx, cancel := context.WithTimeout(s.rootCtx, probeTimeout)
+		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
 		err := s.probeNode(ctx, r.Node)
 		cancel()
 		if err != nil && firstErr == nil {
@@ -283,10 +319,7 @@ func (s *Service) scheduleMainProbe() {
 	if s.probeTimer != nil {
 		s.probeTimer.Stop()
 	}
-	s.probeTimer = time.AfterFunc(probeDebounce, func() {
-		if s.rootCtx.Err() != nil {
-			return
-		}
+	s.probeTimer = s.afterFunc(probeDebounce, func() {
 		s.mu.Lock()
 		snap := s.state.proxies
 		mode := s.state.st.Mode
@@ -303,7 +336,7 @@ func (s *Service) scheduleMainProbe() {
 		if node == "" || node == "DIRECT" || node == "REJECT" || node == main {
 			return
 		}
-		ctx, cancel := context.WithTimeout(s.rootCtx, probeTimeout)
+		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
 		defer cancel()
 		_ = s.probeNode(ctx, node)
 	})
@@ -350,7 +383,7 @@ func (s *Service) fetchYouLoop() {
 	s.mu.Unlock()
 	s.em.emit(TopicNet)
 	for attempt := 0; s.rootCtx.Err() == nil; attempt++ {
-		ctx, cancel := context.WithTimeout(s.rootCtx, probeTimeout)
+		ctx, cancel := s.ctrlCtx(nil, probeTimeout)
 		info, err := s.d.loc.Direct(ctx)
 		cancel()
 		s.mu.Lock()

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -18,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 )
@@ -58,6 +58,13 @@ type coresState struct {
 	installed []model.InstalledCore // managed versions, newest first; nil = not scanned yet
 	bundled   string                // version of the bundled core, "" until known
 	bundleBin string                // path of the bundled core, "" when none
+	// bundleStat caches the bundled binary's size and time (it ships with
+	// the app and does not change while it runs) for InstalledCores.
+	bundleStat struct {
+		path string
+		size int64
+		mod  time.Time
+	}
 	releases  map[string]releaseCache
 	lastCheck time.Time // last update check (coreUpdateLoop)
 }
@@ -134,7 +141,7 @@ func writeCoreMeta(dir string, m coreMeta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, coreMetaFile), data, 0o600)
+	return fsx.WriteFile(filepath.Join(dir, coreMetaFile), data, 0o600)
 }
 
 // fileSHA256 hashes a file.
@@ -276,7 +283,7 @@ func (s *Service) learnBundledVersion() {
 	if bin == "" || v != "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
 	got, err := s.d.core.Version(ctx, bin)
 	cancel()
 	if err != nil {
@@ -313,8 +320,11 @@ func (s *Service) InstalledCores() []model.InstalledCore {
 	out := make([]model.InstalledCore, 0, len(managed)+1)
 	if bundleBin != "" {
 		b := model.InstalledCore{Version: bundleVer, Bundled: true, Active: active == "" && !custom, Path: bundleBin, Source: "bundled"}
-		if fi, err := os.Stat(bundleBin); err == nil {
-			b.Size, b.InstalledAt = fi.Size(), fi.ModTime()
+		if st := &s.cores.bundleStat; st.path == bundleBin {
+			b.Size, b.InstalledAt = st.size, st.mod
+		} else if fi, err := os.Stat(bundleBin); err == nil {
+			st.path, st.size, st.mod = bundleBin, fi.Size(), fi.ModTime()
+			b.Size, b.InstalledAt = st.size, st.mod
 		}
 		if b.Version == "" && b.Active {
 			b.Version = stVersion
@@ -381,7 +391,7 @@ func (s *Service) migrateLegacyCore() {
 	if err != nil || !fi.Mode().IsRegular() {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
 	got, err := s.d.core.Version(ctx, legacy)
 	cancel()
 	version := normalizeVersion(got)
@@ -413,7 +423,7 @@ func (s *Service) migrateLegacyCore() {
 	if s.state.settings.CorePath == legacy || s.state.settings.CorePath == dst {
 		s.state.settings.CorePath = dst
 		s.state.settings.CoreVersion = version
-		_ = saveSettings(s.opt.DataDir, copySettings(s.state.settings))
+		_ = s.persistSettings()
 	}
 	s.cores.mu.Lock()
 	s.cores.installed = nil
