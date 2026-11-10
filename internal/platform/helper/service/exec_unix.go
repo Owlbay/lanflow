@@ -7,10 +7,11 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"lanflow/internal/platform/helper/protocol"
 )
@@ -105,15 +106,67 @@ func handOverSocket(ctx context.Context, spec protocol.Spec, uid string) {
 	}
 }
 
+// workDirFromUID is the owner whose files handOverWorkDir gives away:
+// root, i.e. what the root-run Mihomo wrote. Tests change it.
+var workDirFromUID = 0
+
 // handOverWorkDir gives the top-level entries of the work dir (cache.db,
 // downloaded geodata, provider files written by root) back to the user so
 // the app can manage them when running Mihomo unprivileged.
+//
+// The work dir belongs to the user, so nothing in it is trusted: the
+// directory is reached without following symlinks, and only regular files
+// with a single link and directories that are still owned by root are
+// opened (O_NOFOLLOW), re-checked with fstat and fchown'ed through their
+// descriptor. A symlink, hard link, FIFO or socket planted by the user is
+// skipped.
 func handOverWorkDir(spec protocol.Spec, uid string) {
-	entries, err := os.ReadDir(spec.WorkDir)
+	n, err := parseUID(uid)
 	if err != nil {
 		return
 	}
-	for _, e := range entries {
-		_ = chownToUser(filepath.Join(spec.WorkDir, e.Name()), uid)
+	dirfd, err := openDirNoFollow(spec.WorkDir)
+	if err != nil {
+		return
 	}
+	defer unix.Close(dirfd)
+	names, err := readDirNames(dirfd)
+	if err != nil {
+		return
+	}
+	for _, name := range names {
+		_ = handOverEntry(dirfd, name, n)
+	}
+}
+
+// readDirNames lists the directory open at dirfd.
+func readDirNames(dirfd int) ([]string, error) {
+	dup, err := unix.Dup(dirfd)
+	if err != nil {
+		return nil, err
+	}
+	f := os.NewFile(uintptr(dup), "workdir")
+	defer f.Close()
+	return f.Readdirnames(-1)
+}
+
+// handOverEntry gives name (in dirfd) to uid if it is a root-owned regular
+// file with one link or a root-owned directory.
+func handOverEntry(dirfd int, name string, uid int) error {
+	fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer unix.Close(fd)
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if err := checkHandOver(&st, uid); err != nil {
+		return err
+	}
+	if int(st.Uid) != workDirFromUID {
+		return nil
+	}
+	return handOverFd(fd, uid)
 }

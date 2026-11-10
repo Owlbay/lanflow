@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"lanflow/internal/platform/helper/protocol"
 )
 
 // resolvedTempDir is t.TempDir with symlinks resolved (/var -> /private/var
@@ -185,3 +187,72 @@ func TestOpenLogFileRotatedHardLinkNotHandedOver(t *testing.T) {
 		t.Fatalf("fchown on %v, want only the new log %d", got, inode(t, logPath))
 	}
 }
+
+func TestHandOverWorkDirSkipsLinksAndSpecialFiles(t *testing.T) {
+	d := resolvedTempDir(t)
+	work := filepath.Join(d, "work")
+	outside := filepath.Join(d, "outside")
+	for _, p := range []string{work, outside, filepath.Join(work, "ruleset")} {
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sensitive := filepath.Join(outside, "sensitive")
+	for _, p := range []string{filepath.Join(work, "cache.db"), sensitive} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(sensitive, filepath.Join(work, "sym")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(work, "symdir")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(sensitive, filepath.Join(work, "hard")); err != nil {
+		t.Fatal(err)
+	}
+	_ = unix.Mkfifo(filepath.Join(work, "fifo"), 0o600)
+
+	old := workDirFromUID
+	workDirFromUID = os.Getuid()
+	t.Cleanup(func() { workDirFromUID = old })
+	inos := recordFchown(t)
+	handOverWorkDir(protocolSpec(work), myUID())
+
+	want := map[uint64]bool{inode(t, filepath.Join(work, "cache.db")): true, inode(t, filepath.Join(work, "ruleset")): true}
+	got := inos()
+	if len(got) != len(want) {
+		t.Fatalf("fchown on %v, want %v", got, want)
+	}
+	for _, ino := range got {
+		if !want[ino] {
+			t.Fatalf("fchown on unexpected inode %d (sensitive=%d outside=%d)", ino, inode(t, sensitive), inode(t, outside))
+		}
+	}
+
+	// A work dir reached through a symlink is not walked at all.
+	if err := os.Symlink(work, filepath.Join(d, "worklink")); err != nil {
+		t.Fatal(err)
+	}
+	inos = recordFchown(t)
+	handOverWorkDir(protocolSpec(filepath.Join(d, "worklink")), myUID())
+	if len(inos()) != 0 {
+		t.Fatalf("followed symlinked work dir: %v", inos())
+	}
+}
+
+func TestHandOverWorkDirOnlyRootOwned(t *testing.T) {
+	d := resolvedTempDir(t)
+	if err := os.WriteFile(filepath.Join(d, "f"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	inos := recordFchown(t)
+	// workDirFromUID is root; the test user's files are left alone.
+	handOverWorkDir(protocolSpec(d), myUID())
+	if os.Getuid() != 0 && len(inos()) != 0 {
+		t.Fatalf("fchown on %v", inos())
+	}
+}
+
+func protocolSpec(workDir string) protocol.Spec { return protocol.Spec{WorkDir: workDir} }
