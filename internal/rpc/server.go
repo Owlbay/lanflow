@@ -232,7 +232,8 @@ func (s *Server) hello(ss *session, params json.RawMessage) (any, error) {
 		return nil, &Error{Code: CodeHandshake, Message: "第一条消息必须是 hello 握手"}
 	}
 	if h.Protocol != ProtocolVersion {
-		return nil, &Error{Code: CodeHandshake, Message: fmt.Sprintf("本机接口协议版本不一致（澜流 %s 为 %d，客户端为 %d）：请重启澜流，或使用同一版本的 lanflow 命令", s.o.Version, ProtocolVersion, h.Protocol)}
+		return nil, &Error{Code: CodeHandshake, Message: fmt.Sprintf("本机接口协议版本不一致（澜流 %s 为 %d，客户端为 %d）：请重启澜流，或使用同一版本的 lanflow 命令", s.o.Version, ProtocolVersion, h.Protocol),
+			Data: &ErrorData{Kind: "protocol", PID: pid()}}
 	}
 	id, err := ParseIdentity(h.Client)
 	if err != nil {

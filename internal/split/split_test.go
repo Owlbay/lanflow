@@ -310,3 +310,13 @@ func TestParseArgs(t *testing.T) {
 		t.Fatal("LANFLOW_SINGLE=0 should win")
 	}
 }
+
+func TestProtocolMismatch(t *testing.T) {
+	err := error(&rpc.Error{Code: rpc.CodeHandshake, Message: "x", Data: &rpc.ErrorData{Kind: "protocol", PID: 42}})
+	if pid, ok := protocolMismatch(err); !ok || pid != 42 {
+		t.Fatalf("%d %v", pid, ok)
+	}
+	if _, ok := protocolMismatch(&rpc.Error{Code: rpc.CodeHandshake}); ok {
+		t.Fatal("a handshake error without a pid is not replaceable")
+	}
+}

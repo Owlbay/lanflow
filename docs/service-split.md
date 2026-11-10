@@ -1,6 +1,6 @@
 # 后台服务与按需界面
 
-状态：S1 已实施（见第 8 节），S2、S3 尚未开始。目标：界面关闭后进程真正退出、释放内存；代理、订阅更新、统计、检测和通知照常运行；`lanflow ctl`、MCP 和界面共用同一套本机接口。
+状态：S1、S2、S3 与大数据增量读取已实施（S1 见第 8 节，其余见第 9 节）。目标：界面关闭后进程真正退出、释放内存；代理、订阅更新、统计、检测和通知照常运行；`lanflow ctl`、MCP 和界面共用同一套本机接口。
 
 ## 1. 现状与实测
 
@@ -33,7 +33,7 @@
 - **事件**：`subscribe(topics)` 之后，服务按现有合并窗口推送 `{"method":"changed","params":{"topic":"conns"}}`，客户端收到后再拉快照，与现在 `OnChange` 的语义一致。
 - **两个特殊方法**：`OnChange` 由事件流实现；`UpdateUIState(fn)` 在客户端执行 fn，再以 `PatchUIState(model.UIState)` 整体提交（UI 状态只有界面会改，冲突可忽略；需要时再做字段级补丁）。
 - **可选能力**：`SetBackground`、`Resumed`、`NetworkChanged`、`AppLogWriter` 这些 `api.(interface{...})` 断言，在远程客户端里实现为对应的 RPC 或本地空操作（唤醒与网络事件由服务进程自己监听）。
-- **大数据**：连接列表、日志、规则可能很大，`Connections` 等方法支持 `since`/`limit` 增量参数；第一版先整包返回，按实测再优化。
+- **大数据**：连接列表、日志可能很大，另有 `ConnectionsSince`、`ClosedConnectionsSince`、`LogsSince`、`AppLogsSince` 增量方法（第 9 节）；规则仍整包返回。
 
 客户端：`internal/app/remote` 用 `go generate` 从 `app.API` 生成实现同一接口的客户端，界面代码不变（`main.go` 的 `backend()` 选择本地、远程或模拟后端）。生成器同时产出方法清单，供 ctl/MCP 使用并做兼容检查。
 
@@ -71,10 +71,10 @@ S1 完成后再做配置同步（`lanflow.yaml` 也经同一接口加载和校�
 
 ## 7. 待验证
 
-- mygo 在没有窗口的进程里运行托盘、全局快捷键和系统通知（macOS `LSUIElement` 与 Dock 图标的处理）。
-- 界面进程退出后 macOS 的 Dock 行为：服务进程不显示 Dock 图标，点「应用程序」里的 Lanflow 需要拉起界面而不是第二个服务。
-- 远程客户端下各页面的刷新延迟，尤其是连接页（每秒一帧的整包传输）。
-- Windows 命名管道在服务以普通用户运行、helper 以 SYSTEM 运行时的权限组合。
+- ~~mygo 在没有窗口的进程里运行托盘、全局快捷键和系统通知~~：托盘与全局快捷键已在本机确认（第 9 节）；系统通知在打包的 app 里才可用，未在无窗口进程中单独确认。
+- ~~界面进程退出后 macOS 的 Dock 行为~~：已确认（第 9 节）。
+- 远程客户端下各页面的刷新延迟（读缓存 + 增量副本之后，未做系统测量）。
+- Windows 命名管道在服务以普通用户运行、helper 以 SYSTEM 运行时的权限组合；Windows 上的整套拆分（见第 9 节「未验证」）。
 
 ## 8. S1 实施说明
 
@@ -105,3 +105,79 @@ S1 在现有单进程里加了本机接口，界面仍直接调用进程内的 `
 - MCP：工具名是方法名的 snake_case；提供读、敏感读、写三级，去掉整体写设置、图标、目录路径、aTrust 文件导入导出和诊断包导出。参数的 JSON Schema 由 `app.API` 的反射类型生成。连接按需建立，澜流重启后自动重连；单次调用最长等 3 分钟（包含等用户授权）。
 - 测试：`internal/rpc`（往返、握手、对端 uid 校验、权限与授权、事件、补丁预览与撤销、脱敏）、`internal/app/remote`（清单覆盖与生成文件新鲜度）、`apigen`（漏标即失败）、`internal/ctl`、`internal/mcp`（工具清单、一次完整的 `route_domain` 预览 → 应用 → 验证 → 撤销）、`internal/view`（授权弹窗）。
 - 未做：大数据的增量参数（`since`/`limit`）；托盘里的授权入口（S2 拆出服务进程后再做）；Windows 管道与对端校验只经交叉编译和 `go vet`，未在真机运行。
+
+## 9. S2、S3 与增量读取实施说明
+
+### 进程与入口
+
+| 启动方式 | 模式 | 代码 |
+| --- | --- | --- |
+| `Lanflow --service [--login] [--open=…]` | 服务进程 | `main_split.go` `runService` |
+| `Lanflow [--open=…] [lanflow://…]`（默认） | 界面进程 | `main_split.go` `runWindow` |
+| `LANFLOW_SINGLE=1`，或 `<DataDir>/single-process` 文件存在 | 单进程（拆分前的行为，排障退路；`LANFLOW_SINGLE=0` 优先于文件） | `main.go` `runSingle` |
+| `lanflow ctl …`、`lanflow mcp` | 客户端子命令（不变） | `main_cli.go` |
+
+- **服务进程**：取单实例锁（拿不到说明已有服务，参数转交后退出），`ActivationPolicyAccessory`（macOS 不显示 Dock 图标，`lsappinfo` 中为 `UIElement`），启动 `app.Service`（`LANFLOW_FAKE=1` 时为模拟后端）、本机接口、托盘、全局快捷键、系统通知、唤醒与网络事件。托盘与快捷键的代码与单进程共用：`internal/view/host.go` 定义 `host` 接口，`Shell`（单进程）和新的 `view.Background`（服务进程，无窗口）各自实现；全局快捷键的注册表抽成 `keys.go`。托盘的切换节点、开关代理、切换模式、订阅、测速直接调服务；「打开澜流」「反馈问题…」以及没有 helper 时开 TUN 会拉起或唤起界面（`--open=feedback|tun|logs|<链接>`）。
+- **界面进程**：`split.Connect` 连服务；`rpc.ErrNotRunning` 时用同一可执行文件带 `--service` 拉起服务（Unix 新会话 `setsid`，Windows `DETACHED_PROCESS`），最多等 20 秒；服务实在起不来时退回单进程，而不是什么都不显示。界面以 `remote.Client` 为 `app.API`，`view.Options.Remote` 只关掉三件事：托盘、全局快捷键（设置页经 `SetShortcut` 让服务注册）和登录项，以及 `System` 提醒的系统通知（由服务发）。
+- **单实例**：服务持有 mygo 的单实例锁。界面不取锁，靠 `AttachUI`：服务记住当前界面的连接；第二个界面进程的 `AttachUI(arg)` 让已有界面显示并打开 `arg`，自己退出。界面关窗前先 `DetachUI`，避免新开的界面被转发给正在退出的旧界面。
+- **macOS 的 Dock / Finder**：服务进程是同一 bundle 的 `NSApplication`，LaunchServices 视其为「正在运行的 Lanflow」，所以在 Finder、Dock、Spotlight 打开 Lanflow 时不会启动新进程，而是激活服务进程；服务在 `OnActivate` 中拉起界面（`OnOpenURL` 同理，深链接转交界面）。界面进程是普通前台应用，有 Dock 图标。
+- **关窗**：`CloseToTray`（默认开）时关窗 = 界面进程退出，服务、内核、连接不受影响；关掉该设置时关窗 = 退出澜流（与单进程一致）。窗口快捷键在窗口位于前台时关掉窗口（即退出界面进程），否则拉起或显示。
+- **退出澜流**：界面里的 ⌘Q / 应用菜单退出、以及托盘「退出澜流」都走原有确认（系统代理开着时 `Shell.AskQuit`），确认后界面调 `QuitService`，服务按原逻辑恢复系统代理、停内核，并向界面发 `ui quit` 让它直接退出。托盘退出时有界面就让界面确认（`ui ask-quit`），没有界面则用原生对话框确认（`Background.ConfirmQuit`，文字与窗口内相同）。SIGTERM 不确认，直接走同一退出路径。
+- **agent 授权**：服务进程的 `Prompt` 改为 `Background.AskAgentConsent`：发系统通知，并在托盘菜单顶部加「待授权：<agent>…」，点通知或菜单项弹原生对话框（写入：始终允许 / 仅本次 / 拒绝；其他：允许 / 拒绝；关闭对话框 = 拒绝）。超时与撤回逻辑不变。单进程模式仍用窗口内的弹窗。
+- **提醒（Notice）**：`TakeNotices` 只能被取走一次，而服务进程需要 `System` 提醒发系统通知、界面需要其余提醒做 toast/对话框。`split.Notices` 包住服务：每次 `TopicNotice` 由服务进程取出，新提醒交给 `Background.SystemNotice`，同时排队留给界面的 `TakeNotices`（最多 20 条，超过 2 分钟的 toast 丢弃）。
+
+### 本机接口新增
+
+- 窗口操作（`internal/rpc/windowops.go`，级别 `ui`，agent 一律拒绝，不进 MCP 工具表）：`AttachUI(arg) → {forwarded, pid, split}`、`DetachUI`、`QuitService`、`SetBackground(hidden)`、`SetShortcut(action, acc)`、`CacheUsage`、`CleanCaches`（设置 › 数据的可选接口）。服务端的 `rpc.Host` 由服务进程（`serviceHost`）或单进程（`singleHost`，`split=false`：第二个界面进程直接让单进程窗口显示）实现。
+- 服务 → 界面的通知 `{"method":"ui","params":{"cmd":"show|toggle|ask-quit|quit","arg":…}}`。
+- `hello` 的回答增加 `pid`。没有界面连接时服务处于后台节奏（`SetBackground(true)`），界面附着后恢复。
+
+### 远程客户端（界面用）
+
+- **读缓存**（`remote/cache.go`）：读方法（无 error 返回）的结果按方法 + 参数缓存，收到相关主题的 `changed` 事件才失效（主题 → 方法的表在 `topicReads`，不在表里的读方法遇任何事件都失效，`ConfigDir`、`LogDir`、`LookupIP`、`ATrustReference` 不失效）；调用任何动作后整体失效，动作的效果立即可见。切片结果每次复制一份，视图原地排序不影响缓存。
+- **大列表副本**（`remote/mirror.go`）：`Connections`、`ClosedConnections`、`Logs`、`AppLogs` 由副本提供，事件到来后下一次读取才用增量方法补齐（每页 500 条）。事件计数用原子变量，读取线程持锁调用时不会卡住收事件的线程。
+- **重连**（`remote/window.go`）：连接断开后先通知界面（toast「与澜流后台服务的连接已断开，正在重新连接」），按 0.1/0.25/0.5/1 秒重试；服务不在（`ErrNotRunning`）就拉起；连上后重新 `AttachUI`、重新订阅、清空缓存与副本，并对所有主题各发一次事件，让每个页面重读快照。退出澜流后（`Hold`）不再重连；重启服务期间等旧进程退出再连。
+
+### 大数据增量读取
+
+- `app.API` 新增：`ConnectionsSince(since) ConnDelta`、`ClosedConnectionsSince(since, limit) ConnPage`、`LogsSince(since, limit) LogPage`、`AppLogsSince(since, limit) LogPage`（`internal/model/page.go`），`levels.go` 中前三个为敏感读、应用日志为读。
+- `internal/seqring`：`Ring` 给每个条目编号；游标为 0、早于已丢弃的条目、早于最近一次清空、或大于当前序号（服务重启过）时返回 `Reset`，客户端整体替换；`limit` 分页时 `More` 表示还有。清空会消耗一个序号，所以清空前拿到的最新游标也会得到 `Reset`。活动连接是原地变化的列表，用 `Versions` 记录每条连接最后变化的序号和最近 600 次更新内的移除，`ConnectionsSince` 只返回新增、变化的连接和移除的 ID（`model.SameConnection` 比较全部字段，有测试保证新增字段不会漏比）。
+- 服务的内核日志、已关闭连接改用 `seqring.Ring`；应用日志（`applog`）同样（延迟分配不变）；模拟后端用 `seqring.SliceSince` 和 `Versions` 实现同样的语义。
+- 整包方法保留不变，ctl/MCP 照旧可用。
+
+### 开机启动与迁移（S3）
+
+- 「开机时启动」改为启动服务进程（`internal/autostart`）：macOS 写 `~/Library/LaunchAgents/lanflow.service.plist`（`<exe> --service --login`，`RunAtLoad`，不 `KeepAlive`，限 Aqua 会话）；Windows 写当前用户 Run 键的 `lanflow.service` 值（`"<exe>" --service --login`），并像 mygo 一样清掉任务管理器里的禁用标记。内容相同时不重写；app 移动位置后服务下次启动时改写。macOS 开发构建（不在 .app 里）不写。
+- 服务启动时第一次应用设置时迁移：mygo 的旧登录项（macOS `SMAppService` 主程序登录项或 macOS 12 的旧 launch agent，Windows 的 `--mygo-opened-at-login` Run 值）若存在就移除，然后按 `OpenAtLogin` 写新的。
+- 登录启动的服务（`--login`）在 `SilentStart` 关闭时顺带打开界面，与拆分前登录后显示窗口一致。迁移前的最后一次登录仍由旧登录项打开界面进程：它照常拉起服务；`SilentStart` 开着时界面直接退出。
+- **首次启动**：界面发现没有服务，拉起服务再连接。**升级**：界面握手发现服务版本不同，弹窗「需要重启澜流后台服务」，确认后 `QuitService`，等旧进程退出后由重连逻辑拉起新服务（内核会短暂停止，系统代理随 `AutoSystemProxy` 恢复）。macOS 上替换 app 后从 Finder 打开会先激活旧服务，旧服务按磁盘上的路径拉起的已经是新版本界面，于是同样走这个提示。**旧的单进程版本仍在运行**：它的本机接口没有 `AttachUI`，界面提示先退出旧版本（`split.ErrOldService`）。
+- **崩溃恢复**：服务崩溃后界面断线，重连时发现服务不在就重新拉起；内核由 helper 托管时 helper 不受影响，新服务按原有启动流程接管。没有界面时服务崩溃不会自动恢复（launchd 不 `KeepAlive`，与「退出澜流后保持退出」冲突），下次打开界面时拉起。
+
+### 与设计的差异
+
+- 设计中「托盘弹通知请用户允许」实现为通知 + 托盘菜单项 + 原生对话框；单进程模式保留窗口内的弹窗。
+- 版本不一致只在界面启动（握手）时检查一次，不做跨版本兼容。协议版本（`rpc.ProtocolVersion`）不一致时握手失败，错误里带服务的 PID（本版本起），界面结束旧服务（Unix SIGTERM，Windows `TerminateProcess`）后拉起自己的服务。
+- 服务在运行却连不上时，界面带 `--fallback` 尝试单进程；拿不到单实例锁（服务还占着）就提示用户结束 Lanflow，服务也不会因此再拉起界面，避免循环。
+- 规则（`Rules`）仍整包传输：它只在 `TopicRules` 时变化，读缓存已避免每帧传输。
+- `UpdateUIState` 仍按设计在客户端执行函数后 `PatchUIState` 整体提交。
+
+### 实测（本机，模拟后端，macOS 26，arm64，3360×2100 屏幕）
+
+| 情形 | phys_footprint |
+| --- | --- |
+| 拆分：服务进程，界面已关闭（60 秒后） | 30 MB |
+| 拆分：界面进程，窗口打开（概览页） | 215 MB |
+| 单进程：窗口打开 | 212 MB |
+| 单进程：关窗隐藏到托盘（2 分钟后） | 131 MB |
+
+关窗后常驻占用从 131 MB 降到 30 MB。模拟后端的服务层比真实后端轻，真实后端需在虚拟机里再测（Go 堆约 5 MB 的服务层 + 内核另计）。
+
+另外确认：服务进程不建窗口时 mygo 的托盘、全局快捷键正常注册；服务进程在 `lsappinfo` 中为 `UIElement`、界面为 `Foreground`；第二次启动界面约 30 ms 内转交已有界面后退出；`kill -9` 服务后界面在约 1 秒内拉起新服务并重连；SIGTERM 服务时界面随之退出且不再拉起服务。
+
+### 未验证
+
+- **Windows 全部**：只经交叉编译与 `GOOS=windows go vet`。未在真机验证：分离进程启动（`DETACHED_PROCESS`）、服务拉起的界面能否抢到前台（可能需要 `AllowSetForegroundWindow`）、Run 键启动、命名管道下的重连、`Terminate` 用 `TerminateProcess` 结束无响应的旧服务（不会恢复系统代理，靠下次启动的恢复提示）。
+- 真实后端（内核、helper、TUN）下的拆分：按约定只能在虚拟机里测，本次未动虚拟机。
+- macOS 登录项：launch agent 的写入只有单元测试（临时 HOME），未在本机写入真实的 LaunchAgents，也未验证 macOS 13+「允许在后台」提示与登录时的实际启动；旧 `SMAppService` 登录项的移除未实测。
+- 无窗口服务进程的系统通知（需要打包且授权通知的 app）与原生对话框（退出确认、agent 授权）未在本机点按验证。拆分模式下界面的 ⌘W、⌘Q、托盘菜单未点按（桌面自动化工具按 bundle ID 只找到服务进程），用 SIGTERM、本机接口和集成测试验证了等价路径；单进程下用菜单关过窗口（用于内存对比）。
+- 协议版本不一致时按 PID 替换旧服务只有单元测试；本版本之前的服务不在握手错误里带 PID，遇到时界面提示用户结束旧进程。

@@ -23,14 +23,19 @@ const (
 	// OpenFlag asks a window process to open something once up
 	// (view.OpenFeedback, view.OpenTUN, view.OpenLogs, a deep link).
 	OpenFlag = "--open="
+	// FallbackFlag marks a window process that could not reach the
+	// service and tries the single process instead; a service that gets
+	// it as a second instance does not start another window for it.
+	FallbackFlag = "--fallback"
 )
 
 // Args is what the command line asks for.
 type Args struct {
-	Service bool
-	Login   bool
-	Open    string // --open=…
-	Link    string // a lanflow:// or clash:// argument (Windows deep links)
+	Service  bool
+	Login    bool
+	Fallback bool
+	Open     string // --open=…
+	Link     string // a lanflow:// or clash:// argument (Windows deep links)
 }
 
 // ParseArgs reads the flags of a launch (os.Args[1:]).
@@ -42,6 +47,8 @@ func ParseArgs(args []string) Args {
 			a.Service = true
 		case s == LoginFlag:
 			a.Login = true
+		case s == FallbackFlag:
+			a.Fallback = true
 		case strings.HasPrefix(s, OpenFlag):
 			a.Open = strings.TrimPrefix(s, OpenFlag)
 		case IsLink(s):

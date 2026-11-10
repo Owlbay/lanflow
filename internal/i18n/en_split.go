@@ -11,9 +11,12 @@ func init() {
 		"待授权：%s…":              "Waiting for permission: %s…",
 		"需要重启澜流后台服务":           "Lanflow's background service needs a restart",
 		"后台服务的版本（%s）与界面（%s）不一致，通常是更新后旧的后台服务还在运行。重启后台服务时内核会短暂停止。": "The background service (%s) and the window (%s) are different versions, usually because the old service kept running after an update. Restarting the service stops the core briefly.",
-		"重启后台服务":                    "Restart service",
-		"无法启动澜流后台服务: %w":            "Could not start Lanflow's background service: %w",
-		"澜流以单进程方式运行，已显示它自己的窗口":      "Lanflow runs as a single process and showed its own window",
+		"重启后台服务":               "Restart service",
+		"无法启动澜流后台服务: %w":       "Could not start Lanflow's background service: %w",
+		"澜流以单进程方式运行，已显示它自己的窗口": "Lanflow runs as a single process and showed its own window",
+		"澜流后台服务正在运行，但无法连接（%s）。请在活动监视器或任务管理器中结束 Lanflow 后再打开。": "Lanflow's background service is running but does not answer (%s). End Lanflow in Activity Monitor or Task Manager, then open it again.",
+		"无法结束旧的澜流后台服务: %w":          "Could not end the old background service of Lanflow: %w",
+		"旧的澜流后台服务没有退出":              "The old background service of Lanflow did not quit",
 		"另一个旧版本的澜流正在运行：请先退出它，再打开澜流": "An older version of Lanflow is running: quit it first, then open Lanflow again.",
 	} {
 		en[k] = v

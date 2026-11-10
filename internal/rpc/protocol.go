@@ -135,6 +135,9 @@ type Error struct {
 // ErrorData names well-known errors so the client can map them back.
 type ErrorData struct {
 	Kind string `json:"kind,omitempty"` // e.g. "helper-required"
+	// PID is the serving process, on a refused handshake: a window of
+	// another protocol version ends that service to start its own.
+	PID int `json:"pid,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }

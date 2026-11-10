@@ -102,8 +102,8 @@ func runService(args split.Args) {
 	mygo.App.OnWindowAllClosed(func() {}) // dialogs only; never quit for them
 	mygo.App.OnSecondInstance(func(args []string, _ string) {
 		a := split.ParseArgs(args)
-		if a.Service {
-			return // e.g. the login item while running
+		if a.Service || a.Fallback {
+			return // the login item while running; a window that gave up on us
 		}
 		showWindow(firstOf(a.Open, a.Link))
 	})
@@ -313,8 +313,15 @@ func runWindow(args split.Args) {
 		return
 	case err != nil:
 		// The service would not come up: run everything here instead,
-		// rather than show nothing.
+		// rather than show nothing. A service that runs but does not
+		// answer keeps the lock: then say so (FallbackFlag keeps it from
+		// starting yet another window for us).
 		log.Printf("lanflow: no service (%v); running as one process", err)
+		os.Args = append(os.Args, split.FallbackFlag)
+		if !mygo.App.RequestSingleInstanceLock() {
+			showError(split.NoServiceText(err))
+			return
+		}
 		runSingle()
 		return
 	}

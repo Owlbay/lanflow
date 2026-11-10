@@ -111,6 +111,14 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 			}
 		}
 	}
+	if pid, ok := protocolMismatch(err); ok && o.Start != nil {
+		// A service of another protocol version (an update replaced the
+		// app while it ran): end it and start ours.
+		if err := replace(pid, o.Wait); err != nil {
+			return nil, rpc.AttachResult{}, err
+		}
+		return Connect(ctx, o)
+	}
 	if err != nil {
 		return nil, rpc.AttachResult{}, err
 	}
@@ -139,4 +147,35 @@ var ErrOldService = errors.New("另一个旧版本的澜流正在运行：请先
 // OldServiceText is ErrOldService for the user, translated.
 func OldServiceText() string {
 	return i18n.T("另一个旧版本的澜流正在运行：请先退出它，再打开澜流")
+}
+
+// protocolMismatch reports a handshake refused for the protocol version,
+// with the serving process.
+func protocolMismatch(err error) (int, bool) {
+	var re *rpc.Error
+	if errors.As(err, &re) && re.Code == rpc.CodeHandshake && re.Data != nil && re.Data.Kind == "protocol" && re.Data.PID > 0 {
+		return re.Data.PID, true
+	}
+	return 0, false
+}
+
+// replace ends the service pid and waits for it to go.
+func replace(pid int, wait time.Duration) error {
+	if err := Terminate(pid); err != nil && Alive(pid) {
+		return fmt.Errorf("无法结束旧的澜流后台服务: %w", err)
+	}
+	deadline := time.Now().Add(wait)
+	for Alive(pid) {
+		if time.Now().After(deadline) {
+			return errors.New("旧的澜流后台服务没有退出")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return nil
+}
+
+// NoServiceText says, translated, that the window cannot reach a service
+// that runs.
+func NoServiceText(err error) string {
+	return i18n.Tf("澜流后台服务正在运行，但无法连接（%s）。请在活动监视器或任务管理器中结束 Lanflow 后再打开。", err.Error())
 }
