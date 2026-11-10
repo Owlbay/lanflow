@@ -4,13 +4,17 @@
 package rules
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -32,6 +36,12 @@ type Page struct {
 	testOpen bool
 	testHost string
 	testing  bool
+
+	// sub caches which subscription rules match the query, in the order
+	// shown; see subRows.
+	sub subCache
+	// customList is the virtual list of a long custom rule list.
+	customList ui.ListState
 
 	mu         sync.Mutex // guards the fields below, written by jobs
 	testResult *model.RuleMatch
@@ -74,12 +84,13 @@ func (p *Page) View(c *ui.Context) {
 		// No page scrolling (docs/design.md §4): the subscription rules
 		// table takes the height left and scrolls inside; a long list
 		// of custom rules scrolls in its own box.
+		rules := e.API.Rules()
 		ui.Column(c).Grow(1).Padding(4, 24, 20, 24).Gap(20).Clip().Children(func() {
 			if p.filter != 2 {
-				p.customSection(c, t)
+				p.customSection(c, t, rules)
 			}
 			if p.filter != 1 {
-				p.subSection(c, t)
+				p.subSection(c, t, rules)
 				p.providers(c, t)
 			}
 		})
@@ -103,8 +114,11 @@ func (p *Page) tools(c *ui.Context, running bool) {
 	})
 }
 
-func (p *Page) matches(parts ...string) bool {
-	q := strings.ToLower(strings.TrimSpace(p.query))
+// lowerQuery is the query as matches compares it.
+func (p *Page) lowerQuery() string { return strings.ToLower(strings.TrimSpace(p.query)) }
+
+// matches reports whether any of parts contains q, a lowerQuery.
+func matches(q string, parts ...string) bool {
 	if q == "" {
 		return true
 	}
@@ -118,10 +132,13 @@ func (p *Page) matches(parts ...string) bool {
 
 // ---- custom rules ----
 
-func (p *Page) customSection(c *ui.Context, t *ui.Theme) {
+// bigCustom is the custom rule count from which they show in a virtual
+// list.
+const bigCustom = 50
+
+func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 	e := p.e
 	all := e.API.CustomRules()
-	runtime := e.API.Rules()
 	hits := map[string]model.Rule{}
 	for _, r := range runtime {
 		if r.Custom {
@@ -129,8 +146,9 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme) {
 		}
 	}
 	var list []model.CustomRule
+	lq := p.lowerQuery()
 	for _, r := range all {
-		if p.matches(r.Type, env.RuleTypeName(r.Type), r.Payload, r.Target, env.TargetName(r.Target)) {
+		if matches(lq, r.Type, env.RuleTypeName(r.Type), r.Payload, r.Target, env.TargetName(r.Target)) {
 			list = append(list, r)
 		}
 	}
@@ -144,6 +162,14 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme) {
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(10, 12)
 			return
 		}
+		if len(list) > bigCustom {
+			// Many rules: a virtual list builds only the rows in view.
+			p.customList.Key = func(i int) any { return list[i].ID }
+			ui.List(c.Key("custom"), &p.customList, len(list), func(i int) {
+				p.customRow(c, t, list, i, all, hits, q)
+			}).Height(5*40 + 20).FillWidth().Label(i18n.T("自定义规则"))
+			return
+		}
 		ui.Scroll(c).MaxHeight(5*40 + 20).Children(func() {
 			ui.Column(c).Dividers(1, t.Border).Children(func() { p.customRows(c, t, list, all, hits, q) })
 		})
@@ -152,68 +178,135 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme) {
 
 // customRows draws the custom rules as rows.
 func (p *Page) customRows(c *ui.Context, t *ui.Theme, list, all []model.CustomRule, hits map[string]model.Rule, q string) {
-	e := p.e
-	{
-		for i, r := range list {
-			rule := r
-			first := i == 0 && len(all) > 0 && all[0].ID == r.ID
-			h, hasHit := hits[r.Type+","+r.Payload]
-			ui.Row(c.Key(r.ID)).Gap(10).MinHeight(40).PaddingX(12).Children(func() {
-				e.Kit.Tag(c, env.RuleTypeName(rule.Type), "gray")
-				highlight(c, rule.Payload, q, t.Text, t).Font("monospace").Grow(1).SingleLine()
-				ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
-				hitText := i18n.T("命中 0")
-				if hasHit {
-					hitText = fmt.Sprintf(i18n.T("命中 %s"), env.FmtInt(h.HitCount))
-					if h.HitCount > 0 {
-						hitText += " · " + env.FmtAgo(h.HitAt)
-					}
-				}
-				ui.Text(c, hitText).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Width(130).TextAlign(ui.End)
-				ui.Button(c, "⋯").Label(i18n.T("规则操作")).Tooltip(i18n.T("更多")).PopoverMenuButton(func(m *ui.Menu) {
-					if m.Item(i18n.T("编辑…")).Chosen() {
-						p.form.Open(rule)
-					}
-					if m.Item(i18n.T("上移")).Disabled(first).Chosen() {
-						e.Run(func() error { return e.API.MoveCustomRule(rule.ID, -1) }, "")
-					}
-					m.Separator()
-					if m.Item(i18n.T("删除…")).Danger().Chosen() {
-						e.Confirm(i18n.Tf("删除规则「%s」？", ruleform.Describe(rule)), i18n.T("删除后会重新生成配置并让内核重新加载。"), i18n.T("删除"), true, func() {
-							e.Run(func() error { return e.API.DeleteCustomRule(rule.ID) }, i18n.T("规则已删除"))
-						})
-					}
-				}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
-			})
-		}
+	for i := range list {
+		p.customRow(c, t, list, i, all, hits, q)
 	}
+}
+
+// customRow draws the custom rule list[i].
+func (p *Page) customRow(c *ui.Context, t *ui.Theme, list []model.CustomRule, i int, all []model.CustomRule, hits map[string]model.Rule, q string) {
+	e := p.e
+	r := list[i]
+	rule := r
+	first := i == 0 && len(all) > 0 && all[0].ID == r.ID
+	h, hasHit := hits[r.Type+","+r.Payload]
+	ui.Row(c.Key(r.ID)).Gap(10).MinHeight(40).PaddingX(12).Children(func() {
+		e.Kit.Tag(c, env.RuleTypeName(rule.Type), "gray")
+		env.Highlight(c, rule.Payload, q, t.Text).Font("monospace").Grow(1).SingleLine()
+		ui.Text(c, "→ "+env.TargetName(rule.Target)).TextColor(t.TextMuted)
+		hitText := i18n.T("命中 0")
+		if hasHit {
+			hitText = i18n.Tf("命中 %s", env.FmtInt(h.HitCount))
+			if h.HitCount > 0 {
+				hitText += " · " + env.FmtAgo(h.HitAt)
+			}
+		}
+		ui.Text(c, hitText).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").Width(130).TextAlign(ui.End)
+		ui.Button(c, "⋯").Label(i18n.T("规则操作")).Tooltip(i18n.T("更多")).PopoverMenuButton(func(m *ui.Menu) {
+			if m.Item(i18n.T("编辑…")).Chosen() {
+				p.form.Open(rule)
+			}
+			if m.Item(i18n.T("上移")).Disabled(first).Chosen() {
+				e.Run(func() error { return e.API.MoveCustomRule(rule.ID, -1) }, "")
+			}
+			m.Separator()
+			if m.Item(i18n.T("删除…")).Danger().Chosen() {
+				e.Confirm(i18n.Tf("删除规则「%s」？", ruleform.Describe(rule)), i18n.T("删除后会重新生成配置并让内核重新加载。"), i18n.T("删除"), true, func() {
+					e.Run(func() error { return e.API.DeleteCustomRule(rule.ID) }, i18n.T("规则已删除"))
+				})
+			}
+		}, ui.PopoverMenuButtonOptions{At: ui.AnchorBottomEnd, Self: ui.AnchorTopEnd})
+	})
 }
 
 // ---- subscription rules ----
 
-func (p *Page) subSection(c *ui.Context, t *ui.Theme) {
+// subCache is which subscription rules match the query, as positions in
+// Rules() in the order shown, for the rules, query and order it was made
+// for. The hit counts change every refresh without changing which rules
+// there are, so the rows are taken fresh from Rules() at those positions;
+// only the order by hits is sorted again each build.
+type subCache struct {
+	n     int    // len(Rules())
+	sig   uint64 // of the rules' identities (rulesSig)
+	query string // lowerQuery
+	lang  string // TargetName translates 直连 / 拒绝
+	sort  ui.SortOrder
+	total int   // subscription rules
+	pos   []int // matching positions, in order
+}
+
+var zero [1]byte
+
+// rulesSig fingerprints which rules there are (not their hit counts).
+func rulesSig(rules []model.Rule) uint64 {
+	h := fnv.New64a()
+	var b [9]byte
+	for _, r := range rules {
+		binary.LittleEndian.PutUint64(b[:8], uint64(r.Index))
+		b[8] = 0
+		if r.Custom {
+			b[8] = 1
+		}
+		h.Write(b[:])
+		for _, s := range [...]string{r.Type, r.Payload, r.Proxy} {
+			io.WriteString(h, s)
+			h.Write(zero[:])
+		}
+	}
+	return h.Sum64()
+}
+
+// subRows returns the subscription rules shown and how many there are.
+func (p *Page) subRows(rules []model.Rule) (rows []model.Rule, total int) {
+	sc := &p.sub
+	lq := p.lowerQuery()
+	sig := rulesSig(rules)
+	byHits := p.sort.Column == "hits"
+	if sc.pos == nil || sc.n != len(rules) || sc.sig != sig || sc.query != lq || sc.lang != i18n.Lang() || (!byHits && sc.sort != p.sort) {
+		*sc = subCache{n: len(rules), sig: sig, query: lq, lang: i18n.Lang(), sort: p.sort, pos: []int{}}
+		var sub []model.Rule
+		var at []int
+		for i, r := range rules {
+			if r.Custom {
+				continue
+			}
+			sc.total++
+			if matches(lq, r.Type, r.Payload, r.Proxy, env.TargetName(r.Proxy)) {
+				sub = append(sub, r)
+				at = append(at, i)
+			}
+		}
+		// Sort positions with their rules.
+		idx := make([]int, len(sub))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.SliceStable(idx, func(i, j int) bool { return ruleLess(sub[idx[i]], sub[idx[j]], p.sort) })
+		for _, i := range idx {
+			sc.pos = append(sc.pos, at[i])
+		}
+	}
+	rows = make([]model.Rule, len(sc.pos))
+	for i, at := range sc.pos {
+		rows[i] = rules[at]
+	}
+	if byHits {
+		sortRules(rows, p.sort)
+	}
+	return rows, sc.total
+}
+
+func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 	e := p.e
-	var sub []model.Rule
-	for _, r := range e.API.Rules() {
-		if !r.Custom {
-			sub = append(sub, r)
-		}
-	}
-	total := len(sub)
-	rows := sub[:0:0]
-	for _, r := range sub {
-		if p.matches(r.Type, r.Payload, r.Proxy, env.TargetName(r.Proxy)) {
-			rows = append(rows, r)
-		}
-	}
-	sortRules(rows, p.sort)
+	rows, total := p.subRows(rules)
 	subName := ""
 	for _, s := range e.API.Subscriptions() {
 		if s.Current {
 			subName = s.Name
 		}
 	}
-	note := fmt.Sprintf(i18n.T("共 %d 条"), total)
+	note := i18n.Tf("共 %d 条", total)
 	if subName != "" {
 		note = subName + " · " + note
 	}
@@ -226,7 +319,7 @@ func (p *Page) subSection(c *ui.Context, t *ui.Theme) {
 		if len(rows) == 0 {
 			msg := i18n.T("订阅中没有规则")
 			if q != "" {
-				msg = fmt.Sprintf(i18n.T("没有匹配“%s”的规则"), q)
+				msg = i18n.Tf("没有匹配“%s”的规则", q)
 			}
 			ui.Text(c, msg).TextColor(t.TextMuted).Padding(16).TextAlign(ui.Center)
 		} else {
@@ -254,13 +347,13 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 	case "#":
 		fade(ui.Text(c, fmt.Sprint(r.Index+1)).TextColor(muted).FontFeatures("tnum"))
 	case "type":
-		fade(highlight(c, r.Type, q, muted, t).SingleLine())
+		fade(env.Highlight(c, r.Type, q, muted).SingleLine())
 	case "payload":
 		ui.Row(c).Gap(6).Children(func() {
 			if r.Payload == "" {
 				fade(ui.Text(c, "—").TextColor(muted))
 			} else {
-				fade(highlight(c, r.Payload, q, t.Text, t).Font("monospace").SingleLine())
+				fade(env.Highlight(c, r.Payload, q, t.Text).Font("monospace").SingleLine())
 			}
 			if r.Size > 0 {
 				fade(ui.Text(c, i18n.Tf("%s 条", env.FmtInt(int64(r.Size)))).FontSize(11).TextColor(muted).FontFeatures("tnum"))
@@ -270,7 +363,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 			}
 		})
 	case "policy":
-		fade(highlight(c, env.TargetName(r.Proxy), q, t.Text, t).SingleLine())
+		fade(env.Highlight(c, env.TargetName(r.Proxy), q, t.Text).SingleLine())
 	case "hits":
 		if r.HitCount == 0 {
 			fade(ui.Text(c, "0").TextColor(muted).FontFeatures("tnum"))
@@ -296,18 +389,20 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 }
 
 func sortRules(rows []model.Rule, s ui.SortOrder) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if s.Descending {
-			a, b = b, a
+	sort.SliceStable(rows, func(i, j int) bool { return ruleLess(rows[i], rows[j], s) })
+}
+
+// ruleLess orders rules by s: by hits or by position.
+func ruleLess(a, b model.Rule, s ui.SortOrder) bool {
+	if s.Descending {
+		a, b = b, a
+	}
+	if s.Column == "hits" {
+		if a.HitCount != b.HitCount {
+			return a.HitCount < b.HitCount
 		}
-		if s.Column == "hits" {
-			if a.HitCount != b.HitCount {
-				return a.HitCount < b.HitCount
-			}
-		}
-		return a.Index < b.Index
-	})
+	}
+	return a.Index < b.Index
 }
 
 // ---- rule providers ----
@@ -321,7 +416,7 @@ func (p *Page) providers(c *ui.Context, t *ui.Theme) {
 	e.Kit.Section(c, i18n.T("规则集"), i18n.T("订阅引用的 rule-providers，可单独更新"), func() {
 		for _, pr := range provs {
 			pr := pr
-			desc := fmt.Sprintf(i18n.T("%s · %s 条 · 更新于 %s"), behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
+			desc := i18n.Tf("%s · %s 条 · 更新于 %s", behaviorName(pr.Behavior), env.FmtInt(int64(pr.Count)), env.FmtAgo(pr.UpdatedAt))
 			e.Kit.Row(c, pr.Name, desc, func() {
 				if pr.Updating {
 					ui.Row(c).Gap(6).Children(func() {
@@ -393,7 +488,7 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 	e := p.e
 	ui.Column(c).Gap(6).Padding(12).Radius(8).Background(t.Surface).Border(1, t.Border).Selectable().Children(func() {
 		if r.RuleIndex < 0 && r.Rule == "" {
-			ui.Text(c, fmt.Sprintf(i18n.T("%s 未命中任何规则"), r.Host)).Bold()
+			ui.Text(c, i18n.Tf("%s 未命中任何规则", r.Host)).Bold()
 			ui.Text(c, i18n.T("内核没有报告命中的规则，可能是该地址无法访问。")).FontSize(12).TextColor(t.TextMuted)
 			return
 		}
@@ -406,7 +501,7 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 			ui.Text(c, i18n.T("命中")).TextColor(t.TextMuted)
 			e.Kit.Tag(c, src, "gray")
 			if r.RuleIndex >= 0 {
-				ui.Text(c, fmt.Sprintf(i18n.T("规则 #%d"), r.RuleIndex+1)).FontFeatures("tnum")
+				ui.Text(c, i18n.Tf("规则 #%d", r.RuleIndex+1)).FontFeatures("tnum")
 			}
 		})
 		ui.Text(c, r.Rule).Font("monospace").FontSize(12)
@@ -417,7 +512,7 @@ func (p *Page) testResultView(c *ui.Context, t *ui.Theme, r model.RuleMatch) {
 			}
 			chain = append(chain, env.TargetName(hop))
 		}
-		ui.Text(c, i18n.T("走向 ")+strings.Join(chain, " › ")).FontSize(12)
+		ui.Text(c, i18n.Tf("走向 %s", strings.Join(chain, " › "))).FontSize(12)
 	})
 }
 
@@ -446,24 +541,8 @@ func (p *Page) runTest() {
 
 // ---- helpers ----
 
-// highlight draws text with the case-insensitive matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicRules, app.TopicProxies, app.TopicSubs}
 }

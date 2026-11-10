@@ -57,7 +57,7 @@ func (p *Page) wifiSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 			})
 		}
 		cur := strings.TrimSpace(e.API.NetInfo().SSID)
-		addDesc := i18n.T("当前 Wi-Fi：") + cur
+		addDesc := i18n.Tf("当前 Wi-Fi：%s", cur)
 		if cur == "" {
 			addDesc = i18n.T("当前 Wi-Fi 名称不可用")
 			if e.Mac {

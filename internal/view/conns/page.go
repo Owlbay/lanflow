@@ -4,13 +4,13 @@
 package conns
 
 import (
-	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -27,8 +27,11 @@ type Page struct {
 	query  string
 	search ui.Handle // the search field, focused by ⌘F
 	paused bool
+	// frozen are the lists shown while paused, each taken when first
+	// needed after the pause.
 	frozen struct {
-		active, closed []model.Connection
+		active, closed       []model.Connection
+		hasActive, hasClosed bool
 	}
 	tab      int // 0 活动, 1 已关闭
 	view     int // 0 列表, 1 拓扑 (topology.go)
@@ -44,13 +47,21 @@ type Page struct {
 	// hidden holds the IDs of the columns the user hid through the header's
 	// context menu; it mirrors Settings.ConnHiddenColumns.
 	hidden map[string]bool
-	// cols are the columns shown this frame, in the order of allColumns.
-	cols []ui.TableColumn
+	// cols are the columns shown, in the order of allColumns; rebuilt
+	// when the settings or the language change (colsStale, colsLang).
+	cols      []ui.TableColumn
+	colsStale *env.Stale
+	colsLang  string
+
+	// hay caches each connection's search text, lowercased, by ID
+	// (haystack); kept only while a query is typed.
+	hay map[string]hayText
 }
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	p := &Page{e: e, selected: -1, hoverRow: -1, sort: ui.SortOrder{Column: "down", Descending: true}, icons: procicon.New(e.API)}
+	p := &Page{e: e, selected: -1, hoverRow: -1, sort: ui.SortOrder{Column: "down", Descending: true}, icons: procicon.New(e.API),
+		colsStale: env.Watch(e.API, app.TopicSettings)}
 	p.topo.icons = p.icons
 	p.list.Sort = &p.sort
 	p.list.Selected = &p.selected
@@ -73,8 +84,14 @@ var allColumns = []ui.TableColumn{
 	{Title: "", ID: "close", Width: 30, Fixed: true},
 }
 
-// visibleColumns returns allColumns without the hidden ones.
+// visibleColumns returns allColumns without the hidden ones, read again
+// only after a change of the settings or of the language.
 func (p *Page) visibleColumns() []ui.TableColumn {
+	stale := p.colsStale.Take()
+	if !stale && p.cols != nil && p.colsLang == i18n.Lang() {
+		return p.cols
+	}
+	p.colsLang = i18n.Lang()
 	hidden := p.e.API.Settings().ConnHiddenColumns
 	p.hidden = make(map[string]bool, len(hidden))
 	for _, id := range hidden {
@@ -137,25 +154,17 @@ func (p *Page) View(c *ui.Context) {
 	}
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
-	active, closed := e.API.Connections(), e.API.ClosedConnections()
-	if p.paused {
-		if p.frozen.active == nil && p.frozen.closed == nil {
-			p.frozen.active, p.frozen.closed = active, closed
-		}
-		active, closed = p.frozen.active, p.frozen.closed
-	} else {
-		p.frozen.active, p.frozen.closed = nil, nil
-	}
 	if !running {
 		p.paused = false
 	}
+	active, closed, nActive := p.lists(st)
 
 	subtitle := ""
 	if running {
-		subtitle = fmt.Sprintf(i18n.T("%d 个活动连接"), len(active))
+		subtitle = i18n.Tf("%d 个活动连接", nActive)
 	}
 	ui.Column(c).Fill().Children(func() {
-		e.Kit.Header(c, i18n.T("连接"), subtitle, func() { p.tools(c, running, len(active)) })
+		e.Kit.Header(c, i18n.T("连接"), subtitle, func() { p.tools(c, running, nActive) })
 		if c.Shortcut(ui.Cmd, ui.KeyF) {
 			p.search.Focus(c)
 		}
@@ -169,6 +178,36 @@ func (p *Page) View(c *ui.Context) {
 		}
 	})
 	p.form.View(c, e)
+}
+
+// lists returns the connection lists this view shows, reading only those
+// (the list view shows one tab, the topology the active ones and, if
+// asked, the closed), frozen while paused; and how many are active.
+func (p *Page) lists(st model.Status) (active, closed []model.Connection, nActive int) {
+	e := p.e
+	needActive := p.view == 1 || p.tab == 0
+	needClosed := (p.view == 1 && p.topo.withClosed) || (p.view != 1 && p.tab == 1)
+	if !p.paused {
+		p.frozen.active, p.frozen.closed = nil, nil
+		p.frozen.hasActive, p.frozen.hasClosed = false, false
+	}
+	if needActive {
+		if !p.paused || !p.frozen.hasActive {
+			p.frozen.active, p.frozen.hasActive = e.API.Connections(), true
+		}
+		active = p.frozen.active
+	}
+	if needClosed {
+		if !p.paused || !p.frozen.hasClosed {
+			p.frozen.closed, p.frozen.hasClosed = e.API.ClosedConnections(), true
+		}
+		closed = p.frozen.closed
+	}
+	nActive = st.Connections
+	if p.frozen.hasActive {
+		nActive = len(p.frozen.active)
+	}
+	return active, closed, nActive
 }
 
 func (p *Page) tools(c *ui.Context, running bool, n int) {
@@ -207,7 +246,7 @@ func (p *Page) tools(c *ui.Context, running bool, n int) {
 	}
 	ui.Segmented(c.Key("view"), &p.view, i18n.T("列表"), i18n.T("拓扑")).Label(i18n.T("连接视图"))
 	ui.Button(c, i18n.T("全部断开")).Disabled(!running || n == 0).OnClick(func() {
-		e.Confirm(fmt.Sprintf(i18n.T("断开全部 %d 个连接？"), n), i18n.T("应用会自动重新建立需要的连接。"), i18n.T("断开"), false, func() {
+		e.Confirm(i18n.Tf("断开全部 %d 个连接？", n), i18n.T("应用会自动重新建立需要的连接。"), i18n.T("断开"), false, func() {
 			p.sel = ""
 			e.Run(e.API.CloseAllConnections, i18n.T("已断开全部连接"))
 		})
@@ -224,7 +263,7 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, active, closed []model.Connectio
 	if len(rows) == 0 {
 		switch {
 		case strings.TrimSpace(p.query) != "":
-			p.e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的连接"), strings.TrimSpace(p.query)), "", nil)
+			p.e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的连接", strings.TrimSpace(p.query)), "", nil)
 		case p.tab == 1:
 			p.e.Kit.Empty(c, "conns", i18n.T("暂无已关闭连接"), i18n.T("断开的连接会在这里保留最近 500 条，仅保存在内存中。"), nil)
 		default:
@@ -272,7 +311,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 	box.Children(func() {
 		switch col {
 		case "host":
-			highlight(c, cn.Host, q, t.Text, t).SingleLine()
+			env.Highlight(c, cn.Host, q, t.Text).SingleLine()
 		case "process":
 			name := cn.Process
 			if name == "" {
@@ -282,12 +321,12 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, cn model.Connection, row int, co
 				if cn.Process != "" {
 					p.icons.Draw(c, t, cn.ProcessPath, procicon.Size)
 				}
-				highlight(c, name, q, muted, t).SingleLine().Shrink(1)
+				env.Highlight(c, name, q, muted).SingleLine().Shrink(1)
 			})
 		case "rule":
-			highlight(c, ruleName(cn), q, muted, t).SingleLine()
+			env.Highlight(c, ruleName(cn), q, muted).SingleLine()
 		case "chain":
-			highlight(c, chain(cn), q, t.Text, t).SingleLine()
+			env.Highlight(c, chain(cn), q, t.Text).SingleLine()
 		case "down":
 			speed(c, t, cn.DownSpeed)
 		case "up":
@@ -358,7 +397,7 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bo
 				meta += " · " + cn.Type
 			}
 			if !cn.ClosedAt.IsZero() {
-				meta += i18n.T(" · 已关闭 ") + env.FmtAgo(cn.ClosedAt)
+				meta += i18n.Tf(" · 已关闭 %s", env.FmtAgo(cn.ClosedAt))
 			}
 			ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted)
 			ui.Column(c).Gap(6).Selectable().Children(func() {
@@ -369,13 +408,13 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, cn model.Connection, active bo
 				}
 				kv(i18n.T("源地址"), src)
 				kv(i18n.T("目标地址"), cn.Host)
-				kv(i18n.T("目标 IP"), dash(cn.DstIP))
+				kv(i18n.T("目标 IP"), env.Dash(cn.DstIP))
 				if cn.RemoteDestination != "" && cn.RemoteDestination != cn.DstIP {
 					kv(i18n.T("实际连接"), cn.RemoteDestination)
 				}
-				p.kv(c, t, i18n.T("进程"), dash(cn.Process), cn.ProcessPath)
+				p.kv(c, t, i18n.T("进程"), env.Dash(cn.Process), cn.ProcessPath)
 				kv(i18n.T("规则"), ruleName(cn))
-				kv(i18n.T("规则载荷"), dash(cn.RulePayload))
+				kv(i18n.T("规则载荷"), env.Dash(cn.RulePayload))
 				kv(i18n.T("链路"), chain(cn))
 				kv(i18n.T("下行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.DownSpeed), env.FmtBytes(cn.Download)))
 				kv(i18n.T("上行"), i18n.Tf("%s · 共 %s", env.FmtSpeed(cn.UpSpeed), env.FmtBytes(cn.Upload)))
@@ -446,12 +485,40 @@ func (p *Page) defaultTarget(cn model.Connection) string {
 func (p *Page) filter(src []model.Connection) []model.Connection {
 	q := strings.ToLower(strings.TrimSpace(p.query))
 	out := make([]model.Connection, 0, len(src))
+	if q == "" {
+		p.hay = nil
+		return append(out, src...)
+	}
+	// The search texts of the connections still listed carry over; those
+	// of closed-and-gone connections are dropped.
+	old := p.hay
+	p.hay = make(map[string]hayText, len(src))
 	for _, cn := range src {
-		if q == "" || strings.Contains(strings.ToLower(haystack(cn)), q) {
+		h, ok := p.hay[cn.ID]
+		if !ok || !h.of(cn) {
+			if h, ok = old[cn.ID]; !ok || !h.of(cn) {
+				h = hayText{host: cn.Host, process: cn.Process, chains: len(cn.Chains), text: strings.ToLower(haystack(cn))}
+			}
+			p.hay[cn.ID] = h
+		}
+		if strings.Contains(h.text, q) {
 			out = append(out, cn)
 		}
 	}
 	return out
+}
+
+// hayText is a connection's cached search text, with the fields that may
+// still change during its life (the process found late, the chain
+// resolved), to tell when it is out of date.
+type hayText struct {
+	host, process string
+	chains        int
+	text          string
+}
+
+func (h hayText) of(cn model.Connection) bool {
+	return h.host == cn.Host && h.process == cn.Process && h.chains == len(cn.Chains)
 }
 
 // haystack is the text the search matches: host, process, rule with its
@@ -549,13 +616,6 @@ func chain(cn model.Connection) string {
 	return strings.Join(cn.Chains, " › ")
 }
 
-func dash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
-}
-
 func hostOnly(h string) string {
 	if i := strings.LastIndex(h, ":"); i > 0 && strings.Count(h, ":") == 1 {
 		return h[:i]
@@ -577,24 +637,8 @@ func isIP(h string) bool {
 	return strings.ContainsAny(h, ".:")
 }
 
-// highlight draws text with the case-insensitive matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicConns, app.TopicProxies, app.TopicSettings, app.TopicProcIcons}
 }

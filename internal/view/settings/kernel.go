@@ -21,7 +21,7 @@ func (p *Page) updateCore(version string) {
 	e := p.e
 	ok := i18n.T("Mihomo 内核已下载完成")
 	if version != "" {
-		ok = i18n.T("内核已更新到 ") + version
+		ok = i18n.Tf("内核已更新到 %s", version)
 	}
 	run := func() {
 		e.Run(func() error { return e.API.DownloadCore(version) }, ok)
@@ -85,7 +85,7 @@ func (p *Page) exportSettings(includeSubs bool) {
 	if filepath.Ext(path) == "" {
 		path += ".json"
 	}
-	e.Run(func() error { return e.API.ExportSettings(path, includeSubs) }, i18n.T("已导出到 ")+filepath.Base(path))
+	e.Run(func() error { return e.API.ExportSettings(path, includeSubs) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }
 
 // importSettings picks a file and applies it; the summary is toasted.

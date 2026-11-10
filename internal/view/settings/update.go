@@ -186,9 +186,9 @@ func (p *Page) updateRows(c *ui.Context, t *ui.Theme, s model.Settings) {
 		desc = i18n.T("新版本已下载，重新打开澜流后生效")
 	case u.installing:
 		if u.total > 0 {
-			desc = fmt.Sprintf(i18n.T("正在下载 %s，%d%%"), u.found.Version(), u.done*100/u.total)
+			desc = i18n.Tf("正在下载 %s，%d%%", u.found.Version(), u.done*100/u.total)
 		} else {
-			desc = i18n.T("正在下载 ") + u.found.Version() + "…"
+			desc = i18n.Tf("正在下载 %s…", u.found.Version())
 		}
 	case u.found != nil:
 		desc = i18n.Tf("有新版本 %s，当前为 %s", u.found.Version(), AppVersion())

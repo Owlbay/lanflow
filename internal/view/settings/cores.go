@@ -3,6 +3,7 @@ package settings
 import (
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -23,6 +24,31 @@ type coresUI struct {
 	loading     bool
 	loadErr     string
 	busy        string // version a 使用 / 删除 job runs for ("" = none)
+
+	// installed is API.InstalledCores (which looks at the files), read
+	// again only when TopicCores or TopicCoreDownload says it changed.
+	installed []model.InstalledCore
+	stale     *env.Stale
+}
+
+// installedStale is the flag that has installedCores read the list again.
+func (p *Page) installedStale() *env.Stale {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.cores.stale == nil {
+		p.cores.stale = env.Watch(p.e.API, app.TopicCores, app.TopicCoreDownload)
+	}
+	return p.cores.stale
+}
+
+// installedCores returns the installed versions, read again only after a
+// change.
+func (p *Page) installedCores() []model.InstalledCore {
+	cu := &p.cores
+	if p.installedStale().Take() {
+		cu.installed = p.e.API.InstalledCores()
+	}
+	return cu.installed
 }
 
 var (
@@ -55,7 +81,7 @@ func activeInstalled(list []model.InstalledCore) (model.InstalledCore, bool) {
 func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, st model.Status) {
 	e := p.e
 	dl := e.API.CoreDownload()
-	installed := e.API.InstalledCores()
+	installed := p.installedCores()
 	active, hasActive := activeInstalled(installed)
 	p.mu.Lock()
 	latest := p.latest
@@ -70,11 +96,11 @@ func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, 
 	case dl.Error != "":
 		versionDesc = dl.Error
 	case latest != "":
-		versionDesc = i18n.T("有新版本 ") + latest
+		versionDesc = i18n.Tf("有新版本 %s", latest)
 	case hasActive && active.Bundled:
 		versionDesc = i18n.T("应用自带的内核")
 	case hasActive:
-		versionDesc = channelLabel(active.Channel) + " · " + i18n.T("安装于 ") + active.InstalledAt.Format("2006-01-02")
+		versionDesc = channelLabel(active.Channel) + " · " + i18n.Tf("安装于 %s", env.FmtDate(active.InstalledAt))
 	case s.CorePath != "":
 		versionDesc = i18n.T("自定义内核文件")
 	}
@@ -101,7 +127,7 @@ func (p *Page) coreVersionSection(c *ui.Context, t *ui.Theme, s model.Settings, 
 					return
 				}
 				if latest != "" {
-					ui.PrimaryButton(c, i18n.T("更新到 ")+latest).OnClick(func() { p.updateCore(latest) })
+					ui.PrimaryButton(c, i18n.Tf("更新到 %s", latest)).OnClick(func() { p.updateCore(latest) })
 				}
 				label := i18n.T("检查更新")
 				if p.checking {
@@ -155,7 +181,7 @@ func (p *Page) installedRow(c *ui.Context, t *ui.Theme, ic model.InstalledCore, 
 	case ic.Bundled:
 		desc = i18n.T("随应用安装")
 	default:
-		desc = channelLabel(ic.Channel) + " · " + ic.InstalledAt.Format("2006-01-02")
+		desc = channelLabel(ic.Channel) + " · " + env.FmtDate(ic.InstalledAt)
 	}
 	if ic.Size > 0 {
 		desc += " · " + env.FmtBytes(ic.Size)
@@ -222,6 +248,7 @@ func (p *Page) coreJob(version string, job func() error, ok string) {
 		p.mu.Lock()
 		p.cores.busy = ""
 		p.mu.Unlock()
+		p.installedStale().Mark() // the list changed, announced or not
 		return err
 	}, ok)
 }
@@ -360,7 +387,7 @@ func (p *Page) releaseRow(c *ui.Context, t *ui.Theme, r model.CoreRelease, downl
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				ui.Text(c, r.Version).FontSize(13).Bold().FontFeatures("tnum")
 				if !r.PublishedAt.IsZero() {
-					ui.Text(c, r.PublishedAt.Local().Format("2006-01-02")).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
+					ui.Text(c, env.FmtDate(r.PublishedAt.Local())).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum")
 				}
 				if r.Size > 0 {
 					ui.Text(c, env.FmtBytes(r.Size)).FontSize(11).TextColor(t.TextMuted)
@@ -376,7 +403,9 @@ func (p *Page) releaseRow(c *ui.Context, t *ui.Theme, r model.CoreRelease, downl
 		default:
 			ui.Button(c, i18n.T("安装")).Disabled(downloading).OnClick(func() {
 				e.Run(func() error {
-					if err := e.API.InstallCore(r.Channel, r.Version); err != nil {
+					err := e.API.InstallCore(r.Channel, r.Version)
+					p.installedStale().Mark()
+					if err != nil {
 						return err
 					}
 					// re-read the list so the row shows 已安装 (the service

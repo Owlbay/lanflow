@@ -12,6 +12,7 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
@@ -78,7 +79,7 @@ func (p *Page) View(c *ui.Context) {
 	st := e.API.TrafficStats(rangeKeys[p.rng])
 	subtitle := ""
 	if p.rng == len(rangeKeys)-1 && !st.Since.IsZero() {
-		subtitle = fmt.Sprintf(i18n.T("自 %s 起"), st.Since.Format("2006-01-02"))
+		subtitle = i18n.Tf("自 %s 起", env.FmtDate(st.Since))
 	}
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("统计"), subtitle, func() { p.tools(c) })
@@ -143,7 +144,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			ui.Spacer(c)
 			legend(c, t, i18n.T("下载"), t.Accent)
 			legend(c, t, i18n.T("上传"), t.TextMuted.Alpha(0.55))
-			ui.Text(c, i18n.T("峰值 ")+env.FmtBytes(peak)).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
+			ui.Text(c, i18n.Tf("峰值 %s", env.FmtBytes(peak))).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 		})
 		box := ui.Box(c).Height(104).FillWidth().Label(title)
 		px, _, hovering := box.PointerPosition()
@@ -183,7 +184,7 @@ func (p *Page) chart(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 			}
 			if hover >= 0 {
 				s := series[hover]
-				tip := fmt.Sprintf(i18n.T("%s · ↓ %s ↑ %s · %d 次请求"), tipTime(s.Time, st.Hourly), env.FmtBytes(s.Download), env.FmtBytes(s.Upload), s.Requests)
+				tip := i18n.Tf("%s · ↓ %s ↑ %s · %d 次请求", tipTime(s.Time, st.Hourly), env.FmtBytes(s.Download), env.FmtBytes(s.Upload), s.Requests)
 				tw, _ := pt.MeasureText(0, ui.Span{Text: tip, Size: 11})
 				tx := min(max(r.X+px+10, r.X), r.X+r.W-tw-8)
 				pt.Fill(ui.Rect{X: tx - 6, Y: r.Y + 2, W: tw + 12, H: 20}, t.Background, 6)
@@ -216,7 +217,7 @@ func tipTime(at time.Time, hourly bool) string {
 	if hourly {
 		return at.Format("15:00") + "–" + at.Add(time.Hour).Format("15:04")
 	}
-	return at.Format("2006-01-02")
+	return env.FmtDate(at)
 }
 
 func legend(c *ui.Context, t *ui.Theme, label string, col ui.Color) {
@@ -241,7 +242,7 @@ func (p *Page) table(c *ui.Context, t *ui.Theme, st model.TrafficStats) {
 	q := strings.TrimSpace(p.query)
 	if len(rows) == 0 {
 		if q != "" {
-			e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的项目"), q), "", nil)
+			e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的项目", q), "", nil)
 		} else {
 			e.Kit.Empty(c, "stats", i18n.T("此范围内暂无数据"), "", nil)
 		}
@@ -276,9 +277,9 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r row, col, q string) {
 			if withIcon {
 				p.icons.Draw(c, t, r.Detail, procicon.Size)
 			}
-			highlight(c, r.name, q, t.Text, t).SingleLine().Shrink(1)
+			env.Highlight(c, r.name, q, t.Text).SingleLine().Shrink(1)
 			if r.detail != "" && r.detail != r.name {
-				highlight(c, r.detail, q, t.TextMuted, t).FontSize(11).SingleLine().Shrink(2)
+				env.Highlight(c, r.detail, q, t.TextMuted).FontSize(11).SingleLine().Shrink(2)
 			}
 		})
 	case "req":
@@ -416,24 +417,8 @@ func sortRows(rows []row, s ui.SortOrder) {
 	})
 }
 
-// highlight draws text with the matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicStats, app.TopicProcIcons}
 }

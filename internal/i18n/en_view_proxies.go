@@ -1,0 +1,57 @@
+package i18n
+
+// English of the 代理 page (internal/view/proxies).
+func init() {
+	for k, v := range map[string]string{
+		// internal/view/proxies/page.go
+		"搜索节点":   "Search nodes",
+		"网格":     "Grid",
+		"视图":     "View",
+		"排序":     "Sort",
+		"默认顺序":   "Default Order",
+		"按延迟":    "By Latency",
+		"按名称":    "By Name",
+		"隐藏超时节点": "Hide Timed-out Nodes",
+		"全部测速":   "Test All",
+		"依次测试所有组的延迟（⌘R）":      "Test the latency of every group in turn (⌘R)",
+		"导入订阅后，这里会列出代理组和节点。":  "Proxy groups and nodes show here once a subscription is imported.",
+		"启动内核后才能查看和切换节点。":     "Start the core to view and switch nodes.",
+		"当前为直连模式，节点选择不生效。":    "Direct mode is on; node selection has no effect.",
+		"已切换到规则模式":            "Switched to Rule mode",
+		"没有匹配“%s”的节点":         "No nodes match “%s”",
+		"换个关键词试试。":            "Try another keyword.",
+		"选择":                  "Select",
+		"自动测速":                "Auto Test",
+		"故障转移":                "Fallback",
+		"负载均衡":                "Load Balance",
+		"链式代理":                "Relay",
+		"主代理组":                "Main group",
+		"%s · 当前 %s":          "%s · now %s",
+		"%s · %d 个匹配":         "%s · %d matches",
+		"测速 %s":               "Test latency of %s",
+		"组内测速":                "Test this group",
+		"设为主代理组":              "Set as Main Group",
+		"已将「%s」设为主代理组":        "“%s” is now the main group",
+		"复制组名":                "Copy Group Name",
+		"重新测速 %s":             "Test latency again for %s",
+		"单击重新测速":              "Click to test again",
+		"代理集合":                "Proxy Providers",
+		"%d 个 proxy-provider": "%d proxy-providers",
+		"内联":                  "Inline",
+		"配置内":                 "In config",
+		"%s · %d 个节点":         "%s · %d nodes",
+		" · 已用 %s / %s GB":    " · %s / %s GB used",
+		" · 到期 %s":            " · expires %s",
+		"更新 %s":               "Update %s",
+		"重新下载该代理集合":           "Download this provider again",
+		"健康检查 %s":             "Health check for %s",
+		"测试该集合中所有节点的延迟":       "Test the latency of every node in this provider",
+		"测速完成":                "Latency test finished",
+		"定位当前节点":              "Locate Current Node",
+		"定位当前节点 %s":           "Locate current node of %s",
+		"%d 个代理集合":            "%d proxy sets",
+		"依次测试所有组的延迟（Ctrl+R）":  "Test the latency of every group in turn (Ctrl+R)",
+	} {
+		en[k] = v
+	}
+}

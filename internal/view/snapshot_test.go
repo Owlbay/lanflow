@@ -111,25 +111,25 @@ var snapshots = []snapshot{
 	// Dialogs.
 	{name: "dialog-import", page: env.Subs, arg: "import-url"},
 	{name: "dialog-edit-sub", page: env.Subs, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
-		click(t, tt, i18n.T("更多 ")+"备用机场")
+		click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 		if err := tt.ChooseMenuItem(i18n.T("编辑…")); err != nil {
 			t.Fatal(err)
 		}
 	}},
 	{name: "dialog-view-config", page: env.Subs, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
-		click(t, tt, i18n.T("更多 ")+"备用机场")
+		click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 		if err := tt.ChooseMenuItem(i18n.T("查看配置")); err != nil {
 			t.Fatal(err)
 		}
 	}},
 	{name: "dialog-delete-sub", page: env.Subs, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
-		click(t, tt, i18n.T("更多 ")+"备用机场")
+		click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 		if err := tt.ChooseMenuItem(i18n.T("删除…")); err != nil {
 			t.Fatal(err)
 		}
 	}},
 	{name: "dialog-invalid-config", page: env.Subs, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
-		click(t, tt, i18n.T("更多 ")+"备用机场")
+		click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 		if err := tt.ChooseMenuItem(i18n.T("使用此订阅")); err != nil {
 			t.Fatal(err)
 		}

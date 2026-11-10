@@ -1,8 +1,13 @@
 package env
 
 import (
+	"sync"
 	"testing"
 	"time"
+
+	"lanflow/internal/app"
+	"lanflow/internal/i18n"
+	"lanflow/internal/model"
 )
 
 // TestFmtBytesOneDecimal: sizes keep one decimal at every magnitude and a
@@ -66,5 +71,60 @@ func TestFmtDuration(t *testing.T) {
 		if got := FmtDuration(d); got != want {
 			t.Errorf("FmtDuration(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+// fakeUI is a UI state store for TestUIStateSaver.
+type fakeUI struct {
+	app.API
+	mu    sync.Mutex
+	u     model.UIState
+	saves int
+}
+
+func (f *fakeUI) UIState() model.UIState { f.mu.Lock(); defer f.mu.Unlock(); return f.u }
+func (f *fakeUI) SaveUIState(u model.UIState) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.u, f.saves = u, f.saves+1
+	return nil
+}
+
+// TestUIStateSaver: changes in a burst are one write, the latest change
+// of a key wins, and changes of different keys all land.
+func TestUIStateSaver(t *testing.T) {
+	f := &fakeUI{}
+	s := NewUIStateSaver(f, 30*time.Millisecond)
+	s.Save("logs", func(u *model.UIState) { u.LogLevel = "info" })
+	s.Save("proxies", func(u *model.UIState) { u.ProxyGrid = true })
+	s.Save("logs", func(u *model.UIState) { u.LogLevel = "error" })
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		f.mu.Lock()
+		n := f.saves
+		f.mu.Unlock()
+		if n > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	s.Save("proxies", func(u *model.UIState) { u.OpenGroups = map[string]bool{"a": true} })
+	s.Close()
+	u := f.UIState()
+	if f.saves != 2 || u.LogLevel != "error" || !u.ProxyGrid || !u.OpenGroups["a"] {
+		t.Fatalf("saves %d, state %+v", f.saves, u)
+	}
+}
+
+// TestFmtDateByLanguage: dates follow the language shown.
+func TestFmtDateByLanguage(t *testing.T) {
+	t.Cleanup(func() { i18n.SetLang(i18n.ZH) })
+	d := time.Date(2026, 11, 1, 10, 21, 0, 0, time.Local)
+	if got := FmtDate(d); got != "2026-11-01" {
+		t.Errorf("zh %q", got)
+	}
+	i18n.SetLang(i18n.EN)
+	if got, gotT := FmtDate(d), FmtDateTime(d); got != "Nov 1, 2026" || gotT != "Nov 1, 2026 10:21" {
+		t.Errorf("en %q %q", got, gotT)
 	}
 }

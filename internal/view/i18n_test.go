@@ -145,7 +145,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	c.frame("import dialog", tt)
 	click(t, tt, i18n.T("取消"))
 	tt.Frame()
-	click(t, tt, i18n.T("更多 ")+"备用机场")
+	click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 	for _, m := range tt.Menu() {
 		c.text("subscription menu", m)
 	}
@@ -155,21 +155,21 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	c.frame("view config dialog", tt)
 	click(t, tt, i18n.T("关闭"))
 	tt.Frame()
-	click(t, tt, i18n.T("更多 ")+"备用机场")
+	click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 	if err := tt.ChooseMenuItem(i18n.T("编辑…")); err != nil {
 		t.Fatal(err)
 	}
 	c.frame("edit subscription dialog", tt)
 	click(t, tt, i18n.T("取消"))
 	tt.Frame()
-	click(t, tt, i18n.T("更多 ")+"备用机场")
+	click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 	if err := tt.ChooseMenuItem(i18n.T("删除…")); err != nil {
 		t.Fatal(err)
 	}
 	c.frame("delete confirmation", tt)
 	click(t, tt, i18n.T("取消"))
 	tt.Frame()
-	click(t, tt, i18n.T("更多 ")+"备用机场")
+	click(t, tt, i18n.Tf("更多 %s", "备用机场"))
 	if err := tt.ChooseMenuItem(i18n.T("使用此订阅")); err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	c.text("core download", env.CoreDownloadText(model.CoreDownload{Active: true, Phase: "下载", Version: "v1", Bytes: 1, Total: 2}))
 	c.text("core download", env.CoreDownloadText(model.CoreDownload{Active: true, Phase: "启动"}))
 	c.text("delay", env.FmtDelay(-1, false))
-	for _, s := range []string{env.RuleTypeName("DOMAIN"), env.TargetName("DIRECT"), env.TargetName("REJECT"), modeName(model.ModeRule)} {
+	for _, s := range []string{env.RuleTypeName("DOMAIN"), env.TargetName("DIRECT"), env.TargetName("REJECT"), env.ModeName(model.ModeRule)} {
 		c.text("format", s)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -63,12 +64,15 @@ func (p *Page) View(c *ui.Context) {
 	// and all the height; the routes, the subscription, the speed and the
 	// terminal command stack on the right, the routes taking what the
 	// others leave.
+	// The routes are read, and their speeds eased, once per build for
+	// both the map and the list.
+	rs := p.routes(time.Now())
 	ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(16).Clip().Children(func() {
 		p.switches(c, st)
 		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
-			p.exitCard(c, st)
+			p.exitCard(c, st, rs)
 			ui.Column(c).Grow(36).Basis(0).Gap(12).Children(func() {
-				p.routeCard(c, st)
+				p.routeCard(c, st, rs)
 				p.subscriptionCard(c, st)
 				p.speedCard(c, st)
 				p.terminalRow(c, st)
@@ -136,7 +140,7 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 					meta = "· " + st.CoreVersion
 				}
 				if !st.StartedAt.IsZero() {
-					meta += i18n.T(" · 已运行 ") + env.FmtUptime(time.Since(st.StartedAt))
+					meta += i18n.Tf(" · 已运行 %s", env.FmtUptime(time.Since(st.StartedAt)))
 				}
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 			case model.CoreStarting:
@@ -198,8 +202,7 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 			on := proxyOn
 			if st.ShowProxyHint && !on {
 				// First-run bubble after the first import + start (docs/design.md §8.1).
-				tip := ui.Row(c).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(8).Background(t.Accent).
-					Cursor(ui.CursorPointer).Role(ui.RoleButton).Label(i18n.T("打开以让系统流量走代理，点击关闭提示")).Shrink(0)
+				tip := env.ClickableRow(c, i18n.T("打开以让系统流量走代理，点击关闭提示")).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(8).Background(t.Accent).Shrink(0)
 				tip.Children(func() {
 					ui.Text(c, i18n.T("打开以让系统流量走代理")).FontSize(12).TextColor(t.AccentText).SingleLine()
 					ui.Box(c).TextColor(t.AccentText.Alpha(0.8)).Children(func() { k.Icon(c, "close", 11) })
@@ -257,7 +260,7 @@ func (p *Page) modeRows(c *ui.Context, st model.Status, pm *model.Mode, busy boo
 					p.pendingMode = nil
 					p.mu.Unlock()
 					return err
-				}, i18n.Tf("已切换到%s模式", modeName(m)))
+				}, i18n.Tf("已切换到%s模式", env.ModeName(m)))
 			})
 		})
 	}
@@ -272,17 +275,6 @@ func modeIndex(m model.Mode) int {
 		}
 	}
 	return 0
-}
-
-func modeName(m model.Mode) string {
-	switch m {
-	case model.ModeGlobal:
-		return i18n.T("全局")
-	case model.ModeDirect:
-		return i18n.T("直连")
-	default:
-		return i18n.T("规则")
-	}
 }
 
 // row is a settings row with a fixed-width label, middle content and a
@@ -332,7 +324,7 @@ func (p *Page) missingBanner(c *ui.Context, st model.Status) {
 	}
 	msg := i18n.T("未找到 Mihomo 内核：内核文件不存在或无法执行。可下载官方内核，或选择本机已有的内核文件。")
 	if st.CoreError != "" {
-		msg = i18n.T("未找到 Mihomo 内核：") + st.CoreError
+		msg = i18n.Tf("未找到 Mihomo 内核：%s", st.CoreError)
 	}
 	if dl.Error != "" {
 		msg = dl.Error
@@ -386,7 +378,7 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 			break
 		}
 	}
-	cd := card(c).Shrink(0).Cursor(ui.CursorPointer).Label(i18n.T("当前订阅，打开订阅页")).Role(ui.RoleButton)
+	cd := env.Clickable(card(c).Shrink(0), i18n.T("当前订阅，打开订阅页"))
 	cd.Children(func() {
 		cardTitle(c, i18n.T("当前订阅"), func() { ui.Text(c, "›").TextColor(t.TextMuted) })
 		name := "—"
@@ -405,7 +397,7 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 			traffic := i18n.T("无流量信息")
 			switch {
 			case cur.Total > 0:
-				traffic = fmt.Sprintf(i18n.T("已用 %s / %s GB"), env.FmtGB(used), env.FmtGB(cur.Total))
+				traffic = i18n.Tf("已用 %s / %s GB", env.FmtGB(used), env.FmtGB(cur.Total))
 			case cur.Source == "file":
 				traffic = i18n.T("本地文件 · 无流量信息")
 			}
@@ -436,9 +428,9 @@ func expiryText(expire, now time.Time, t *ui.Theme) (string, ui.Color) {
 	case expire.Before(now):
 		return i18n.T("已过期"), t.Danger
 	case expire.Sub(now) < 7*24*time.Hour:
-		return i18n.T("到期 ") + expire.Format("2006-01-02"), t.Warning
+		return i18n.Tf("到期 %s", env.FmtDate(expire)), t.Warning
 	default:
-		return i18n.T("到期 ") + expire.Format("2006-01-02"), t.TextMuted
+		return i18n.Tf("到期 %s", env.FmtDate(expire)), t.TextMuted
 	}
 }
 
@@ -471,7 +463,7 @@ func (p *Page) speedCard(c *ui.Context, st model.Status) {
 			ui.Row(c).Gap(4).Children(func() {
 				foot := "—"
 				if run {
-					foot = fmt.Sprintf(i18n.T("本次 ↑ %s ↓ %s · 连接 %d · 内存 %s"), env.FmtBytes(st.TotalUp), env.FmtBytes(st.TotalDown), st.Connections, env.FmtBytes(st.Memory))
+					foot = i18n.Tf("本次 ↑ %s ↓ %s · 连接 %d · 内存 %s", env.FmtBytes(st.TotalUp), env.FmtBytes(st.TotalDown), st.Connections, env.FmtBytes(st.Memory))
 				}
 				ui.Text(c, foot).FontSize(11).TextColor(t.TextMuted).FontFeatures("tnum").SingleLine()
 			})
@@ -580,4 +572,10 @@ func (p *Page) terminalRow(c *ui.Context, st model.Status) {
 			p.e.Toast(i18n.T("已复制"), false)
 		}
 	})
+}
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicTraffic, app.TopicProxies, app.TopicSubs, app.TopicConns, app.TopicExits, app.TopicSettings, app.TopicCoreDownload}
 }

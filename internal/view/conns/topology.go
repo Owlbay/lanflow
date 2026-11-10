@@ -3,6 +3,7 @@ package conns
 import (
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,6 +35,9 @@ const (
 	// topoSettle is the weight change, as a share of the total, under
 	// which the animation is done.
 	topoSettle = 0.002
+	// topoFPS is the frame rate of the width animation: bands easing
+	// over a third of a second look as smooth at 60 as at 120.
+	topoFPS = 60
 )
 
 // topoRouteColors colour the routes after the main one, as the exit map
@@ -54,7 +58,19 @@ type topology struct {
 	// shown are the eased weights, by node and link key.
 	shown map[string]float64
 	last  time.Time
-	elide map[string]string
+	elide map[elideKey]string
+
+	// lay is the layout of the last paint, kept while the graph, the
+	// area and the weights stay the same (a settled animation).
+	lay struct {
+		g        *Graph
+		o        layoutKey
+		nodeW    []float64
+		linkW    []float64
+		l        Layout
+		measured bool
+	}
+	path ui.Path // a band's shape, its memory reused
 
 	// icons draws the application icons of the 进程 column (the page's).
 	icons *procicon.Cache
@@ -74,7 +90,7 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 	if len(conns) == 0 {
 		tp.graph = nil
 		if strings.TrimSpace(p.query) != "" {
-			p.e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的连接"), strings.TrimSpace(p.query)), "", nil)
+			p.e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的连接", strings.TrimSpace(p.query)), "", nil)
 		} else {
 			p.e.Kit.Empty(c, "conns", i18n.T("暂无活动连接"), i18n.T("有连接经过澜流时，这里会画出它们从设备到目标的路径。"), nil)
 		}
@@ -93,7 +109,6 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 	g := BuildGraph(conns, o)
 	tp.graph = g
 	reduce := c.Preferences().ReduceMotion
-	nodeW, linkW, moving := tp.smooth(g, time.Now(), reduce)
 
 	m := ui.Box(c.Key("topology")).Grow(1).FillWidth().Clip().Label(i18n.T("网络拓扑")).Description(topoDescription(g))
 	// Hover and click use the geometry of the last paint.
@@ -118,10 +133,14 @@ func (p *Page) topology(c *ui.Context, t *ui.Theme, active, closed []model.Conne
 			m.Tooltip(g.Nodes[l.From].Label + " → " + g.Nodes[l.To].Label + " · " + topoStats(l.Count, l.UpSpeed, l.DownSpeed, l.Upload+l.Download))
 		}
 	}
+	// The widths ease in the paint, from the frame's time: an animation
+	// frame paints again without building the view, so easing here keeps
+	// moving between builds.
 	m.Draw(func(pt *ui.Painter, r ui.Rect) {
+		nodeW, linkW, moving := tp.smooth(g, pt.Now(), reduce)
 		tp.draw(pt, r, t, g, nodeW, linkW)
 		if moving {
-			pt.AnimationFrame()
+			pt.AnimationFrameRate(topoFPS)
 		}
 	})
 }
@@ -241,7 +260,7 @@ func (tp *topology) draw(pt *ui.Painter, r ui.Rect, t *ui.Theme, g *Graph, nodeW
 		NodeW: topoNodeW, Gap: topoGap, MinH: topoMinH,
 		NodeWeights: nodeW, LinkWeights: linkW,
 	}
-	l := LayoutGraph(g, lo)
+	l := tp.layoutGraph(g, lo)
 	lit := l.Highlight(g, tp.hover.node, tp.hover.link)
 	tp.layout = l
 	hovering := tp.hover.node >= 0 || tp.hover.link >= 0
@@ -266,7 +285,7 @@ func (tp *topology) draw(pt *ui.Painter, r ui.Rect, t *ui.Theme, g *Graph, nodeW
 			case b.Dim:
 				alpha = 0.08
 			}
-			pt.FillPath(bandPath(b), col.Alpha(alpha))
+			pt.FillPath(bandPath(&tp.path, b), col.Alpha(alpha))
 		}
 	}
 	// Nodes and labels.
@@ -303,6 +322,8 @@ func (tp *topology) draw(pt *ui.Painter, r ui.Rect, t *ui.Theme, g *Graph, nodeW
 			maxW -= topoIconSize + topoLabelGap
 		}
 		label := ui.Span{Text: tp.elided(pt, n.Label, maxW, 11, 500), Size: 11, Weight: 500, Color: textCol}
+		// The second line carries live figures that change every tick:
+		// it is fitted anew rather than cached.
 		_, lh := pt.MeasureText(0, label)
 		sub := ""
 		if b.H >= lh*2+2 {
@@ -310,7 +331,7 @@ func (tp *topology) draw(pt *ui.Painter, r ui.Rect, t *ui.Theme, g *Graph, nodeW
 		}
 		y := b.Y + (b.H-lh)/2
 		var sh float32
-		subSpan := ui.Span{Text: tp.elided(pt, sub, maxW, 10, 400), Size: 10, Color: t.TextMuted}
+		subSpan := ui.Span{Text: elide(pt, sub, maxW, 10, 400), Size: 10, Color: t.TextMuted}
 		if sub != "" {
 			_, sh = pt.MeasureText(0, subSpan)
 			y = b.Y + (b.H-lh-sh)/2
@@ -363,31 +384,66 @@ func topoDescription(g *Graph) string {
 		nodes = append(nodes, g.Nodes[ni].Label)
 	}
 	if len(nodes) > 0 {
-		b.WriteString(i18n.T("节点：") + strings.Join(nodes, i18n.T("、")))
+		b.WriteString(i18n.Tf("节点：%s", strings.Join(nodes, i18n.T("、"))))
 	}
 	return b.String()
 }
 
+// layoutKey is LayoutOptions without the weights.
+type layoutKey struct{ x, y, w, h, nodeW, gap, minH float32 }
+
+// layoutGraph is LayoutGraph, reusing the last layout while nothing it
+// depends on changed.
+func (tp *topology) layoutGraph(g *Graph, o LayoutOptions) Layout {
+	ly := &tp.lay
+	key := layoutKey{o.X, o.Y, o.W, o.H, o.NodeW, o.Gap, o.MinH}
+	if ly.measured && ly.g == g && ly.o == key && slices.Equal(ly.nodeW, o.NodeWeights) && slices.Equal(ly.linkW, o.LinkWeights) {
+		return ly.l
+	}
+	ly.l = LayoutGraph(g, o)
+	ly.g, ly.o, ly.measured = g, key, true
+	ly.nodeW = append(ly.nodeW[:0], o.NodeWeights...)
+	ly.linkW = append(ly.linkW[:0], o.LinkWeights...)
+	return ly.l
+}
+
 // bandPath is the filled shape of a band: two cubic curves whose control
-// points sit at the middle x, as bandX and bandY compute them.
-func bandPath(b Band) *ui.Path {
+// points sit at the middle x, as bandX and bandY compute them. It is
+// built in p, whose memory each band reuses.
+func bandPath(p *ui.Path, b Band) *ui.Path {
 	xm := (b.X0 + b.X1) / 2
-	return (&ui.Path{}).MoveTo(b.X0, b.Y0).
+	return p.Reset().MoveTo(b.X0, b.Y0).
 		CubeTo(xm, b.Y0, xm, b.Y2, b.X1, b.Y2).
 		LineTo(b.X1, b.Y3).
 		CubeTo(xm, b.Y3, xm, b.Y1, b.X0, b.Y1).
 		Close()
 }
 
-// elided shortens s with an ellipsis to fit maxW, caching the result.
+// elideKey is what an elided label depends on.
+type elideKey struct {
+	s      string
+	maxW   int
+	size   int
+	weight int
+}
+
+// elided shortens s with an ellipsis to fit maxW, caching the result: for
+// the node names, which stay while their widths change little.
 func (tp *topology) elided(pt *ui.Painter, s string, maxW, size float32, weight int) string {
-	key := fmt.Sprintf("%s|%d|%d", s, int(maxW), int(size))
+	key := elideKey{s, int(maxW), int(size), weight}
 	if v, ok := tp.elide[key]; ok {
 		return v
 	}
 	if tp.elide == nil || len(tp.elide) > 2000 {
-		tp.elide = map[string]string{}
+		tp.elide = map[elideKey]string{}
 	}
+	out := elide(pt, s, maxW, size, weight)
+	tp.elide[key] = out
+	return out
+}
+
+// elide shortens s with an ellipsis to fit maxW.
+func elide(pt *ui.Painter, s string, maxW, size float32, weight int) string {
 	fits := func(x string) bool {
 		w, _ := pt.MeasureText(0, ui.Span{Text: x, Size: size, Weight: weight})
 		return w <= maxW
@@ -406,6 +462,5 @@ func (tp *topology) elided(pt *ui.Painter, s string, maxW, size float32, weight 
 		}
 		out = string(rs[:lo]) + "…"
 	}
-	tp.elide[key] = out
 	return out
 }

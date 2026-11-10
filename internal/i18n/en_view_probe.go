@@ -1,50 +1,15 @@
 package i18n
 
-// English for the 检测 page (internal/view/probe, internal/app/probe.go,
-// internal/app/unlock.go). Kept apart from en.go so the page can be
-// added without touching the main table.
+// English of the 检测 page (internal/view/probe).
 func init() {
 	for k, v := range map[string]string{
-		// ---- internal/view/env/env.go ----
-		"检测": "Check",
-
-		// ---- internal/app/probe.go ----
-		"这个出口正在检测中，请稍候。":                      "This exit is being checked. Please wait.",
-		"地区探查正在进行中，请稍候。":                      "A region probe is already running. Please wait.",
-		"请选择要检测的出口。":                          "Choose an exit to check.",
-		"这个地区没有节点。":                           "There are no nodes in this region.",
-		"直连模式下流量不经过节点，没有出口可以检测。":              "In direct mode traffic does not go through nodes, so there is no exit to check.",
-		"切换探测节点「%s」失败：%v":                     "Failed to switch the probe node to \"%s\": %v",
-		"找不到节点「%s」":                           "Node \"%s\" not found",
-		"「%s」是代理组，请选择具体节点":                    "\"%s\" is a proxy group; choose a node",
-		"数据库归属 %s，Cloudflare 判定 %s，一致（本地推断）":  "Database: %s, Cloudflare: %s; they agree (local inference)",
-		"数据库归属 %s，Cloudflare 判定 %s，不一致（本地推断）": "Database: %s, Cloudflare: %s; they differ (local inference)",
-		"%s 判定":       "Reported by %s",
-		"响应中没有 ip 字段": "The response has no ip field",
-		"探查超时，未完成的节点已跳过": "The probe timed out; unfinished nodes were skipped",
-
-		// ---- internal/app/unlock.go ----
-		"Google 搜索":                   "Google Search",
-		"所在地区不支持":                     "Not supported in this region",
-		"被识别为 VPN，需更换节点":              "Detected as a VPN; try another node",
-		"访问被拒绝（HTTP 403）":             "Access denied (HTTP 403)",
-		"访问被拒绝（HTTP 403），地区或 IP 不受支持": "Access denied (HTTP 403): region or IP not supported",
-		"Netflix 拒绝了这个 IP（HTTP 403）":  "Netflix refused this IP (HTTP 403)",
-		"无法观看任何影片":                    "No titles can be played",
-		"完整解锁":                        "Full catalogue",
-		"仅自制剧":                        "Originals only",
-		"跳转到了 google.cn":              "Redirected to google.cn",
-		"所在地区没有 Premium":              "Premium is not offered in this region",
-		"所在地区尚未开通":                    "Not launched in this region yet",
-		"页面中没有地区标记":                   "No region marker in the page",
-		"要求人机验证：这个 IP 的信誉偏低":          "CAPTCHA required: this IP has a poor reputation",
-		"先要同意 Cookie 提示（欧盟地区）":        "Cookie consent first (EU region)",
-		"跳转到 %s":                      "Redirected to %s",
-		"跳转到国内版 cn.bing.com":          "Redirected to the Chinese edition cn.bing.com",
-		"国际版":                         "International edition",
-		"连接失败":                        "Connection failed",
-
-		// ---- internal/view/probe/page.go ----
+		// internal/view/probe/page.go
+		"按需检测，不会自动运行": "Checks run on demand only",
+		"IP 纯净度读取出口的地址、位置、运营商和风险评分；解锁检测访问常用服务各一次；地区探查对比同一地区各节点的延迟和真实出口。只在你按下按钮时发出请求。": "IP purity reads the exit's address, location, carrier and risk score; the unlock check visits each popular service once; the region probe compares the latency and real exit of every node in a region. Requests are sent only when you press a button.",
+		"尚未检测":     "Not checked yet",
+		"尚未探查":     "Not probed yet",
+		"没有可探查的地区": "No region to probe",
+		"地区按节点名称判断（如「香港 01」「JP Tokyo」）。订阅里的节点名都不含地区时，这里没有可选项。": "Regions are read from node names (such as \"HK 01\" or \"JP Tokyo\"). When no node name in the subscription carries a region, there is nothing to choose here.",
 		"直连（本机）": "Direct (this machine)",
 		"出口":     "Exit",
 		"IP 纯净度": "IP purity",
@@ -53,18 +18,17 @@ func init() {
 		"检测项目":   "Check",
 		"内核未启动：只能检测直连出口。": "The core is not running: only the direct exit can be checked.",
 		"出口信息": "Exit info",
-		"检测出口": "Check exit",
+		"检测出口": "Check Exit",
 		"检测中…": "Checking…",
 		"重新检测": "Check again",
 		"经所选出口请求 Cloudflare trace，并用本地数据库解析；不访问第三方站点": "Requests the Cloudflare trace through the chosen exit and resolves it with the bundled databases; no third-party site is contacted",
 		"尚未检测。按「检测出口」读取这个出口的地址、位置、ASN 和类型。":           "Not checked yet. Press Check exit to read this exit's address, location, ASN and type.",
-		"IP 类型": "IP type",
 		"原生 IP": "Native IP",
 		"原生":    "Native",
 		"广播":    "Broadcast",
 		"时间":    "Time",
 		"风险评估":  "Risk assessment",
-		"在线检测":  "Check online",
+		"在线检测":  "Check Online",
 		"经所选出口各请求一次 ip-api.com 和 ippure.com 的免费接口（无需密钥）":                                       "Requests the free, keyless ip-api.com and ippure.com endpoints once each through the chosen exit",
 		"先检测出口信息，再按「在线检测」读取公开的风险评分。":                                                           "Check the exit info first, then press Check online to read the public risk scores.",
 		"「在线检测」会经所选出口各向 ip-api.com（代理 / 机房 / 移动网络标记）和 ippure.com（风险分、住宅、广播）发送一次请求。只在你按下按钮时发送。": "Check online sends one request each, through the chosen exit, to ip-api.com (proxy / hosting / mobile flags) and ippure.com (fraud score, residential, broadcast). Nothing is sent until you press the button.",
@@ -101,7 +65,7 @@ func init() {
 		"同时检测解锁":        "Also check unlocks",
 		"探查中…":          "Probing…",
 		"上次探查 %s":       "Last probed %s",
-		"开始探查":          "Start probe",
+		"开始探查":          "Start Probe",
 		"对所选地区的每个节点测延迟、实测出口地址，并可同时检测解锁；点「设为当前」把节点切换到主代理组。": "Tests the delay and measures the exit of every node in the chosen region, optionally with the unlock checks; Use this switches the main group to that node.",
 		"%d / %d 可用":   "%d / %d available",
 		"设为当前":         "Use this",

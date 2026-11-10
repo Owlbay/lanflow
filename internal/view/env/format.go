@@ -100,9 +100,9 @@ func FmtDuration(d time.Duration) string {
 func FmtUptime(d time.Duration) string {
 	h, m := int(d.Hours()), int(d.Minutes())%60
 	if h > 0 {
-		return fmt.Sprintf(i18n.T("%d 小时 %d 分"), h, m)
+		return i18n.Tf("%d 小时 %d 分", h, m)
 	}
-	return fmt.Sprintf(i18n.T("%d 分钟"), m)
+	return i18n.Tf("%d 分钟", m)
 }
 
 // FmtAgo formats a past time: "刚刚", "5 分钟前", "今天 10:21", "昨天", "2026-11-01"; "—" for zero.
@@ -116,14 +116,29 @@ func FmtAgo(t time.Time) string {
 	case d < time.Minute:
 		return i18n.T("刚刚")
 	case d < time.Hour:
-		return fmt.Sprintf(i18n.T("%d 分钟前"), int(d.Minutes()))
+		return i18n.Tf("%d 分钟前", int(d.Minutes()))
 	case t.YearDay() == now.YearDay() && t.Year() == now.Year():
-		return i18n.T("今天 ") + t.Format("15:04")
+		return i18n.Tf("今天 %s", t.Format("15:04"))
 	case t.Year() == now.Year() && now.YearDay()-t.YearDay() == 1:
 		return i18n.T("昨天")
 	default:
-		return t.Format("2006-01-02")
+		return FmtDate(t)
 	}
+}
+
+// FmtDate formats a date in the language shown: "2026-11-01" in Chinese,
+// "Nov 1, 2026" in English.
+func FmtDate(t time.Time) string {
+	if i18n.Lang() == i18n.EN {
+		return t.Format("Jan 2, 2006")
+	}
+	return t.Format("2006-01-02")
+}
+
+// FmtDateTime is FmtDate with the time of day (24-hour, as everywhere in
+// the app): "2026-11-01 10:21", "Nov 1, 2026 10:21".
+func FmtDateTime(t time.Time) string {
+	return FmtDate(t) + " " + t.Format("15:04")
 }
 
 // RuleTypeName returns the Chinese name of a custom rule type.

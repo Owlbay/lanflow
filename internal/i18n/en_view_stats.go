@@ -1,22 +1,14 @@
 package i18n
 
-// English of the 统计 page (internal/view/stats) and the statistics
-// service (internal/app/stats.go).
+// English of the 统计 page (internal/view/stats).
 func init() {
 	for k, v := range map[string]string{
-		// ---- internal/app/stats.go ----
-		"重置统计失败：%v": "Failed to reset the statistics: %v",
-
-		// ---- internal/view/env/env.go ----
-		"统计": "Statistics",
-
-		// ---- internal/view/stats/page.go ----
+		// internal/view/stats/page.go
 		"今天":     "Today",
 		"本周":     "This Week",
 		"本月":     "This Month",
 		"设备":     "Device",
 		"代理|统计":  "Proxy",
-		"地区":     "Region",
 		"入站":     "Inbound",
 		"请求数":    "Requests",
 		"上传":     "Upload",
@@ -35,7 +27,7 @@ func init() {
 		"内核运行时，经过澜流的流量会按设备、域名、进程等在这里汇总。": "While the core runs, the traffic through Lanflow is summed up here by device, domain, process and more.",
 		"最近 30 天":                 "Last 30 Days",
 		"今天（按小时）":                 "Today (by Hour)",
-		"峰值 ":                     "Peak ",
+		"峰值 %s":                   "Peak %s",
 		"%s · ↓ %s ↑ %s · %d 次请求": "%s · ↓ %s ↑ %s · %d requests",
 		"统计维度":                    "Dimension",
 		"完整主机名":                   "Full host names",
@@ -43,9 +35,7 @@ func init() {
 		"没有匹配“%s”的项目":             "Nothing matches \"%s\"",
 		"此范围内暂无数据":                "No data in this range",
 		"复制名称":                    "Copy Name",
-		"其他":                      "Other",
 		"本机":                      "This Mac",
-		"未知进程":                    "Unknown process",
 	} {
 		en[k] = v
 	}

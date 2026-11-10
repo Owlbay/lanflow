@@ -133,3 +133,43 @@ func TestPathNoteStyling(t *testing.T) {
 		t.Errorf("empty note shown: %q", note)
 	}
 }
+
+// TestSpeedEaseByTime: the shown speed follows the measured one by time,
+// not by how many builds there were.
+func TestSpeedEaseByTime(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	a := &flow{}
+	a.ease(0, t0)
+	a.ease(1000, t0.Add(time.Second))
+	b := &flow{}
+	b.ease(0, t0)
+	for i := 1; i <= 10; i++ {
+		b.ease(1000, t0.Add(time.Duration(i)*100*time.Millisecond))
+	}
+	if math.Abs(a.speed-b.speed) > 1e-6 {
+		t.Fatalf("one step %v, ten steps %v", a.speed, b.speed)
+	}
+	if want := 1000 * (1 - math.Exp(-1)); math.Abs(a.speed-want) > 1e-6 {
+		t.Fatalf("speed %v, want %v", a.speed, want)
+	}
+}
+
+// TestFitMemo: the framing is computed again only when its inputs change.
+func TestFitMemo(t *testing.T) {
+	var m fitMemo
+	you := model.Place{City: "上海", Lat: 31.2, Lon: 121.5}
+	exits := []model.Place{{City: "东京", Lat: 35.7, Lon: 139.7}}
+	a := m.fit(you, exits, nil, 400, 300)
+	exits[0].Lat = 0 // the memo keeps its own copy
+	exits[0].Lat = 35.7
+	if b := m.fit(you, exits, nil, 400, 300); b != a {
+		t.Fatalf("same inputs, new framing: %+v vs %+v", a, b)
+	}
+	if want := fitGlobe(you, exits, nil, 400, 300); a != want {
+		t.Fatalf("memo %+v, fitGlobe %+v", a, want)
+	}
+	exits = append(exits, model.Place{City: "香港", Lat: 22.3, Lon: 114.2})
+	if c := m.fit(you, exits, nil, 400, 300); c == a || c != fitGlobe(you, exits, nil, 400, 300) {
+		t.Fatalf("a new exit must frame again: %+v", c)
+	}
+}

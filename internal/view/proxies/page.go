@@ -4,13 +4,14 @@
 package proxies
 
 import (
-	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -49,6 +50,7 @@ type Page struct {
 	locate      locateState               // 定位当前节点 (locate.go)
 	icons       map[string]ui.ImageSource // decoded group icons by reference (locate.go)
 	iconFail    map[string]bool           // references that do not decode
+	lists       map[string]*ui.ListState  // the virtual lists of large groups, by group
 
 	mu      sync.Mutex
 	pending map[string]string // optimistic selection by group
@@ -58,7 +60,7 @@ type Page struct {
 // New returns the page.
 func New(e *env.Env) *Page {
 	return &Page{e: e, open: map[string]bool{}, openInit: map[string]bool{}, pending: map[string]string{},
-		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}}
+		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}, lists: map[string]*ui.ListState{}}
 }
 
 // restore loads the remembered expanded states and view once.
@@ -85,11 +87,9 @@ func (p *Page) persist() {
 		open[name] = o
 	}
 	grid := p.view == viewGrid
-	p.e.Run(func() error {
-		u := p.e.API.UIState()
+	p.e.SaveUIState("proxies", func(u *model.UIState) {
 		u.OpenGroups, u.ProxyGrid = open, grid
-		return p.e.API.SaveUIState(u)
-	}, "")
+	})
 }
 
 // View draws the whole content area including the header.
@@ -183,6 +183,7 @@ func (p *Page) View(c *ui.Context) {
 				})
 			}
 			groups := p.visibleGroups(px, st)
+			names := groupNames(px)
 			shown := 0
 			list := ui.Column(c).Gap(10)
 			if st.Mode == model.ModeDirect {
@@ -190,16 +191,26 @@ func (p *Page) View(c *ui.Context) {
 			}
 			list.Children(func() {
 				for _, g := range groups {
-					nodes := p.filterNodes(g, px)
-					if p.query != "" && len(nodes) == 0 {
+					// Only an expanded group's members are filtered and
+					// sorted; a collapsed one only counts its matches while
+					// searching, to hide a group with none.
+					var nodes []string
+					matched := len(g.All)
+					if p.isOpen(g, px) {
+						nodes = p.filterNodes(g, px)
+						matched = len(nodes)
+					} else if p.query != "" {
+						matched = p.countMatches(g)
+					}
+					if p.query != "" && matched == 0 {
 						continue
 					}
 					shown++
-					p.group(c, g, nodes, px)
+					p.group(c, g, nodes, matched, px, names)
 				}
 			})
 			if shown == 0 && p.query != "" {
-				k.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的节点"), p.query), i18n.T("换个关键词试试。"), nil)
+				k.Empty(c, "search", i18n.Tf("没有匹配“%s”的节点", p.query), i18n.T("换个关键词试试。"), nil)
 			}
 			if provs := p.e.API.ProxyProviders(); len(provs) > 0 && p.query == "" {
 				p.providers(c, provs, px)
@@ -225,6 +236,27 @@ func (p *Page) visibleGroups(px model.ProxySnapshot, st model.Status) []model.Pr
 		out = append(out, g)
 	}
 	return out
+}
+
+// groupNames is the set of the group names, which members may be.
+func groupNames(px model.ProxySnapshot) map[string]bool {
+	set := make(map[string]bool, len(px.Groups))
+	for _, g := range px.Groups {
+		set[g.Name] = true
+	}
+	return set
+}
+
+// countMatches counts the members of g whose name has the search in it.
+func (p *Page) countMatches(g model.ProxyGroup) int {
+	q := strings.ToLower(strings.TrimSpace(p.query))
+	n := 0
+	for _, m := range g.All {
+		if strings.Contains(strings.ToLower(m), q) {
+			n++
+		}
+	}
+	return n
 }
 
 // filterNodes applies the search, the timeout filter and the sort.
@@ -287,13 +319,22 @@ func (p *Page) isOpen(g model.ProxyGroup, px model.ProxySnapshot) bool {
 	return p.open[g.Name]
 }
 
-// group draws one collapsible group with its header controls.
-func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model.ProxySnapshot) {
+// bigGroup is the member count from which the list view shows a group's
+// members in a virtual list bigGroupRows tall, which builds only the rows
+// in view.
+const (
+	bigGroup     = 60
+	bigGroupRows = 12
+	nodeRowH     = 32
+)
+
+// group draws one collapsible group with its header controls; nodes are
+// its members shown when it is open, matched how many match the search.
+func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched int, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	open := p.isOpen(g, px)
-	forced := p.query != ""
-	o := open || forced
+	o := open
 	p.mu.Lock()
 	pendingNow := p.pending[g.Name]
 	p.mu.Unlock()
@@ -328,19 +369,22 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				}
 				meta := groupTypeName(g.Type)
 				if now != "" {
-					meta += i18n.T(" · 当前 ") + now
+					meta = i18n.Tf("%s · 当前 %s", meta, now)
+				}
+				if p.query != "" {
+					meta = i18n.Tf("%s · %d 个匹配", meta, matched)
 				}
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1)
 			})
 			if now != "" {
-				loc := ui.Button(c, "").Label(i18n.T("定位当前节点 ") + g.Name).Tooltip(i18n.T("定位当前节点")).Children(func() {
+				loc := ui.Button(c, "").Label(i18n.Tf("定位当前节点 %s", g.Name)).Tooltip(i18n.T("定位当前节点")).Children(func() {
 					k.Icon(c, "locate", 14)
 				})
 				if loc.Clicked() {
 					p.locateNow(c, g.Name)
 				}
 			}
-			test := ui.Button(c, "").Label(i18n.T("测速 ") + g.Name).Tooltip(i18n.T("组内测速")).Disabled(groupTesting).Children(func() {
+			test := ui.Button(c, "").Label(i18n.Tf("测速 %s", g.Name)).Tooltip(i18n.T("组内测速")).Disabled(groupTesting).Children(func() {
 				if groupTesting {
 					ui.Spinner(c).Size(12, 12)
 				} else {
@@ -351,7 +395,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				name := g.Name
 				p.e.Run(func() error { return p.e.API.TestGroupDelay(name) }, "")
 			}
-			ui.Button(c, "").Label(i18n.T("更多 ") + g.Name).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+			ui.Button(c, "").Label(i18n.Tf("更多 %s", g.Name)).Tooltip(i18n.T("更多")).Children(func() { k.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
 				if m.Item(i18n.T("设为主代理组")).Checked(g.Name == px.MainGroup).Disabled(!selectable).Chosen() {
 					name := g.Name
 					p.e.Run(func() error { return p.e.API.SetMainGroup(name) }, i18n.Tf("已将「%s」设为主代理组", name))
@@ -362,7 +406,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				}
 			})
 		})
-		if !forced && o != open {
+		if o != open {
 			p.open[g.Name] = o
 			p.persist()
 		}
@@ -372,26 +416,47 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				if p.view == viewGrid {
 					ui.Grid(c).Columns(gridColumns).Gap(6).Padding(4, 6, 2, 6).Children(func() {
 						for _, n := range nodes {
-							p.cell(c, g, n, now, selectable, px)
+							p.cell(c, g, n, now, selectable, px, names)
 						}
 					})
 					return
 				}
+				if len(nodes) > bigGroup {
+					p.bigList(c, g, nodes, now, selectable, px, names)
+					return
+				}
 				for _, n := range nodes {
-					p.node(c, g, n, now, selectable, px)
+					p.node(c, g, n, now, selectable, px, names)
 				}
 			})
 		})
 	})
 }
 
-// memberKind classifies a group member for display: builtin (DIRECT/REJECT),
-// nested group, or node with its protocol.
-func memberKind(n string, px model.ProxySnapshot) (proto string, isGroup, builtin bool) {
-	for _, gg := range px.Groups {
-		if gg.Name == n {
-			return i18n.T("代理组"), true, false
+// bigList shows a large group's members in a virtual list, scrolled to
+// the current member when 定位当前节点 asks for it.
+func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
+	ls := p.lists[g.Name]
+	if ls == nil {
+		ls = &ui.ListState{}
+		p.lists[g.Name] = ls
+	}
+	ls.Key = func(i int) any { return nodes[i] }
+	if l := p.locate; l.group == g.Name && !l.shown && !l.until.IsZero() {
+		if i := slices.Index(nodes, now); i >= 0 {
+			ls.ScrollTo(i, ui.Center)
 		}
+	}
+	ui.List(c.Key("nodes"), ls, len(nodes), func(i int) {
+		p.node(c, g, nodes[i], now, selectable, px, names)
+	}).Height(bigGroupRows * nodeRowH).FillWidth().Label(g.Name)
+}
+
+// memberKind classifies a group member for display: builtin (DIRECT/REJECT),
+// nested group (one of names), or node with its protocol.
+func memberKind(n string, px model.ProxySnapshot, names map[string]bool) (proto string, isGroup, builtin bool) {
+	if names[n] {
+		return i18n.T("代理组"), true, false
 	}
 	if n == "DIRECT" || n == "REJECT" {
 		return i18n.T("内置"), false, true
@@ -405,11 +470,11 @@ func memberKind(n string, px model.ProxySnapshot) (proto string, isGroup, builti
 // cell draws one member as a compact grid tile: name on top, protocol and
 // delay below; the current member is tinted and gets the dot/标签 as in the
 // list.
-func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot) {
+func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
-	proto, isGroup, builtin := memberKind(n, px)
+	proto, isGroup, builtin := memberKind(n, px, names)
 	cur := n == now
 	var tile ui.Element
 	if selectable {
@@ -455,7 +520,7 @@ func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 				ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 				return
 			}
-			d := ui.ButtonBase(c).Label(i18n.T("重新测速 ")+n).Tooltip(i18n.T("单击重新测速")).Padding(1, 4).Radius(4)
+			d := ui.ButtonBase(c).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).Padding(1, 4).Radius(4)
 			if d.Hovered() {
 				d.Background(t.SurfaceHover)
 			}
@@ -483,8 +548,8 @@ func (p *Page) providers(c *ui.Context, provs []model.ProxyProvider, px model.Pr
 		parts.Trigger.MinHeight(40).Padding(6, 12).Gap(8).AlignItems(ui.Center).Label(i18n.T("代理集合")).Children(func() {
 			ui.Box(c).TextColor(t.TextMuted).Children(func() { k.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
 			ui.Text(c, i18n.T("代理集合")).FontSize(13).FontWeight(600).SingleLine()
-			ui.Text(c, fmt.Sprintf(i18n.T("%d 个代理集合"), len(provs))).FontSize(12).TextColor(t.TextMuted).SingleLine().
-				Tooltip(fmt.Sprintf(i18n.T("%d 个 proxy-provider"), len(provs)))
+			ui.Text(c, i18n.Tf("%d 个代理集合", len(provs))).FontSize(12).TextColor(t.TextMuted).SingleLine().
+				Tooltip(i18n.Tf("%d 个 proxy-provider", len(provs)))
 		})
 		parts.Panel(func() {
 			ui.Column(c).Padding(0, 6, 6, 6).Children(func() {
@@ -515,15 +580,15 @@ func providerSource(vehicle string) string {
 
 // providerMeta is the muted summary line under a provider's name.
 func providerMeta(pv model.ProxyProvider) string {
-	meta := fmt.Sprintf(i18n.T("%s · %d 个节点"), providerSource(pv.VehicleType), len(pv.Proxies))
+	meta := i18n.Tf("%s · %d 个节点", providerSource(pv.VehicleType), len(pv.Proxies))
 	if !pv.UpdatedAt.IsZero() {
-		meta += i18n.T(" · 更新于 ") + env.FmtAgo(pv.UpdatedAt)
+		meta += i18n.Tf(" · 更新于 %s", env.FmtAgo(pv.UpdatedAt))
 	}
 	if pv.Total > 0 {
-		meta += fmt.Sprintf(i18n.T(" · 已用 %s / %s GB"), env.FmtGB(pv.Upload+pv.Download), env.FmtGB(pv.Total))
+		meta += i18n.Tf(" · 已用 %s / %s GB", env.FmtGB(pv.Upload+pv.Download), env.FmtGB(pv.Total))
 	}
 	if !pv.Expire.IsZero() {
-		meta += i18n.T(" · 到期 ") + pv.Expire.Format("2006-01-02")
+		meta += i18n.Tf(" · 到期 %s", env.FmtDate(pv.Expire))
 	}
 	return meta
 }
@@ -545,7 +610,7 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 			ui.Text(c, providerMeta(pv)).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
 		canUpdate := pv.VehicleType == "HTTP" || pv.VehicleType == "File"
-		up := ui.Button(c, "").Label(i18n.T("更新 ") + pv.Name).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
+		up := ui.Button(c, "").Label(i18n.Tf("更新 %s", pv.Name)).Tooltip(i18n.T("重新下载该代理集合")).Disabled(!canUpdate || pv.Updating).Children(func() {
 			if pv.Updating {
 				ui.Spinner(c).Size(12, 12)
 			} else {
@@ -556,7 +621,7 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 			name := pv.Name
 			p.e.Run(func() error { return p.e.API.UpdateProxyProvider(name) }, i18n.Tf("已更新「%s」", name))
 		}
-		hc := ui.Button(c, "").Label(i18n.T("健康检查 ") + pv.Name).Tooltip(i18n.T("测试该集合中所有节点的延迟")).Disabled(checking || pv.TestURL == "").Children(func() {
+		hc := ui.Button(c, "").Label(i18n.Tf("健康检查 %s", pv.Name)).Tooltip(i18n.T("测试该集合中所有节点的延迟")).Disabled(checking || pv.TestURL == "").Children(func() {
 			if checking {
 				ui.Spinner(c).Size(12, 12)
 			} else {
@@ -571,11 +636,11 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 }
 
 // node draws one member row.
-func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot) {
+func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
-	proto, isGroup, builtin := memberKind(n, px)
+	proto, isGroup, builtin := memberKind(n, px, names)
 	cur := n == now
 	var row ui.Element
 	if selectable {
@@ -586,7 +651,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	} else {
 		row = ui.Row(c.Key("node:" + n))
 	}
-	row.Height(32).Padding(0, 10, 0, 12).Gap(10).AlignItems(ui.Center).Radius(6)
+	row.Height(nodeRowH).Padding(0, 10, 0, 12).Gap(10).AlignItems(ui.Center).Radius(6)
 	if cur {
 		row.Background(t.Accent.Alpha(0.08))
 	}
@@ -619,7 +684,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
 			return
 		}
-		d := ui.ButtonBase(c).Label(i18n.T("重新测速 ")+n).Tooltip(i18n.T("单击重新测速")).Padding(2, 6).Radius(4).MinWidth(56).Justify(ui.End)
+		d := ui.ButtonBase(c).Label(i18n.Tf("重新测速 %s", n)).Tooltip(i18n.T("单击重新测速")).Padding(2, 6).Radius(4).MinWidth(56).Justify(ui.End)
 		if d.Hovered() {
 			d.Background(t.SurfaceHover)
 		}
@@ -645,7 +710,7 @@ func (p *Page) pick(group, name string) {
 		delete(p.pending, group)
 		p.mu.Unlock()
 		return err
-	}, i18n.T("已切换到 ")+name)
+	}, i18n.Tf("已切换到 %s", name))
 }
 
 func (p *Page) testAll() {
@@ -663,4 +728,10 @@ func (p *Page) testAll() {
 		p.mu.Unlock()
 		return err
 	}, i18n.T("测速完成"))
+}
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicProxies}
 }

@@ -125,7 +125,7 @@ func (p *Page) setMirror(s model.Settings, m string) {
 	s.DownloadMirror = m
 	msg := i18n.T("已关闭下载镜像，直连 GitHub")
 	if m != "" {
-		msg = i18n.T("下载镜像已改为 ") + mirrorLabel(m)
+		msg = i18n.Tf("下载镜像已改为 %s", mirrorLabel(m))
 	}
 	p.save(s, msg, nil)
 }

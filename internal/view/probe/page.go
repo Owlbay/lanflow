@@ -13,6 +13,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
@@ -169,29 +170,8 @@ func (p *Page) View(c *ui.Context) {
 
 // ---- IP 纯净度 ----
 
-func (p *Page) card(c *ui.Context, t *ui.Theme, title string, right func(), body func()) {
-	ui.Column(c).Grow(1).Basis(0).Padding(14).Gap(10).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, title).Bold().FontSize(13).Grow(1)
-			if right != nil {
-				right()
-			}
-		})
-		body()
-	})
-}
-
-func (p *Page) kv(c *ui.Context, t *ui.Theme, k, v string, extra func()) {
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, k).Width(64).FontSize(12).TextColor(t.TextMuted).Shrink(0)
-		if v != "" {
-			ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable()
-		}
-		if extra != nil {
-			extra()
-		}
-	})
-}
+// kv is a wrapping key-value line of the reports (env.KV).
+func kv(c *ui.Context, k, v string, extra func()) { env.KV(c, k, v, 64, false, extra) }
 
 func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 	e := p.e
@@ -201,7 +181,7 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 	}
 	ui.Column(c).Grow(1).Gap(12).Children(func() {
 		ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
-			p.card(c, t, i18n.T("出口信息")+" · "+targetLabel(target), func() {
+			env.InfoCard(c, i18n.T("出口信息")+" · "+targetLabel(target), func() {
 				if rep.Running {
 					ui.Spinner(c).Size(12, 12).Label(i18n.T("检测中…"))
 					ui.Text(c, i18n.T("检测中…")).FontSize(11).TextColor(t.TextMuted)
@@ -225,10 +205,10 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 				default:
 					ui.Text(c, rep.IP).FontSize(20).FontFeatures("tnum").Selectable()
 					ui.Column(c).Gap(5).Children(func() {
-						p.kv(c, t, i18n.T("位置"), placeText(rep.Place), nil)
-						p.kv(c, t, i18n.T("运营商"), orgText(rep.ASN, rep.Org), nil)
-						p.kv(c, t, i18n.T("IP 类型"), "", func() { e.Kit.Tag(c, kindText(rep.Kind), kindTagKind(rep.Kind)) })
-						p.kv(c, t, i18n.T("原生 IP"), "", func() {
+						kv(c, i18n.T("位置"), placeText(rep.Place), nil)
+						kv(c, i18n.T("运营商"), orgText(rep.ASN, rep.Org), nil)
+						kv(c, i18n.T("IP 类型"), "", func() { e.Kit.Tag(c, kindText(rep.Kind), kindTagKind(rep.Kind)) })
+						kv(c, i18n.T("原生 IP"), "", func() {
 							switch rep.Native {
 							case model.NativeYes:
 								e.Kit.Tag(c, i18n.T("原生"), "green")
@@ -242,16 +222,16 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 							}
 						})
 						if rep.Colo != "" {
-							p.kv(c, t, i18n.T("CF 机房"), rep.Colo, nil)
+							kv(c, i18n.T("CF 机房"), rep.Colo, nil)
 						}
-						p.kv(c, t, i18n.T("来源"), strings.Join(rep.Sources, " · "), nil)
+						kv(c, i18n.T("来源"), strings.Join(rep.Sources, " · "), nil)
 						if !rep.CheckedAt.IsZero() {
-							p.kv(c, t, i18n.T("时间"), rep.CheckedAt.Format("15:04:05"), nil)
+							kv(c, i18n.T("时间"), rep.CheckedAt.Format("15:04:05"), nil)
 						}
 					})
 				}
 			})
-			p.card(c, t, i18n.T("风险评估"), func() {
+			env.InfoCard(c, i18n.T("风险评估"), func() {
 				if rep.Running {
 					return
 				}
@@ -301,7 +281,7 @@ func (p *Page) riskRows(c *ui.Context, t *ui.Theme, r model.RiskInfo) {
 	ui.Column(c).Gap(4).Children(func() {
 		ui.Text(c, i18n.Tf("来源 %s", r.Source)).FontSize(11).FontWeight(600).TextColor(t.TextMuted)
 		if r.HasScore {
-			p.kv(c, t, i18n.T("风险分"), "", func() {
+			kv(c, i18n.T("风险分"), "", func() {
 				kind := "green"
 				switch {
 				case r.Score >= 70:
@@ -312,7 +292,7 @@ func (p *Page) riskRows(c *ui.Context, t *ui.Theme, r model.RiskInfo) {
 				e.Kit.Tag(c, fmt.Sprintf("%d / 100", r.Score), kind)
 				ui.Text(c, i18n.T("越低越纯净")).FontSize(11).TextColor(t.TextMuted)
 			})
-			p.kv(c, t, i18n.T("住宅 IP"), "", func() {
+			kv(c, i18n.T("住宅 IP"), "", func() {
 				if r.Residential {
 					e.Kit.Tag(c, i18n.T("是"), "green")
 				} else {
@@ -320,16 +300,16 @@ func (p *Page) riskRows(c *ui.Context, t *ui.Theme, r model.RiskInfo) {
 				}
 			})
 			if r.HasBroadcast {
-				p.kv(c, t, i18n.T("广播 IP"), "", func() {
+				kv(c, i18n.T("广播 IP"), "", func() {
 					w, k := yesNo(r.Broadcast)
 					e.Kit.Tag(c, w, k)
 				})
 			}
 		}
 		if r.HasFlags {
-			p.kv(c, t, i18n.T("代理 / VPN"), "", func() { w, k := yesNo(r.Proxy); e.Kit.Tag(c, w, k) })
-			p.kv(c, t, i18n.T("机房"), "", func() { w, k := yesNo(r.Hosting); e.Kit.Tag(c, w, k) })
-			p.kv(c, t, i18n.T("移动网络"), "", func() {
+			kv(c, i18n.T("代理 / VPN"), "", func() { w, k := yesNo(r.Proxy); e.Kit.Tag(c, w, k) })
+			kv(c, i18n.T("机房"), "", func() { w, k := yesNo(r.Hosting); e.Kit.Tag(c, w, k) })
+			kv(c, i18n.T("移动网络"), "", func() {
 				if r.Mobile {
 					e.Kit.Tag(c, i18n.T("是"), "accent")
 				} else {
@@ -338,7 +318,7 @@ func (p *Page) riskRows(c *ui.Context, t *ui.Theme, r model.RiskInfo) {
 			})
 		}
 		if r.RegionOfBlock != "" {
-			p.kv(c, t, i18n.T("判定地区"), countryText(r.RegionOfBlock), nil)
+			kv(c, i18n.T("判定地区"), countryText(r.RegionOfBlock), nil)
 		}
 	})
 }
@@ -397,7 +377,7 @@ func (p *Page) unlockTab(c *ui.Context, t *ui.Theme, target string) {
 			case "region":
 				ui.Text(c, countryText(r.Region)).SingleLine()
 			case "note":
-				ui.Text(c, dash(r.Note)).TextColor(t.TextMuted).SingleLine()
+				ui.Text(c, env.Dash(r.Note)).TextColor(t.TextMuted).SingleLine()
 			case "ms":
 				if r.Millis > 0 {
 					ui.Text(c, fmt.Sprintf("%d ms", r.Millis)).FontFeatures("tnum").TextColor(t.TextMuted)
@@ -453,7 +433,7 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 	byLabel := map[string]string{}
 	found := false
 	for i, r := range regions {
-		labels[i] = fmt.Sprintf("%s%s (%d)", flag(r.Country), countryText(r.Country), len(r.Nodes))
+		labels[i] = fmt.Sprintf("%s%s (%d)", env.FlagPrefix(r.Country), countryText(r.Country), len(r.Nodes))
 		byLabel[labels[i]] = r.Country
 		if r.Country == p.region {
 			p.regionName, found = labels[i], true
@@ -564,8 +544,7 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 					return
 				}
 				node := r.Node
-				b := ui.Text(c, i18n.T("设为当前")).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).
-					Role(ui.RoleButton).Label(i18n.Tf("设为当前 %s", node)).Tooltip(i18n.Tf("在「%s」中选择「%s」", mainGroup, node))
+				b := env.LinkText(c, i18n.T("设为当前"), i18n.Tf("设为当前 %s", node)).Tooltip(i18n.Tf("在「%s」中选择「%s」", mainGroup, node))
 				if b.Clicked() && mainGroup != "" {
 					e.Run(func() error { return e.API.SelectProxy(mainGroup, node) }, i18n.Tf("已切换到「%s」", node))
 				}
@@ -620,13 +599,6 @@ func delayRank(ms int) int {
 
 // ---- helpers ----
 
-func dash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
-}
-
 // countryText names a country for the UI: the Chinese name in Chinese,
 // the ISO code in English (the geo tables carry no English names).
 func countryText(cc string) string {
@@ -650,7 +622,7 @@ func placeText(pl *model.Place) string {
 	if name == "" {
 		name = countryText(pl.Country)
 	}
-	return flag(pl.Country) + name
+	return env.FlagPrefix(pl.Country) + name
 }
 
 func orgText(asn, org string) string {
@@ -687,18 +659,8 @@ func kindTagKind(kind string) string {
 	return "gray"
 }
 
-// flag returns the regional-indicator flag of a country code followed by
-// a space, or "" when unknown.
-func flag(cc string) string {
-	if len(cc) != 2 {
-		return ""
-	}
-	var b strings.Builder
-	for _, r := range strings.ToUpper(cc) {
-		if r < 'A' || r > 'Z' {
-			return ""
-		}
-		b.WriteRune(0x1F1E6 + r - 'A')
-	}
-	return b.String() + " "
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicProbe, app.TopicProxies}
 }

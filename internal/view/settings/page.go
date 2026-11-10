@@ -6,7 +6,6 @@
 package settings
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,6 +15,7 @@ import (
 	"github.com/egoist/mygo/ui"
 	"github.com/egoist/mygo/ui/editor"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -403,7 +403,7 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 				if addr == "" {
 					addr = i18n.T("本机局域网地址")
 				}
-				lanDesc = fmt.Sprintf(i18n.T("其他设备可通过 %s:%d 使用代理"), addr, s.MixedPort)
+				lanDesc = i18n.Tf("其他设备可通过 %s:%d 使用代理", addr, s.MixedPort)
 			}
 			p.switchRow(c, i18n.T("允许局域网连接"), lanDesc, s.AllowLAN, func(on bool) { s.AllowLAN = on; p.save(s, "", nil) })
 			if s.AllowLAN && len(s.Advanced.Authentication) == 0 {
@@ -411,7 +411,7 @@ func (p *Page) proxy(c *ui.Context, t *ui.Theme, s model.Settings, st model.Stat
 					ui.Button(c, i18n.T("设置认证…")).OnClick(func() { p.requestTab(tabAdvanced) })
 				})
 			}
-			e.Kit.Row(c, i18n.T("不走代理的地址"), fmt.Sprintf(i18n.T("%d 条"), len(s.Bypass)), func() {
+			e.Kit.Row(c, i18n.T("不走代理的地址"), i18n.Tf("%d 条", len(s.Bypass)), func() {
 				ui.Button(c, i18n.T("编辑…")).OnClick(func() {
 					p.bypass.text = strings.Join(s.Bypass, "\n")
 					p.bypass.session++
@@ -463,7 +463,7 @@ func (p *Page) commitPort(s model.Settings) {
 		return
 	}
 	s.MixedPort = n
-	p.save(s, fmt.Sprintf(i18n.T("代理端口已改为 %d"), n), func(err error) {
+	p.save(s, i18n.Tf("代理端口已改为 %d", n), func(err error) {
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		p.portErr = err.Error()
@@ -688,9 +688,9 @@ func geoUpdatedText(info model.GeoDataInfo, manual time.Time) string {
 	case info.Files > 0 && info.Bundled:
 		return i18n.T("随应用附带")
 	case !info.UpdatedAt.IsZero():
-		return info.UpdatedAt.Local().Format("2006-01-02 15:04")
+		return env.FmtDateTime(info.UpdatedAt.Local())
 	case !manual.IsZero():
-		return manual.Format("2006-01-02")
+		return env.FmtDate(manual)
 	}
 	return "—"
 }
@@ -787,3 +787,9 @@ func joinLines(xs []string) string { return strings.Join(xs, "\n") }
 
 // yaml is the editor language for override texts.
 var yaml = editor.LanguageFor("override.yaml")
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicSettings, app.TopicSubs, app.TopicCoreDownload, app.TopicCores, app.TopicNet}
+}

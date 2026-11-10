@@ -38,10 +38,10 @@ func (p *Page) backupSection(c *ui.Context, t *ui.Theme, s model.Settings) {
 		})
 		last := i18n.T("还没有备份过")
 		if !info.LastBackupAt.IsZero() {
-			last = i18n.T("上次备份：") + info.LastBackupAt.Local().Format("2006-01-02 15:04")
+			last = i18n.Tf("上次备份：%s", env.FmtDateTime(info.LastBackupAt.Local()))
 		}
 		if info.LastError != "" {
-			last = i18n.T("上次自动备份失败：") + info.LastError
+			last = i18n.Tf("上次自动备份失败：%s", info.LastError)
 		}
 		e.Kit.Row(c, i18n.T("备份"), last, func() {
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -96,7 +96,7 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 					pwDesc = i18n.T("本机没有可用的钥匙串：密码经混淆后保存在设置目录（仅当前用户可读），并非加密")
 				}
 				if !info.HasPassword {
-					pwDesc = i18n.T("未设置；") + pwDesc
+					pwDesc = i18n.Tf("未设置；%s", pwDesc)
 				}
 				e.Kit.Row(c, i18n.T("密码"), pwDesc, func() {
 					ui.Row(c.Key("dav-pass-" + strconv.Itoa(f.davPassSession))).Gap(8).AlignItems(ui.Center).Children(func() {
@@ -145,7 +145,7 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 					}
 					p.save(s, "", nil)
 				})
-				autoOpts := []string{i18n.T("关闭"), i18n.T("每天"), i18n.T("每周")}
+				autoOpts := []string{i18n.T("关闭|开关"), i18n.T("每天"), i18n.T("每周")}
 				autoVals := []string{"", model.WebDAVDaily, model.WebDAVWeekly}
 				p.selectRow(c, i18n.T("自动备份"), i18n.T("澜流运行时按间隔自动备份"), mapName(w.AutoBackup, autoVals, autoOpts), autoOpts, func(v string) {
 					s.WebDAV.AutoBackup = mapValue(v, autoOpts, autoVals)

@@ -1,6 +1,8 @@
 package proxies
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -227,5 +229,65 @@ func TestRefreshShortcut(t *testing.T) {
 	tt.Frame()
 	if api.testedAll != 1 {
 		t.Fatalf("⌘R must do nothing while the core is stopped, got %d", api.testedAll)
+	}
+}
+
+// TestSearchKeepsGroupsCollapsed: a search no longer opens every group;
+// a collapsed group with matches says how many.
+func TestSearchKeepsGroupsCollapsed(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	tt := ui.NewTester(p.View, 900, 2000)
+	tt.Frame()
+	px := api.Proxies()
+	var closed string
+	for _, g := range px.Groups {
+		if !p.open[g.Name] && !g.Hidden && g.Name != "GLOBAL" && p.countMatches(g) > 0 {
+			closed = g.Name
+			break
+		}
+	}
+	if closed == "" {
+		t.Skip("every group is open")
+	}
+	p.query = "香港"
+	tt.Frame()
+	if p.open[closed] {
+		t.Fatalf("searching opened %s", closed)
+	}
+	found := false
+	for _, x := range tt.Texts() {
+		found = found || strings.Contains(x, "个匹配")
+	}
+	if !found {
+		t.Fatalf("no match count while searching: %q", tt.Texts())
+	}
+}
+
+// TestBigGroupVirtual: a large group builds only the rows in view.
+func TestBigGroupVirtual(t *testing.T) {
+	api := fake.NewInstant()
+	e, _ := testEnv(api)
+	p := New(e)
+	g := model.ProxyGroup{Name: "大组", Type: model.GroupSelect}
+	for i := 0; i < 300; i++ {
+		g.All = append(g.All, fmt.Sprintf("节点 %03d", i))
+	}
+	g.Now = g.All[0]
+	px := model.ProxySnapshot{Groups: []model.ProxyGroup{g}, MainGroup: g.Name}
+	p.open[g.Name], p.openInit[g.Name] = true, true
+	tt := ui.NewTester(func(c *ui.Context) {
+		ui.Scroll(c).Fill().Children(func() { p.group(c, g, g.All, len(g.All), px, groupNames(px)) })
+	}, 800, 3000)
+	tt.Frame()
+	n := 0
+	for _, x := range tt.Texts() {
+		if strings.HasPrefix(x, "节点 ") {
+			n++
+		}
+	}
+	if n == 0 || n > 3*bigGroupRows {
+		t.Fatalf("built %d of 300 rows", n)
 	}
 }

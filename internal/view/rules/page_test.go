@@ -251,3 +251,35 @@ func TestStoppedCore(t *testing.T) {
 		t.Fatalf("after 启动内核: %v", f.Status().Core)
 	}
 }
+
+// TestSubRowsCache: the matching rules are kept while the rules stay the
+// same, and the rows still carry the latest hit counts.
+func TestSubRowsCache(t *testing.T) {
+	p := &Page{sort: ui.SortOrder{Column: "#"}}
+	rules := []model.Rule{
+		{Index: 0, Type: "DOMAIN", Payload: "a.com", Proxy: "DIRECT"},
+		{Index: 1, Type: "DOMAIN", Payload: "b.com", Proxy: "节点选择"},
+		{Index: 2, Type: "MATCH", Proxy: "节点选择"},
+	}
+	p.query = "B.COM"
+	rows, total := p.subRows(rules)
+	if total != 3 || len(rows) != 1 || rows[0].Payload != "b.com" {
+		t.Fatalf("rows %+v total %d", rows, total)
+	}
+	pos := p.sub.pos
+	rules[1].HitCount = 7
+	rows, _ = p.subRows(rules)
+	if &p.sub.pos[0] != &pos[0] || rows[0].HitCount != 7 {
+		t.Fatalf("cache not reused or hits stale: %+v", rows)
+	}
+	p.query = ""
+	p.sort = ui.SortOrder{Column: "hits", Descending: true}
+	rows, _ = p.subRows(rules)
+	if len(rows) != 3 || rows[0].Index != 1 {
+		t.Fatalf("by hits: %+v", rows)
+	}
+	rules[2].HitCount = 9
+	if rows, _ = p.subRows(rules); rows[0].Index != 2 {
+		t.Fatalf("by hits not re-sorted: %+v", rows)
+	}
+}

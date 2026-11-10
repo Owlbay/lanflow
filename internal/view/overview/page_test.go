@@ -2,6 +2,7 @@ package overview
 
 import (
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 
@@ -65,7 +66,7 @@ func TestMapDrawsRoutesAndDestinations(t *testing.T) {
 		t.Errorf("expected US and NL destinations, got %v", countries)
 	}
 	you, _ := p.youPlace()
-	if got := mapDescription(you, p.routes(), p.dests.lists); got != "出口地图：从你所在的上海到东京、香港；目标国家：美国、荷兰" {
+	if got := mapDescription(you, p.routes(time.Time{}), p.dests.lists); got != "出口地图：从你所在的上海到东京、香港；目标国家：美国、荷兰" {
 		t.Errorf("map description: %q", got)
 	}
 

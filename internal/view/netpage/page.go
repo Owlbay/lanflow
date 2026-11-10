@@ -11,6 +11,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -35,6 +36,14 @@ type Page struct {
 	addSession      int
 	sites           ui.ListState
 
+	// The effective DNS and sniffer settings (the service parses the
+	// subscription's YAML for them) are read again only when the
+	// settings or the status change.
+	effStale   *env.Stale
+	effDNS     model.EffectiveDNS
+	effSniffer model.EffectiveSniffer
+	snifferOn  bool
+
 	mu     sync.Mutex // guards the fields below, written by jobs
 	dnsRes *model.DNSResult
 	dnsErr string
@@ -43,7 +52,8 @@ type Page struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	return &Page{e: e, dnsName: "www.google.com", dnsType: "A", leakOpen: map[string]*bool{}}
+	return &Page{e: e, dnsName: "www.google.com", dnsType: "A", leakOpen: map[string]*bool{},
+		effStale: env.Watch(e.API, app.TopicSettings, app.TopicStatus)}
 }
 
 // View draws the whole content area including the header.
@@ -53,6 +63,7 @@ func (p *Page) View(c *ui.Context) {
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
 	sites := e.API.Sites()
+	net := e.API.NetInfo() // once a build, for the two parts that show it
 	testing := false
 	for _, s := range sites {
 		if s.ViaProxy == -2 || s.Direct == -2 {
@@ -80,7 +91,7 @@ func (p *Page) View(c *ui.Context) {
 		// table and the leak results are the only parts that scroll.
 		ui.Column(c).Grow(1).Padding(4, 24, 20, 24).Gap(16).Clip().Children(func() {
 			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
-				p.directCard(c, t)
+				p.directCard(c, t, net)
 				p.exitCard(c, t, st)
 			})
 			ui.Row(c).Gap(16).Grow(1).AlignItems(ui.Stretch).Children(func() {
@@ -89,7 +100,7 @@ func (p *Page) View(c *ui.Context) {
 					p.dnsSection(c, t, running)
 				})
 				ui.Column(c).Grow(1).Basis(0).Gap(16).Children(func() {
-					p.localSection(c, t)
+					p.localSection(c, t, net)
 					p.proxySection(c, t, st)
 					p.leakSection(c, t, running)
 				})
@@ -153,18 +164,6 @@ func (p *Page) flushToast() {
 
 // ---- exit cards ----
 
-func (p *Page) card(c *ui.Context, t *ui.Theme, title string, right func(), body func()) {
-	ui.Column(c).Grow(1).Basis(0).Padding(14).Gap(10).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
-		ui.Row(c).Gap(8).Children(func() {
-			ui.Text(c, title).Bold().FontSize(13).Grow(1)
-			if right != nil {
-				right()
-			}
-		})
-		body()
-	})
-}
-
 // retest refreshes everything on the page: network info and public IP
 // (RefreshNetwork also re-measures the main exit), then the sites.
 func (p *Page) retest() {
@@ -177,20 +176,19 @@ func (p *Page) retest() {
 	}, "")
 }
 
-func (p *Page) directCard(c *ui.Context, t *ui.Theme) {
+func (p *Page) directCard(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 	e := p.e
 	you := e.API.You()
-	n := e.API.NetInfo()
 	fetching := n.PublicIPStatus == "fetching"
-	p.card(c, t, i18n.T("直连 · 本机公网"), func() {
+	env.InfoCard(c, i18n.T("直连 · 本机公网"), func() {
 		if you != nil && !fetching {
 			e.Kit.Tag(c, i18n.T("实测"), "green")
 		}
 		if fetching {
 			ui.Spinner(c).Size(12, 12).Label(i18n.T("正在获取"))
 		} else {
-			b := ui.Box(c).Padding(2).Radius(4).Cursor(ui.CursorPointer).TextColor(t.TextMuted).
-				Role(ui.RoleButton).Label(i18n.T("重新获取公网地址")).Tooltip(i18n.T("重新获取公网地址"))
+			b := env.Clickable(ui.Box(c), i18n.T("重新获取公网地址")).Padding(2).Radius(4).TextColor(t.TextMuted).
+				Tooltip(i18n.T("重新获取公网地址"))
 			b.Children(func() { e.Kit.Icon(c, "refresh", 13) })
 			if b.Clicked() {
 				e.Run(e.API.RefreshNetwork, "")
@@ -242,9 +240,9 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 	if group != "" {
 		title += " · " + group
 	}
-	p.card(c, t, title, func() {
+	env.InfoCard(c, title, func() {
 		if main != nil {
-			link := ui.Text(c, i18n.T("在地图中查看")).FontSize(11).TextColor(t.Accent).Cursor(ui.CursorPointer)
+			link := env.LinkText(c, i18n.T("在地图中查看"), "").FontSize(11)
 			if link.Clicked() {
 				e.Navigate(env.Overview, "")
 			}
@@ -271,7 +269,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 		}
 		ui.Text(c, ip).FontSize(20).FontFeatures("tnum").Selectable()
 		kvGrid(c, func() {
-			p.kvCell(c, t, i18n.T("节点"), flag(x.Place)+main.Node, nil)
+			p.kvCell(c, t, i18n.T("节点"), flagOf(x.Place)+main.Node, nil)
 			p.kvCell(c, t, i18n.T("位置"), placeName(x.Place), func() {
 				switch x.Source {
 				case model.LocateProbe:
@@ -282,7 +280,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 			})
 			if x.Source == model.LocateProbe {
 				p.kvCell(c, t, i18n.T("运营商"), ispText(x.Exit), nil)
-				p.kvCell(c, t, i18n.T("CF 机房"), dash(x.Colo), nil)
+				p.kvCell(c, t, i18n.T("CF 机房"), env.Dash(x.Colo), nil)
 			}
 		})
 		p.pathRow(c, t, x)
@@ -307,11 +305,11 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 				if x.Entry.IP != "" {
 					entry += i18n.Tf("（%s）", x.Entry.IP)
 				}
-				text := fmt.Sprintf(i18n.T("入口 %s → 落地 %s"), entry, placeName(x.Place))
+				text := i18n.Tf("入口 %s → 落地 %s", entry, placeName(x.Place))
 				ui.Text(c, text).FontSize(11).TextColor(t.TextMuted).SingleLine().Shrink(1).Tooltip(text)
 			}
 		case model.PathChain:
-			ui.Text(c, fmt.Sprintf(i18n.T("链式代理 · %d 跳"), x.ChainHops)).FontSize(12).SingleLine()
+			ui.Text(c, i18n.Tf("链式代理 · %d 跳", x.ChainHops)).FontSize(12).SingleLine()
 		case model.PathSuspicious:
 			ui.Text(c, i18n.T("⚠ 位置存疑")).FontSize(12).TextColor(t.Warning).SingleLine().Shrink(0)
 			if x.PathNote != "" {
@@ -319,16 +317,6 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 			}
 		default:
 			ui.Text(c, "—").FontSize(12).TextColor(t.TextMuted)
-		}
-	})
-}
-
-func (p *Page) kv(c *ui.Context, t *ui.Theme, k, v string, extra func()) {
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, k).Width(56).Shrink(0).FontSize(12).TextColor(t.TextMuted).SingleLine()
-		ui.Text(c, v).FontSize(12).FontFeatures("tnum").Selectable().SingleLine().Shrink(1)
-		if extra != nil {
-			extra()
 		}
 	})
 }
@@ -355,7 +343,7 @@ func (p *Page) sitesSection(c *ui.Context, t *ui.Theme, sites []model.SiteCheck,
 	// The table takes the height left in its column and scrolls inside.
 	ui.Column(c).Gap(6).Grow(1).Basis(0).MinHeight(120).Children(func() {
 		sectionTitle(c, t, i18n.T("网站连通性"), i18n.T("· 分别经代理和直连访问一次"), func() {
-			add := ui.Text(c, i18n.T("＋ 添加网站")).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).Role(ui.RoleButton)
+			add := env.LinkText(c, i18n.T("＋ 添加网站"), "")
 			if add.Clicked() {
 				p.addName, p.addURL, p.addErr = "", "https://", ""
 				p.addSession++
@@ -456,39 +444,51 @@ func (p *Page) addSite() {
 
 // ---- local network & proxy status ----
 
-func (p *Page) localSection(c *ui.Context, t *ui.Theme) {
-	e := p.e
-	n := e.API.NetInfo()
+func (p *Page) localSection(c *ui.Context, t *ui.Theme, n model.NetInfo) {
 	p.panel(c, t, i18n.T("本机网络"), func() {
 		ipv6 := n.IPv6
 		if ipv6 == "" {
 			ipv6 = i18n.T("未分配公网地址")
 		}
 		kvGrid(c, func() {
-			p.kvCell(c, t, i18n.T("网络接口"), dash(n.Interface), nil)
-			p.kvCell(c, t, i18n.T("Wi-Fi 名称"), dash(n.SSID), nil)
-			p.kvCell(c, t, i18n.T("局域网 IP"), dash(n.LANIP), nil)
-			p.kvCell(c, t, i18n.T("网关"), dash(n.Gateway), nil)
-			p.kvCell(c, t, i18n.T("系统 DNS"), dash(strings.Join(n.DNS, ", ")), nil)
+			p.kvCell(c, t, i18n.T("网络接口"), env.Dash(n.Interface), nil)
+			p.kvCell(c, t, i18n.T("Wi-Fi 名称"), env.Dash(n.SSID), nil)
+			p.kvCell(c, t, i18n.T("局域网 IP"), env.Dash(n.LANIP), nil)
+			p.kvCell(c, t, i18n.T("网关"), env.Dash(n.Gateway), nil)
+			p.kvCell(c, t, i18n.T("系统 DNS"), env.Dash(strings.Join(n.DNS, ", ")), nil)
 			p.kvCell(c, t, "IPv6", ipv6, nil)
 		})
 	})
 }
 
+// effective reads the effective DNS and sniffer settings again when they
+// may have changed.
+func (p *Page) effective() {
+	if !p.effStale.Take() {
+		return
+	}
+	e := p.e
+	p.effDNS = e.API.EffectiveDNS()
+	p.snifferOn = e.API.Settings().Sniffer.Enable
+	if p.snifferOn {
+		p.effSniffer = e.API.EffectiveSniffer()
+	}
+}
+
 func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 	e := p.e
-	s := e.API.Settings()
+	p.effective()
 	p.panel(c, t, i18n.T("代理状态"), func() {
 		p.kvRich(c, t, i18n.T("系统代理"), func() {
 			if st.SystemProxy {
 				e.Kit.Dot(c, "green")
-				ui.Text(c, fmt.Sprintf(i18n.T("指向澜流 127.0.0.1:%d"), st.MixedPort)).FontSize(12).FontFeatures("tnum").SingleLine()
+				ui.Text(c, i18n.Tf("指向澜流 127.0.0.1:%d", st.MixedPort)).FontSize(12).FontFeatures("tnum").SingleLine()
 			} else {
 				e.Kit.Dot(c, "gray")
 				ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
-		port := fmt.Sprintf(i18n.T("%d（HTTP + SOCKS5）"), st.MixedPort)
+		port := i18n.Tf("%d（HTTP + SOCKS5）", st.MixedPort)
 		if st.AllowLAN {
 			port += " · " + i18n.T("允许局域网连接")
 		}
@@ -496,16 +496,16 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 		if st.TUN {
 			tun = i18n.T("已开启")
 		}
-		p.kv(c, t, i18n.T("监听端口"), port+" · "+i18n.T("TUN 模式")+" "+tun, nil)
+		env.KV(c, i18n.T("监听端口"), i18n.Tf("%s · TUN 模式 %s", port, tun), 56, true, nil)
 		// 嗅探 and DNS report the effective config (docs/design.md:463): the
 		// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
 		snf := i18n.T("未开启")
-		if s.Sniffer.Enable {
-			snf = i18n.T("已开启") + " · " + sourceName(e.API.EffectiveSniffer().Source)
+		if p.snifferOn {
+			snf = i18n.T("已开启") + " · " + sourceName(p.effSniffer.Source)
 		}
-		p.kv(c, t, i18n.T("嗅探"), snf, nil)
-		p.kv(c, t, "DNS", dnsStatusText(e.API.EffectiveDNS()), nil)
-		p.kv(c, t, i18n.T("控制接口"), i18n.T("本机套接字，仅澜流可访问"), nil)
+		env.KV(c, i18n.T("嗅探"), snf, 56, true, nil)
+		env.KV(c, "DNS", dnsStatusText(p.effDNS), 56, true, nil)
+		env.KV(c, i18n.T("控制接口"), i18n.T("本机套接字，仅澜流可访问"), 56, true, nil)
 		if a := st.ATrust; a.Running {
 			p.kvRich(c, t, i18n.T("aTrust 兼容"), func() {
 				e.Kit.Dot(c, "green")
@@ -582,8 +582,7 @@ func (p *Page) leakSection(c *ui.Context, t *ui.Theme, running bool) {
 		sectionTitle(c, t, i18n.T("泄漏检查"), note, func() {
 			// The finer IP risk score is a third-party page: handed to the
 			// browser, never requested by the app (also in 「检测」).
-			link := ui.Text(c, i18n.T("在浏览器中检查 IP 纯净度")).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).
-				Role(ui.RoleButton).SingleLine().Tooltip(i18n.T("更细的 IP 风险评分（纯净度）可在「检测」页按需在线检测，也可在浏览器中查看"))
+			link := env.LinkText(c, i18n.T("在浏览器中检查 IP 纯净度"), "").Tooltip(i18n.T("更细的 IP 风险评分（纯净度）可在「检测」页按需在线检测，也可在浏览器中查看"))
 			if link.Clicked() {
 				_ = mygo.Shell.OpenExternal(ipPurityURL)
 			}
@@ -700,9 +699,9 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 	ui.Column(c).Gap(6).Shrink(0).Children(func() {
 		sectionTitle(c, t, i18n.T("DNS 查询"), i18n.T("经内核的解析器"), func() {
 			flush := func(label string, job func() error, ok string) {
-				b := ui.Text(c, label).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).Role(ui.RoleButton).SingleLine()
+				b := env.LinkText(c, label, "")
 				if !running {
-					b.TextColor(t.TextMuted).Cursor(ui.CursorDefault)
+					b.TextColor(t.TextMuted).Cursor(ui.CursorDefault).Disabled(true)
 				} else if b.Clicked() {
 					e.Run(job, ok)
 				}
@@ -837,11 +836,12 @@ func (p *Page) query() {
 
 // ---- helpers ----
 
-func dash(s string) string {
-	if s == "" {
-		return "—"
+// flagOf is the flag of a place's country and a space, "" when unknown.
+func flagOf(pl *model.Place) string {
+	if pl == nil {
+		return ""
 	}
-	return s
+	return env.FlagPrefix(pl.Country)
 }
 
 func placeName(pl *model.Place) string {
@@ -858,7 +858,7 @@ func placeText(pl *model.Place) string {
 	if pl == nil {
 		return i18n.T("未知")
 	}
-	return flag(pl) + placeName(pl)
+	return flagOf(pl) + placeName(pl)
 }
 
 func ispText(ep model.EndpointInfo) string {
@@ -873,23 +873,6 @@ func ispText(ep model.EndpointInfo) string {
 	return ep.ISP + " " + ep.ASN
 }
 
-// flag returns the regional-indicator flag of a place's country followed
-// by a space, or "" when unknown.
-func flag(pl *model.Place) string {
-	if pl == nil || len(pl.Country) != 2 {
-		return ""
-	}
-	cc := strings.ToUpper(pl.Country)
-	var b strings.Builder
-	for _, r := range cc {
-		if r < 'A' || r > 'Z' {
-			return ""
-		}
-		b.WriteRune(0x1F1E6 + r - 'A')
-	}
-	return b.String() + " "
-}
-
 func hostOf(url string) string {
 	u := url
 	if i := strings.Index(u, "://"); i >= 0 {
@@ -899,4 +882,10 @@ func hostOf(url string) string {
 		u = u[:i]
 	}
 	return u
+}
+
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicStatus, app.TopicNet, app.TopicSettings, app.TopicExits, app.TopicProxies}
 }

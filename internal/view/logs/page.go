@@ -14,6 +14,7 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
+	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
@@ -85,11 +86,9 @@ func (p *Page) persist() {
 	if p.isApp() {
 		source = "app"
 	}
-	p.e.Run(func() error {
-		u := p.e.API.UIState()
+	p.e.SaveUIState("logs", func(u *model.UIState) {
 		u.LogLevel, u.LogSource = level, source
-		return p.e.API.SaveUIState(u)
-	}, "")
+	})
 }
 
 // levelOptions are the level select's texts, 「级别：信息」, in the language
@@ -126,7 +125,7 @@ func (p *Page) View(c *ui.Context) {
 			if len(vis) == 0 {
 				switch {
 				case strings.TrimSpace(p.query) != "":
-					e.Kit.Empty(c, "search", fmt.Sprintf(i18n.T("没有匹配“%s”的日志"), strings.TrimSpace(p.query)), "", nil)
+					e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的日志", strings.TrimSpace(p.query)), "", nil)
 				case p.paused:
 					e.Kit.Empty(c, "logs", i18n.T("暂无日志"), i18n.T("已暂停。按「继续」恢复接收新日志。"), nil)
 				case p.isApp():
@@ -252,7 +251,7 @@ func ExportDiagnostics(e *env.Env) {
 		}
 		mygo.Shell.ShowItemInFolder(path)
 		return nil
-	}, i18n.T("已导出到 ")+filepath.Base(path))
+	}, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }
 
 // revealLogFile selects the log file in the file manager; before it has
@@ -317,28 +316,12 @@ func (p *Page) line(c *ui.Context, t *ui.Theme, l model.LogEntry) {
 	ui.Row(c).MinHeight(22).Gap(10).PaddingX(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, l.Time.Format("15:04:05")).TextColor(timeColor).FontFeatures("tnum").Unselectable()
 		ui.Text(c, levelName(l.Level)).Width(28).TextColor(color).Unselectable()
-		highlight(c, l.Payload, strings.TrimSpace(p.query), color, t).Grow(1).SingleLine()
+		env.Highlight(c, l.Payload, strings.TrimSpace(p.query), color).Grow(1).SingleLine()
 	})
 }
 
-// highlight draws text with the case-insensitive matches of q marked.
-func highlight(c *ui.Context, text, q string, color ui.Color, t *ui.Theme) ui.Element {
-	if q == "" {
-		return ui.Text(c, text).TextColor(color)
-	}
-	lower, lq := strings.ToLower(text), strings.ToLower(q)
-	var spans []ui.Span
-	for i := 0; i < len(text); {
-		j := strings.Index(lower[i:], lq)
-		if j < 0 {
-			spans = append(spans, ui.Span{Text: text[i:], Color: color})
-			break
-		}
-		if j > 0 {
-			spans = append(spans, ui.Span{Text: text[i : i+j], Color: color})
-		}
-		spans = append(spans, ui.Span{Text: text[i+j : i+j+len(q)], Color: color, Background: t.Warning.Alpha(0.35)})
-		i += j + len(q)
-	}
-	return ui.RichText(c, spans...)
+// Topics are the service topics this page's view reads; the shell
+// rebuilds it only for these (and its own).
+func (p *Page) Topics() []app.Topic {
+	return []app.Topic{app.TopicLogs}
 }

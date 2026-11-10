@@ -276,7 +276,7 @@ func (p *Page) exportATrust() {
 	if filepath.Ext(path) == "" {
 		path += ".yaml"
 	}
-	e.Run(func() error { return e.API.ExportATrustConfig(path) }, i18n.T("已导出到 ")+filepath.Base(path))
+	e.Run(func() error { return e.API.ExportATrustConfig(path) }, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }
 
 // exportATrustReference saves the reference template.
@@ -294,5 +294,5 @@ func (p *Page) exportATrustReference() {
 			return fmt.Errorf(i18n.T("写入 %s 失败：%v"), filepath.Base(path), err)
 		}
 		return nil
-	}, i18n.T("已导出到 ")+filepath.Base(path))
+	}, i18n.Tf("已导出到 %s", filepath.Base(path)))
 }

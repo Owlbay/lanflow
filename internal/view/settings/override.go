@@ -87,7 +87,7 @@ func overrideMeta(o model.Override) string {
 		meta += i18n.T(" · 链接")
 	}
 	if !o.UpdatedAt.IsZero() {
-		meta += i18n.T(" · 更新于 ") + env.FmtAgo(o.UpdatedAt)
+		meta += i18n.Tf(" · 更新于 %s", env.FmtAgo(o.UpdatedAt))
 	}
 	return meta
 }
@@ -160,7 +160,7 @@ func (p *Page) overrideTab(c *ui.Context, t *ui.Theme) {
 						})
 						ui.Text(c, selectionDesc(s, byID)).FontSize(11).TextColor(t.TextMuted).SingleLine()
 					})
-					ui.Button(c, i18n.T("选择…")).Label(i18n.T("选择…") + " " + s.Name).OnClick(func() { p.openSelection(s, list) })
+					ui.Button(c, i18n.T("选择…")).Label(i18n.Tf("选择… %s", s.Name)).OnClick(func() { p.openSelection(s, list) })
 				})
 			}
 		})
@@ -183,7 +183,7 @@ func selectionDesc(s model.Subscription, byID map[string]model.Override) string 
 	if len(names) == 0 {
 		return i18n.T("仅全局覆写")
 	}
-	return i18n.T("全局覆写 + ") + strings.Join(names, i18n.T("、"))
+	return i18n.Tf("全局覆写 + %s", strings.Join(names, i18n.T("、")))
 }
 
 // overrideRow draws one entry of the list with its switch, editor button
@@ -196,7 +196,7 @@ func (p *Page) overrideRow(c *ui.Context, t *ui.Theme, o model.Override, index, 
 	p.mu.Unlock()
 	ui.Row(c.Key("ov-" + id)).Gap(10).MinHeight(44).PaddingX(12).AlignItems(ui.Center).Children(func() {
 		on := o.Enabled
-		if ui.Switch(c.Key("on"), &on).Label(i18n.T("启用 ") + o.Name).Disabled(busy).Changed() {
+		if ui.Switch(c.Key("on"), &on).Label(i18n.Tf("启用 %s", o.Name)).Disabled(busy).Changed() {
 			n := o
 			n.Enabled = on
 			p.saveEntry(n, "")
@@ -218,7 +218,7 @@ func (p *Page) overrideRow(c *ui.Context, t *ui.Theme, o model.Override, index, 
 			ui.Text(c, overrideMeta(o)).FontSize(11).TextColor(t.TextMuted).SingleLine()
 		})
 		ui.Button(c, i18n.T("编辑…")).OnClick(func() { p.openOverride(id) })
-		ui.Button(c, "").Label(i18n.T("更多 ") + o.Name).Tooltip(i18n.T("更多")).Children(func() { e.Kit.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
+		ui.Button(c, "").Label(i18n.Tf("更多 %s", o.Name)).Tooltip(i18n.T("更多")).Children(func() { e.Kit.Icon(c, "more", 14) }).Menu(func(m *ui.Menu) {
 			if m.Item(i18n.T("重命名…")).Chosen() {
 				p.openName(id, o.Name)
 			}
@@ -323,7 +323,7 @@ func (p *Page) importOverrideFile() {
 		name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 		_, err = e.API.SaveOverrideEntry(model.Override{Name: name, Enabled: true, Source: model.OverrideLocal, Text: string(data)})
 		return err
-	}, i18n.T("已导入 ")+filepath.Base(path))
+	}, i18n.Tf("已导入 %s", filepath.Base(path)))
 }
 
 // openSelection opens a subscription's override selection.
@@ -409,7 +409,7 @@ func (p *Page) overrideListDialogs(c *ui.Context, t *ui.Theme) {
 		list := e.API.OverrideList()
 		ui.Modal(c, &d.open, func() {
 			ui.Column(c.Key("ov-sel-" + d.subID)).Width(420).Gap(10).Children(func() {
-				ui.Text(c, i18n.T("选择覆写 · ")+d.subName).FontSize(15).Bold()
+				ui.Text(c, i18n.Tf("选择覆写 · %s", d.subName)).FontSize(15).Bold()
 				ui.Text(c, i18n.T("勾选的覆写按列表顺序应用于这个订阅；全局覆写始终应用。")).FontSize(12).TextColor(t.TextMuted)
 				if len(list) == 0 {
 					ui.Text(c, i18n.T("还没有覆写")).TextColor(t.TextMuted)
@@ -418,7 +418,7 @@ func (p *Page) overrideListDialogs(c *ui.Context, t *ui.Theme) {
 					o := o
 					if o.Global {
 						on := true
-						ui.Checkbox(c.Key(o.ID), &on, o.Name+i18n.T("（全局）")).Disabled(true)
+						ui.Checkbox(c.Key(o.ID), &on, i18n.Tf("%s（全局）", o.Name)).Disabled(true)
 						continue
 					}
 					on := d.chosen[o.ID]
@@ -497,7 +497,7 @@ func (p *Page) openOverride(key string) {
 		if o.ID == key {
 			text, found = o.Text, true
 			if key != "global" {
-				title = i18n.T("编辑覆写 · ") + o.Name
+				title = i18n.Tf("编辑覆写 · %s", o.Name)
 			}
 		}
 	}
@@ -506,7 +506,7 @@ func (p *Page) openOverride(key string) {
 	} else if !found {
 		for _, s := range e.API.Subscriptions() {
 			if s.ID == key {
-				title = i18n.T("编辑覆写 · ") + s.Name
+				title = i18n.Tf("编辑覆写 · %s", s.Name)
 			}
 		}
 	}

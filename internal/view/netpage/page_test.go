@@ -141,3 +141,34 @@ func TestStoppedAndDirectMode(t *testing.T) {
 		t.Fatal("查询 should be disabled while the core is stopped")
 	}
 }
+
+// countDNS counts EffectiveDNS reads.
+type countDNS struct {
+	*fake.Fake
+	n int
+}
+
+func (c *countDNS) EffectiveDNS() model.EffectiveDNS { c.n++; return c.Fake.EffectiveDNS() }
+
+// TestEffectiveDNSCached: the effective DNS is read once, and again only
+// after the settings change.
+func TestEffectiveDNSCached(t *testing.T) {
+	f := fake.NewInstant()
+	api := &countDNS{Fake: f}
+	e, _ := testEnv(f)
+	e.API = api
+	p := New(e)
+	tt := ui.NewTester(p.View, 1000, 1400)
+	tt.Frame()
+	tt.Frame()
+	if api.n != 1 {
+		t.Fatalf("EffectiveDNS read %d times over three builds, want 1", api.n)
+	}
+	if err := f.SaveSettings(f.Settings()); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if api.n != 2 {
+		t.Fatalf("EffectiveDNS not read again after a settings change: %d", api.n)
+	}
+}
