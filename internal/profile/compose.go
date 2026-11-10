@@ -250,8 +250,10 @@ func compose(in Input) (Output, error) {
 		)))
 	}
 
+	applyCapture(c, in.Capture)
 	applyAdvanced(c, in.Advanced)
 	applyCoexist(c, in.Coexist, m.TUN)
+	warns := scrubCaptureRefs(c)
 	c.layer = layerLanflow
 
 	for _, k := range strippedKeys {
@@ -261,7 +263,7 @@ func compose(in Input) (Output, error) {
 	applyAdvancedPorts(c, in.Advanced, port)
 	resolveDanglingAliases(root)
 
-	out := Output{Groups: groupNames(root, true)}
+	out := Output{Groups: groupNames(root, true), Warnings: warns}
 	out.YAML, out.Lines, err = c.render()
 	if err != nil {
 		return Output{}, err

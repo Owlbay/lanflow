@@ -116,6 +116,8 @@ type Input struct {
 	// Advanced are the 高级 options (model/advanced.go), written in the
 	// Lanflow layer only where set; see advanced.go.
 	Advanced model.AdvancedSettings
+	// Capture is the HTTPS 选择性解密 layer (capture.go); zero = none.
+	Capture Capture
 }
 
 // Output is a composed runtime config.
@@ -123,6 +125,9 @@ type Output struct {
 	YAML   []byte
 	Lines  []model.RuntimeLine // the YAML annotated by source layer (see model.RuntimeLine)
 	Groups []string            // proxy-group names in order (for rule targets)
+	// Warnings lists what composition removed on its own, e.g. a
+	// subscription's references to the decrypting outbound (capture.go).
+	Warnings []string
 }
 
 // Compose merges, in order: subscription → SubOverride → GlobalOverride →
