@@ -12,7 +12,6 @@ func init() {
 		"STUN 看到":     "STUN saw",
 		"本机公网":        "Local public",
 		"系统解析器":       "System resolver",
-		"内核":          "Core",
 		"公共 DNS %s":   "Public DNS %s",
 		"%s：":         "%s: ",
 		"失败（%v）":      "failed (%v)",

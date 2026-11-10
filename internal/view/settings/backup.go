@@ -145,7 +145,7 @@ func (p *Page) backupConfigDialog(c *ui.Context, t *ui.Theme, s model.Settings, 
 					}
 					p.save(s, "", nil)
 				})
-				autoOpts := []string{i18n.T("关闭"), i18n.T("每天"), i18n.T("每周")}
+				autoOpts := []string{i18n.T("关闭|开关"), i18n.T("每天"), i18n.T("每周")}
 				autoVals := []string{"", model.WebDAVDaily, model.WebDAVWeekly}
 				p.selectRow(c, i18n.T("自动备份"), i18n.T("澜流运行时按间隔自动备份"), mapName(w.AutoBackup, autoVals, autoOpts), autoOpts, func(v string) {
 					s.WebDAV.AutoBackup = mapValue(v, autoOpts, autoVals)

@@ -58,7 +58,6 @@ func init() {
 		"重新检测": "Check again",
 		"经所选出口请求 Cloudflare trace，并用本地数据库解析；不访问第三方站点": "Requests the Cloudflare trace through the chosen exit and resolves it with the bundled databases; no third-party site is contacted",
 		"尚未检测。按「检测出口」读取这个出口的地址、位置、ASN 和类型。":           "Not checked yet. Press Check exit to read this exit's address, location, ASN and type.",
-		"IP 类型": "IP type",
 		"原生 IP": "Native IP",
 		"原生":    "Native",
 		"广播":    "Broadcast",

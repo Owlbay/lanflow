@@ -268,7 +268,7 @@ func (p *Page) advancedTab(c *ui.Context, t *ui.Theme, s model.Settings, st mode
 				e.Kit.Row(c, i18n.T("TCP 并发"), i18n.T("域名有多个 IP 时同时尝试，用最快的一个（tcp-concurrent）"), func() {
 					ui.Switch(c.Key("adv-tcpc"), &f.tcpConcurrent).Label(i18n.T("TCP 并发"))
 				})
-				fpOpts := []string{i18n.T("默认"), i18n.T("关闭"), i18n.T("严格"), i18n.T("总是")}
+				fpOpts := []string{i18n.T("默认"), i18n.T("关闭|开关"), i18n.T("严格"), i18n.T("总是")}
 				fpVals := []string{"", "off", "strict", "always"}
 				p.selectRow(c, i18n.T("进程匹配"), i18n.T("查找连接所属的进程，供 PROCESS 规则和连接页使用；关闭可省资源（find-process-mode）"), mapName(f.findProcess, fpVals, fpOpts), fpOpts, func(v string) {
 					f.findProcess = mapValue(v, fpOpts, fpVals)

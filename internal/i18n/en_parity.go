@@ -10,9 +10,10 @@ func init() {
 		"高级设置已应用": "Advanced settings applied",
 		"这些选项对应 Mihomo 配置里的同名字段，留空即使用内核默认值；应用后会重新生成配置，大多数需要内核重新加载。": "These options map to the Mihomo config fields of the same name; empty means the core's default. Applying regenerates the config, and most of them reload the core.",
 		"默认": "Default",
-		"关闭": "Off",
-		"严格": "Strict",
-		"总是": "Always",
+		// 关闭 as a setting's value; the bare word is the Close button.
+		"关闭|开关": "Off",
+		"严格":    "Strict",
+		"总是":    "Always",
 
 		// validation
 		"%s须为 1–65535 之间的数字，或留空":              "%s must be a number from 1 to 65535, or empty",
@@ -42,7 +43,6 @@ func init() {
 		"设置认证…": "Set up authentication…",
 
 		// system proxy / PAC
-		"系统代理":   "System Proxy",
 		"PAC 模式": "PAC mode",
 		"系统代理改为自动配置脚本：澜流在本机提供 PAC 文件，「不走代理的地址」由应用自行直连，其余经代理": "Sets the system proxy to an auto-config script: Lanflow serves a PAC file locally, applications connect to the bypass list directly and send the rest through the proxy",
 		"国内域名直连": "Mainland domains direct",

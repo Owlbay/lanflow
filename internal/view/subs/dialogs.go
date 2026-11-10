@@ -71,7 +71,7 @@ type rawDialog struct {
 }
 
 var (
-	autoLabels = []string{"关闭", "每 6 小时", "每 12 小时", "每 24 小时"}
+	autoLabels = []string{"关闭|开关", "每 6 小时", "每 12 小时", "每 24 小时"}
 	autoHours  = []int{0, 6, 12, 24}
 	yamlLang   = editor.LanguageFor("config.yaml")
 )
