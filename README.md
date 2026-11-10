@@ -4,6 +4,13 @@
 
 界面与功能见 [设计文档](docs/design.md)，可交互原型见 [docs/prototype/index.html](docs/prototype/index.html)。
 
+## 安装
+
+从 [Releases](https://github.com/Owlbay/lanflow/releases) 下载：
+
+- **macOS**：Apple 芯片选 `lanflow-<版本>-arm64.dmg`，Intel 选 `-amd64.dmg`，把 Lanflow 拖到「应用程序」。安装包未经 Apple 签名公证，首次打开会被拦截：在「系统设置 › 隐私与安全性」里点「仍要打开」，或在终端执行 `xattr -dr com.apple.quarantine /Applications/Lanflow.app`。
+- **Windows**：运行 `lanflow-setup-<版本>-amd64.exe`。安装程序未签名，SmartScreen 提示时点「更多信息 › 仍要运行」。
+
 ## 功能
 
 - **开关与模式**：内核、系统代理（全局或 PAC）、TUN 三个独立开关，规则 / 全局 / 直连；TUN 通过权限组件 `lanflow-helper` 运行，应用本身不提权，IPv4 与 IPv6 一并接管
@@ -67,7 +74,17 @@ scripts/prepare-resources.sh          # 内核、权限组件、地理数据库 
 go tool mygo build                    # build/<平台>/Lanflow.app 与 .dmg
 ```
 
-Windows：`scripts/prepare-resources.sh windows amd64` 后在 Windows 上执行 `go tool mygo build`。正式签名、公证和发布标识（目前为占位的 `com.example.lanflow`）在发布阶段配置。
+Windows：`scripts/prepare-resources.sh windows amd64` 后在 Windows 上执行 `go tool mygo build`。
+
+### 发布
+
+把 `mygo.json` 的 `version` 改为新版本号并提交，然后推送同名 tag：
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一致，运行测试，构建 macOS arm64 / amd64 的 `.dmg` 和 Windows 安装程序，生成 `SHA256SUMS.txt`，并创建带自动更新说明的 Release。带 `-` 的 tag（如 `v0.2.0-beta.1`）发布为预发布版。
 
 ### 应用自动更新
 
