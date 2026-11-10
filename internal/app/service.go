@@ -59,6 +59,8 @@ type Service struct {
 	background   atomic.Bool // the window is out of sight (SetBackground, streams.go)
 
 	probeMu    sync.Mutex // debounces the automatic main-exit probe
+	selMu      sync.Mutex // guards selections (selections.go)
+	selections map[string]map[string]string
 	probeTimer *time.Timer
 
 	recheckMu    sync.Mutex // debounces the wake / network-change recheck (watch.go)

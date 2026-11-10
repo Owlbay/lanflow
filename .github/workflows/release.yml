@@ -21,6 +21,10 @@ jobs:
             echo "tag ${GITHUB_REF_NAME} does not match mygo.json version ${version}" >&2
             exit 1
           fi
+          if ! grep -q "const appVersion = \"${version}\"" internal/view/settings/page.go; then
+            echo "internal/view/settings/page.go appVersion does not match ${version}" >&2
+            exit 1
+          fi
 
   build-macos:
     name: Build macOS

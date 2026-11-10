@@ -288,6 +288,7 @@ func (s *Service) SelectProxy(group, name string) error {
 	if err != nil {
 		return fmt.Errorf(i18n.T("切换「%s」到「%s」失败：%v"), group, name, err)
 	}
+	s.rememberSelection(group, name)
 	s.refreshProxies()
 	s.scheduleMainProbe()
 	s.disconnectGroup(group)

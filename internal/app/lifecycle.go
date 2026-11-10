@@ -467,6 +467,7 @@ func (s *Service) reloadLocked() (err error) {
 // start or reload.
 func (s *Service) afterConfigChange() {
 	s.refreshProxies()
+	s.restoreSelections()
 	s.refreshRules()
 	s.refreshProviders()
 	s.rebuildRoutes()
