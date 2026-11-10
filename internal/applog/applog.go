@@ -10,6 +10,7 @@ package applog
 import (
 	"fmt"
 	"io"
+	"lanflow/internal/seqring"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -43,10 +44,9 @@ type Logger struct {
 	path string
 	f    *os.File
 	size int64
-	// entries is a ring of the newest maxEntries entries: head is the
-	// oldest, n how many are held (allocated on the first entry).
-	entries []model.LogEntry
-	head, n int
+	// entries is a ring of the newest maxEntries entries (allocated on the
+	// first entry), numbered for incremental reads (Since).
+	entries seqring.Ring[model.LogEntry]
 	onWrite func()
 	now     func() time.Time
 	errs    *ErrorLog // Error entries are also recorded here (errors.go)
@@ -55,7 +55,7 @@ type Logger struct {
 // Open opens (creating) dir/lanflow.log for appending. When the file cannot
 // be opened the logger still keeps entries in memory and err says why.
 func Open(dir string) (*Logger, error) {
-	l := &Logger{path: filepath.Join(dir, FileName), now: time.Now}
+	l := &Logger{path: filepath.Join(dir, FileName), now: time.Now, entries: seqring.NewLazy[model.LogEntry](maxEntries)}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return l, err
 	}
@@ -165,16 +165,10 @@ func (l *Logger) add(level, msg string, record bool) {
 
 // pushLocked appends e to the ring, dropping the oldest entry when full.
 func (l *Logger) pushLocked(e model.LogEntry) {
-	if l.entries == nil {
-		l.entries = make([]model.LogEntry, maxEntries)
+	if l.entries.Len() == 0 && l.entries.Seq() == 0 {
+		l.entries = seqring.NewLazy[model.LogEntry](maxEntries) // a Logger made without Open
 	}
-	if l.n < maxEntries {
-		l.entries[(l.head+l.n)%maxEntries] = e
-		l.n++
-		return
-	}
-	l.entries[l.head] = e
-	l.head = (l.head + 1) % maxEntries
+	l.entries.Push(e)
 }
 
 func (l *Logger) rotateLocked() {
@@ -191,14 +185,21 @@ func (l *Logger) Entries() []model.LogEntry {
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.n == 0 {
+	if l.entries.Len() == 0 {
 		return nil
 	}
-	out := make([]model.LogEntry, l.n)
-	for i := range out {
-		out[i] = l.entries[(l.head+i)%maxEntries]
+	return l.entries.OldestFirst()
+}
+
+// Since returns the entries after the cursor since (model.LogPage).
+func (l *Logger) Since(since uint64, limit int) model.LogPage {
+	if l == nil {
+		return model.LogPage{Reset: true}
 	}
-	return out
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	p := l.entries.Since(since, limit)
+	return model.LogPage{Entries: p.Items, Cursor: p.Cursor, Reset: p.Reset, More: p.More}
 }
 
 // Clear forgets the entries in memory (the file is kept).
@@ -207,7 +208,7 @@ func (l *Logger) Clear() {
 		return
 	}
 	l.mu.Lock()
-	l.entries, l.head, l.n = nil, 0, 0
+	l.entries.Reset()
 	l.mu.Unlock()
 }
 

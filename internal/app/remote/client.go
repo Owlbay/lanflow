@@ -1,10 +1,11 @@
 // Package remote is app.API over the local interface (internal/rpc): the
-// client the window will use once it runs in its own process
+// client the window uses when it runs in its own process
 // (docs/service-split.md S2), and the one `lanflow ctl` and `lanflow mcp`
-// use now.
+// use.
 //
-// client_gen.go holds the generated methods; OnChange and UpdateUIState
-// are written here.
+// client_gen.go holds the generated methods; OnChange, UpdateUIState and
+// the window process's extras (read cache, incremental lists) are
+// written here and in cache.go and mirror.go.
 package remote
 
 //go:generate go run ./apigen/gen
@@ -20,22 +21,30 @@ import (
 	"lanflow/internal/rpc"
 )
 
+// ErrDisconnected is returned once the connection is gone.
+var ErrDisconnected = errors.New("与澜流后台服务的连接已断开，正在重新连接")
+
 // Client implements app.API by calling a running Lanflow.
 //
 // Reads (methods without an error result) return zero values when the
 // call fails; LastError says why. Actions return the server's error, with
 // app.ErrHelperRequired mapped back so callers can test for it.
 type Client struct {
-	conn *rpc.Conn
+	o Options
 	// Timeout bounds every call; 0 = none (actions such as delay tests
 	// may take a while).
 	Timeout time.Duration
 
 	mu      sync.Mutex
+	conn    *rpc.Conn // nil while reconnecting
 	lastErr error
 	nextFn  int
 	fns     map[int]func(app.Topic)
 	subbed  bool
+	closed  bool
+
+	cache  *readCache // Options.Cache
+	mirror *mirror    // Options.Incremental
 }
 
 // Options describe the client to the server.
@@ -44,13 +53,28 @@ type Options struct {
 	Client  string // ui, ctl or mcp:<name>
 	Version string // this program's Lanflow version
 	Reveal  bool   // ask for sensitive reads (ctl --reveal)
+
+	// The window process sets these.
+
+	// Cache keeps the result of every read until a "changed" event of a
+	// topic it depends on (cache.go): views read the API on every frame.
+	Cache bool
+	// Incremental serves Connections, ClosedConnections, Logs and AppLogs
+	// from a copy kept current with the …Since methods (mirror.go).
+	Incremental bool
 }
 
 // Dial connects to the running Lanflow. rpc.ErrNotRunning means it is not
 // running.
 func Dial(ctx context.Context, o Options) (*Client, error) {
-	c := &Client{fns: map[int]func(app.Topic){}}
-	conn, err := rpc.Dial(ctx, rpc.DialOptions{DataDir: o.DataDir, Client: o.Client, Version: o.Version, Reveal: o.Reveal, OnEvent: c.event})
+	c := &Client{o: o, fns: map[int]func(app.Topic){}}
+	if o.Cache {
+		c.cache = newReadCache()
+	}
+	if o.Incremental {
+		c.mirror = newMirror()
+	}
+	conn, err := c.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -58,12 +82,30 @@ func Dial(ctx context.Context, o Options) (*Client, error) {
 	return c, nil
 }
 
-// Conn is the underlying connection, for the methods outside app.API
-// (PatchSettings, Undo, AuditLog, Methods).
-func (cl *Client) Conn() *rpc.Conn { return cl.conn }
+func (cl *Client) dial(ctx context.Context) (*rpc.Conn, error) {
+	return rpc.Dial(ctx, rpc.DialOptions{DataDir: cl.o.DataDir, Client: cl.o.Client, Version: cl.o.Version, Reveal: cl.o.Reveal,
+		OnEvent: cl.event})
+}
 
-// Close ends the connection.
-func (cl *Client) Close() error { return cl.conn.Close() }
+// Conn is the underlying connection, for the methods outside app.API
+// (PatchSettings, Undo, AuditLog, Methods); nil while reconnecting.
+func (cl *Client) Conn() *rpc.Conn {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	return cl.conn
+}
+
+// Close ends the connection (and stops reconnecting).
+func (cl *Client) Close() error {
+	cl.mu.Lock()
+	cl.closed = true
+	conn := cl.conn
+	cl.mu.Unlock()
+	if conn == nil {
+		return nil
+	}
+	return conn.Close()
+}
 
 // LastError is the error of the most recent failed call.
 func (cl *Client) LastError() error {
@@ -72,22 +114,58 @@ func (cl *Client) LastError() error {
 	return cl.lastErr
 }
 
-func (cl *Client) call(method string, args []any, outs ...any) error {
-	ctx := context.Background()
+func (cl *Client) setErr(err error) {
+	cl.mu.Lock()
+	cl.lastErr = err
+	cl.mu.Unlock()
+}
+
+func (cl *Client) ctx() (context.Context, context.CancelFunc) {
 	if cl.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, cl.Timeout)
-		defer cancel()
+		return context.WithTimeout(context.Background(), cl.Timeout)
 	}
-	err := cl.conn.CallAPI(ctx, method, args, outs...)
+	return context.WithCancel(context.Background())
+}
+
+func (cl *Client) call(method string, args []any, outs ...any) error {
+	if cl.mirror != nil && cl.mirror.serves(method) {
+		return cl.mirror.read(cl, method, outs)
+	}
+	if cl.cache == nil {
+		return cl.raw(method, args, outs...)
+	}
+	if cl.cache.get(method, args, outs) {
+		return nil
+	}
+	gen := cl.cache.generation()
+	err := cl.raw(method, args, outs...)
+	switch {
+	case cacheable(method):
+		if err == nil {
+			cl.cache.putAt(gen, method, args, outs)
+		}
+	case !uncachedRead(method):
+		cl.cache.clear() // an action: what it changed shows at once
+	}
+	return err
+}
+
+// raw calls the server, uncached.
+func (cl *Client) raw(method string, args []any, outs ...any) error {
+	conn := cl.Conn()
+	if conn == nil {
+		cl.setErr(ErrDisconnected)
+		return ErrDisconnected
+	}
+	ctx, cancel := cl.ctx()
+	defer cancel()
+	err := conn.CallAPI(ctx, method, args, outs...)
 	if err != nil {
 		var e *rpc.Error
 		if errors.As(err, &e) && e.Data != nil && e.Data.Kind == "helper-required" {
 			err = app.ErrHelperRequired
 		}
-		cl.mu.Lock()
-		cl.lastErr = err
-		cl.mu.Unlock()
+		cl.setErr(err)
 	}
 	return err
 }
@@ -101,9 +179,10 @@ func (cl *Client) OnChange(fn func(app.Topic)) (off func()) {
 	cl.fns[id] = fn
 	sub := !cl.subbed
 	cl.subbed = true
+	conn := cl.conn
 	cl.mu.Unlock()
-	if sub {
-		if err := cl.conn.Subscribe(context.Background()); err != nil {
+	if sub && conn != nil {
+		if err := conn.Subscribe(context.Background()); err != nil {
 			cl.mu.Lock()
 			cl.subbed, cl.lastErr = false, err
 			cl.mu.Unlock()
@@ -117,6 +196,13 @@ func (cl *Client) OnChange(fn func(app.Topic)) (off func()) {
 }
 
 func (cl *Client) event(topic string) {
+	t := app.Topic(topic)
+	if cl.cache != nil {
+		cl.cache.invalidate(t)
+	}
+	if cl.mirror != nil {
+		cl.mirror.invalidate(t)
+	}
 	cl.mu.Lock()
 	fns := make([]func(app.Topic), 0, len(cl.fns))
 	for _, fn := range cl.fns {
@@ -124,7 +210,7 @@ func (cl *Client) event(topic string) {
 	}
 	cl.mu.Unlock()
 	for _, fn := range fns {
-		fn(app.Topic(topic))
+		fn(t)
 	}
 }
 
@@ -133,9 +219,17 @@ func (cl *Client) event(topic string) {
 // the window, so there is nothing to merge.
 func (cl *Client) UpdateUIState(fn func(*model.UIState)) error {
 	var u model.UIState
-	if err := cl.call("UIState", nil, &u); err != nil {
+	if err := cl.raw("UIState", nil, &u); err != nil {
 		return err
 	}
 	fn(&u)
-	return cl.conn.Call(context.Background(), "PatchUIState", []any{u}, nil)
+	conn := cl.Conn()
+	if conn == nil {
+		return ErrDisconnected
+	}
+	err := conn.Call(context.Background(), "PatchUIState", []any{u}, nil)
+	if cl.cache != nil {
+		cl.cache.drop("UIState")
+	}
+	return err
 }

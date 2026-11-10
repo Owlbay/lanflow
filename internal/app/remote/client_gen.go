@@ -46,6 +46,26 @@ func (cl *Client) Logs() (res0 []model.LogEntry) {
 	return
 }
 
+func (cl *Client) ConnectionsSince(since uint64) (res0 model.ConnDelta) {
+	_ = cl.call("ConnectionsSince", []any{since}, &res0)
+	return
+}
+
+func (cl *Client) ClosedConnectionsSince(since uint64, limit int) (res0 model.ConnPage) {
+	_ = cl.call("ClosedConnectionsSince", []any{since, limit}, &res0)
+	return
+}
+
+func (cl *Client) LogsSince(since uint64, limit int) (res0 model.LogPage) {
+	_ = cl.call("LogsSince", []any{since, limit}, &res0)
+	return
+}
+
+func (cl *Client) AppLogsSince(since uint64, limit int) (res0 model.LogPage) {
+	_ = cl.call("AppLogsSince", []any{since, limit}, &res0)
+	return
+}
+
 func (cl *Client) Rules() (res0 []model.Rule) {
 	_ = cl.call("Rules", nil, &res0)
 	return

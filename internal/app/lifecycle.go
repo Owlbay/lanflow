@@ -335,7 +335,7 @@ func (s *Service) launchLocked(bin string, set model.Settings, helperOK bool, pr
 	s.state.runningTUN = useTUN
 	st.Up, st.Down, st.TotalUp, st.TotalDown, st.Memory, st.Connections = 0, 0, 0, 0, 0, 0
 	s.state.up, s.state.down = nil, nil
-	s.state.conns = nil
+	s.setConnsLocked(nil)
 	s.state.tracker = connTracker{}
 	s.state.youDone = false
 	s.mu.Unlock()
@@ -405,7 +405,7 @@ func (s *Service) stopLocked() (err error) {
 	st.TUN = false
 	s.state.runningTUN = false
 	st.Up, st.Down, st.Memory, st.Connections = 0, 0, 0, 0
-	s.state.conns = nil
+	s.setConnsLocked(nil)
 	s.state.routes = nil
 	s.state.tracker = connTracker{}
 	if s.state.coreBin == "" {
@@ -580,7 +580,7 @@ func (s *Service) handleCrash(cause error) {
 	s.state.st.Core = model.CoreError
 	s.state.st.CoreError = msg
 	s.state.st.Up, s.state.st.Down, s.state.st.Connections = 0, 0, 0
-	s.state.conns = nil
+	s.setConnsLocked(nil)
 	s.state.routes = nil
 	s.mu.Unlock()
 	s.em.emit(TopicStatus, TopicConns, TopicExits)

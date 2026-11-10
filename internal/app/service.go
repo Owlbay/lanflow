@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"lanflow/internal/seqring"
 	"net"
 	"os"
 	"path/filepath"
@@ -114,7 +115,8 @@ type state struct {
 	subsUpdating map[string]bool
 
 	conns   []model.Connection
-	closed  ring[model.Connection] // the newest closedRing closed connections
+	connVer *seqring.Versions[model.Connection] // versions of conns for ConnectionsSince (setConnsLocked)
+	closed  ring[model.Connection]              // the newest closedRing closed connections
 	tracker connTracker
 
 	logs ring[model.LogEntry] // the newest logRing core log lines
@@ -278,6 +280,7 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		exitEntry:    map[string]string{},
 		logs:         newRing[model.LogEntry](logRing),
 		closed:       newRing[model.Connection](closedRing),
+		connVer:      newConnVersions(),
 		overrides:    model.Overrides{PerSub: map[string]string{}},
 	}
 	s.state.st = model.Status{Core: model.CoreStopped, Mode: set.Mode, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN}
@@ -691,7 +694,7 @@ func (s *Service) Connections() []model.Connection {
 func (s *Service) ClosedConnections() []model.Connection {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return copyConns(s.state.closed.newestFirst())
+	return copyConns(s.state.closed.NewestFirst())
 }
 
 func copyConns(in []model.Connection) []model.Connection {
@@ -703,10 +706,43 @@ func copyConns(in []model.Connection) []model.Connection {
 	return out
 }
 
+// ConnectionsSince implements API.ConnectionsSince.
+func (s *Service) ConnectionsSince(since uint64) model.ConnDelta {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return connDelta(s.state.connVer, s.state.conns, since)
+}
+
+// ClosedConnectionsSince implements API.ClosedConnectionsSince.
+func (s *Service) ClosedConnectionsSince(since uint64, limit int) model.ConnPage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.state.closed.Since(since, limit)
+	return model.ConnPage{Items: copyConns(p.Items), Cursor: p.Cursor, Reset: p.Reset, More: p.More}
+}
+
+// LogsSince implements API.LogsSince.
+func (s *Service) LogsSince(since uint64, limit int) model.LogPage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.state.logs.Since(since, limit)
+	return model.LogPage{Entries: p.Items, Cursor: p.Cursor, Reset: p.Reset, More: p.More}
+}
+
+// setConnsLocked replaces the active connections and records what changed
+// for ConnectionsSince.
+func (s *Service) setConnsLocked(c []model.Connection) {
+	s.state.conns = c
+	if s.state.connVer == nil {
+		s.state.connVer = newConnVersions()
+	}
+	s.state.connVer.Update(c)
+}
+
 func (s *Service) Logs() []model.LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.state.logs.oldestFirst()
+	return s.state.logs.OldestFirst()
 }
 
 func (s *Service) Rules() []model.Rule {

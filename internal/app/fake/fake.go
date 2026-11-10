@@ -22,6 +22,7 @@ import (
 	"lanflow/internal/geo"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/seqring"
 )
 
 // Fake implements app.API.
@@ -35,27 +36,31 @@ type Fake struct {
 	conns          []model.Connection
 	closed         []model.Connection
 	logs           []model.LogEntry
-	rules          []model.Rule
-	custom         []model.CustomRule
-	provs          []model.RuleProvider
-	pprovs         []model.ProxyProvider
-	set            model.Settings
-	ovl            []model.Override // the override list; Overrides() derives the legacy views
-	sites          []model.SiteCheck
-	notices        []app.Notice
-	helper         bool
-	subsFns        map[int]func(app.Topic)
-	nextFn         int
-	stop           chan struct{}
-	Delay          time.Duration // simulated action latency (default 600 ms; 0 in tests via NewInstant)
-	coreDL         model.CoreDownload
-	leak           model.LeakResult      // 泄漏检查 result (RunLeakCheck)
-	probe          model.ProbeState      // 检测 page state (probe.go)
-	statsReset     bool                  // ResetTrafficStats was called: TrafficStats is empty
-	f2             *feat2                // WebDAV backup and mirror state (feat2.go), allocated on first use
-	cores          []model.InstalledCore // installed Mihomo versions (CoreReleases / InstalledCores / UseCore…)
-	cachesCleaned  bool                  // CleanCaches was called: CacheUsage reports the core cache only
-	syncTest       *SyncTest             // configuration sync answers (configsync.go)
+	// sequence numbers for the incremental reads (pages.go)
+	logTotal, logEpoch uint64
+	closedTotal        uint64
+	connVer            *seqring.Versions[model.Connection]
+	rules              []model.Rule
+	custom             []model.CustomRule
+	provs              []model.RuleProvider
+	pprovs             []model.ProxyProvider
+	set                model.Settings
+	ovl                []model.Override // the override list; Overrides() derives the legacy views
+	sites              []model.SiteCheck
+	notices            []app.Notice
+	helper             bool
+	subsFns            map[int]func(app.Topic)
+	nextFn             int
+	stop               chan struct{}
+	Delay              time.Duration // simulated action latency (default 600 ms; 0 in tests via NewInstant)
+	coreDL             model.CoreDownload
+	leak               model.LeakResult      // 泄漏检查 result (RunLeakCheck)
+	probe              model.ProbeState      // 检测 page state (probe.go)
+	statsReset         bool                  // ResetTrafficStats was called: TrafficStats is empty
+	f2                 *feat2                // WebDAV backup and mirror state (feat2.go), allocated on first use
+	cores              []model.InstalledCore // installed Mihomo versions (CoreReleases / InstalledCores / UseCore…)
+	cachesCleaned      bool                  // CleanCaches was called: CacheUsage reports the core cache only
+	syncTest           *SyncTest             // configuration sync answers (configsync.go)
 }
 
 var _ app.API = (*Fake)(nil)
@@ -174,6 +179,7 @@ func build() *Fake {
 	}
 	for i := 0; i < 40; i++ {
 		f.logs = append(f.logs, f.genLog(now.Add(-time.Duration(40-i)*time.Second)))
+		f.logTotal++
 	}
 	return f
 }
@@ -232,34 +238,41 @@ func (f *Fake) loop() {
 			return
 		case <-t.C:
 		}
-		f.mu.Lock()
-		if f.st.Core == model.CoreRunning {
-			u, d := int64(5e3+rand.Intn(60e3)), int64(100e3+rand.Intn(2500e3))
-			f.up, f.down = append(f.up[1:], u), append(f.down[1:], d)
-			f.st.Up, f.st.Down = u, d
-			f.st.TotalUp += u
-			f.st.TotalDown += d
-			for i := range f.conns {
-				c := &f.conns[i]
-				if rand.Float64() < .4 {
-					c.DownSpeed, c.UpSpeed = int64(rand.Intn(300e3)), int64(rand.Intn(8e3))
-				} else {
-					c.DownSpeed, c.UpSpeed = 0, 0
-				}
-				c.Download += c.DownSpeed
-				c.Upload += c.UpSpeed
+		f.Tick()
+	}
+}
+
+// Tick runs one second of the simulation: traffic, connection counters
+// and, mostly, a new log line (New ticks by itself; tests call it).
+func (f *Fake) Tick() {
+	f.mu.Lock()
+	if f.st.Core == model.CoreRunning {
+		u, d := int64(5e3+rand.Intn(60e3)), int64(100e3+rand.Intn(2500e3))
+		f.up, f.down = append(f.up[1:], u), append(f.down[1:], d)
+		f.st.Up, f.st.Down = u, d
+		f.st.TotalUp += u
+		f.st.TotalDown += d
+		for i := range f.conns {
+			c := &f.conns[i]
+			if rand.Float64() < .4 {
+				c.DownSpeed, c.UpSpeed = int64(rand.Intn(300e3)), int64(rand.Intn(8e3))
+			} else {
+				c.DownSpeed, c.UpSpeed = 0, 0
 			}
-			f.st.Connections = len(f.conns)
-			if rand.Float64() < .7 {
-				f.logs = append(f.logs, f.genLog(time.Now()))
-				if len(f.logs) > 1000 {
-					f.logs = f.logs[1:]
-				}
+			c.Download += c.DownSpeed
+			c.Upload += c.UpSpeed
+		}
+		f.st.Connections = len(f.conns)
+		if rand.Float64() < .7 {
+			f.logs = append(f.logs, f.genLog(time.Now()))
+			f.logTotal++
+			if len(f.logs) > 1000 {
+				f.logs = f.logs[1:]
 			}
 		}
-		f.mu.Unlock()
-		f.emit(app.TopicTraffic, app.TopicStatus, app.TopicConns, app.TopicLogs, app.TopicExits)
 	}
+	f.mu.Unlock()
+	f.emit(app.TopicTraffic, app.TopicStatus, app.TopicConns, app.TopicLogs, app.TopicExits)
 }
 
 func (f *Fake) emit(ts ...app.Topic) {
@@ -957,6 +970,7 @@ func (f *Fake) CloseConnection(id string) error {
 			if c.ID == id {
 				c.ClosedAt = time.Now()
 				f.closed = append([]model.Connection{c}, f.closed...)
+				f.closedTotal++
 				f.conns = append(f.conns[:i], f.conns[i+1:]...)
 				return nil
 			}
@@ -965,9 +979,21 @@ func (f *Fake) CloseConnection(id string) error {
 	}, app.TopicConns)
 }
 func (f *Fake) CloseAllConnections() error {
-	return f.do(func() error { f.closed = append(f.conns, f.closed...); f.conns = nil; return nil }, app.TopicConns)
+	return f.do(func() error {
+		f.closed = append(f.conns, f.closed...)
+		f.closedTotal += uint64(len(f.conns))
+		f.conns = nil
+		return nil
+	}, app.TopicConns)
 }
-func (f *Fake) ClearLogs() { f.mu.Lock(); f.logs = nil; f.mu.Unlock(); f.emit(app.TopicLogs) }
+func (f *Fake) ClearLogs() {
+	f.mu.Lock()
+	f.logs = nil
+	f.logTotal++
+	f.logEpoch = f.logTotal
+	f.mu.Unlock()
+	f.emit(app.TopicLogs)
+}
 
 // AppLogs returns a few sample entries of Lanflow's own log.
 func (f *Fake) AppLogs() []model.LogEntry {

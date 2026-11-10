@@ -246,7 +246,7 @@ func logLevel(t string) string {
 func (s *Service) onLog(l controller.Log) {
 	e := model.LogEntry{Time: s.d.now(), Level: logLevel(l.Type), Payload: l.Payload}
 	s.mu.Lock()
-	s.state.logs.push(e)
+	s.state.logs.Push(e)
 	s.mu.Unlock()
 	s.em.emit(TopicLogs)
 }
@@ -256,9 +256,9 @@ func (s *Service) onConnections(c controller.Connections) {
 	s.mu.Lock()
 	hadConns := len(s.state.conns) > 0
 	active, closed := s.state.tracker.update(c, now)
-	s.state.conns = active
+	s.setConnsLocked(active)
 	for i := len(closed) - 1; i >= 0; i-- { // closed is newest first
-		s.state.closed.push(closed[i])
+		s.state.closed.Push(closed[i])
 	}
 	s.state.st.Connections = len(active)
 	s.state.st.TotalUp, s.state.st.TotalDown = c.UploadTotal, c.DownloadTotal
@@ -280,7 +280,7 @@ func (s *Service) onConnections(c controller.Connections) {
 // ClearLogs empties the log ring.
 func (s *Service) ClearLogs() {
 	s.mu.Lock()
-	s.state.logs.reset()
+	s.state.logs.Reset()
 	s.mu.Unlock()
 	s.em.emit(TopicLogs)
 }
