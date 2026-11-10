@@ -64,6 +64,8 @@ func init() {
 		"TUN 模式开关":                     "TUN mode switch",
 		"接管所有应用的流量":                    "Captures the traffic of every app",
 		"首次开启需安装权限组件":                  "The first time needs the helper installed",
+		"未能经物理网卡实测你的位置，地图上的「你」按系统时区推测": "Your location was not measured over the physical network interface; “You” on the map is a guess from the system time zone",
+		"你的位置：未知": "Your location: unknown",
 	} {
 		en[k] = v
 	}
