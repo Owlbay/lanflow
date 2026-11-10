@@ -38,6 +38,9 @@ func backend(lang string) app.API {
 }
 
 func main() {
+	if code, ok := runSubcommand(os.Args[1:]); ok {
+		os.Exit(code)
+	}
 	if !mygo.App.RequestSingleInstanceLock() {
 		return // the running instance takes over
 	}
