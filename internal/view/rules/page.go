@@ -4,7 +4,10 @@
 package rules
 
 import (
+	"encoding/binary"
 	"fmt"
+	"hash/fnv"
+	"io"
 	"sort"
 	"strings"
 	"sync"
@@ -33,6 +36,10 @@ type Page struct {
 	testOpen bool
 	testHost string
 	testing  bool
+
+	// sub caches which subscription rules match the query, in the order
+	// shown; see subRows.
+	sub subCache
 
 	mu         sync.Mutex // guards the fields below, written by jobs
 	testResult *model.RuleMatch
@@ -75,12 +82,13 @@ func (p *Page) View(c *ui.Context) {
 		// No page scrolling (docs/design.md §4): the subscription rules
 		// table takes the height left and scrolls inside; a long list
 		// of custom rules scrolls in its own box.
+		rules := e.API.Rules()
 		ui.Column(c).Grow(1).Padding(4, 24, 20, 24).Gap(20).Clip().Children(func() {
 			if p.filter != 2 {
-				p.customSection(c, t)
+				p.customSection(c, t, rules)
 			}
 			if p.filter != 1 {
-				p.subSection(c, t)
+				p.subSection(c, t, rules)
 				p.providers(c, t)
 			}
 		})
@@ -104,8 +112,11 @@ func (p *Page) tools(c *ui.Context, running bool) {
 	})
 }
 
-func (p *Page) matches(parts ...string) bool {
-	q := strings.ToLower(strings.TrimSpace(p.query))
+// lowerQuery is the query as matches compares it.
+func (p *Page) lowerQuery() string { return strings.ToLower(strings.TrimSpace(p.query)) }
+
+// matches reports whether any of parts contains q, a lowerQuery.
+func matches(q string, parts ...string) bool {
 	if q == "" {
 		return true
 	}
@@ -119,10 +130,9 @@ func (p *Page) matches(parts ...string) bool {
 
 // ---- custom rules ----
 
-func (p *Page) customSection(c *ui.Context, t *ui.Theme) {
+func (p *Page) customSection(c *ui.Context, t *ui.Theme, runtime []model.Rule) {
 	e := p.e
 	all := e.API.CustomRules()
-	runtime := e.API.Rules()
 	hits := map[string]model.Rule{}
 	for _, r := range runtime {
 		if r.Custom {
@@ -130,8 +140,9 @@ func (p *Page) customSection(c *ui.Context, t *ui.Theme) {
 		}
 	}
 	var list []model.CustomRule
+	lq := p.lowerQuery()
 	for _, r := range all {
-		if p.matches(r.Type, env.RuleTypeName(r.Type), r.Payload, r.Target, env.TargetName(r.Target)) {
+		if matches(lq, r.Type, env.RuleTypeName(r.Type), r.Payload, r.Target, env.TargetName(r.Target)) {
 			list = append(list, r)
 		}
 	}
@@ -192,22 +203,85 @@ func (p *Page) customRows(c *ui.Context, t *ui.Theme, list, all []model.CustomRu
 
 // ---- subscription rules ----
 
-func (p *Page) subSection(c *ui.Context, t *ui.Theme) {
+// subCache is which subscription rules match the query, as positions in
+// Rules() in the order shown, for the rules, query and order it was made
+// for. The hit counts change every refresh without changing which rules
+// there are, so the rows are taken fresh from Rules() at those positions;
+// only the order by hits is sorted again each build.
+type subCache struct {
+	n     int    // len(Rules())
+	sig   uint64 // of the rules' identities (rulesSig)
+	query string // lowerQuery
+	lang  string // TargetName translates 直连 / 拒绝
+	sort  ui.SortOrder
+	total int   // subscription rules
+	pos   []int // matching positions, in order
+}
+
+var zero [1]byte
+
+// rulesSig fingerprints which rules there are (not their hit counts).
+func rulesSig(rules []model.Rule) uint64 {
+	h := fnv.New64a()
+	var b [9]byte
+	for _, r := range rules {
+		binary.LittleEndian.PutUint64(b[:8], uint64(r.Index))
+		b[8] = 0
+		if r.Custom {
+			b[8] = 1
+		}
+		h.Write(b[:])
+		for _, s := range [...]string{r.Type, r.Payload, r.Proxy} {
+			io.WriteString(h, s)
+			h.Write(zero[:])
+		}
+	}
+	return h.Sum64()
+}
+
+// subRows returns the subscription rules shown and how many there are.
+func (p *Page) subRows(rules []model.Rule) (rows []model.Rule, total int) {
+	sc := &p.sub
+	lq := p.lowerQuery()
+	sig := rulesSig(rules)
+	byHits := p.sort.Column == "hits"
+	if sc.pos == nil || sc.n != len(rules) || sc.sig != sig || sc.query != lq || sc.lang != i18n.Lang() || (!byHits && sc.sort != p.sort) {
+		*sc = subCache{n: len(rules), sig: sig, query: lq, lang: i18n.Lang(), sort: p.sort, pos: []int{}}
+		var sub []model.Rule
+		var at []int
+		for i, r := range rules {
+			if r.Custom {
+				continue
+			}
+			sc.total++
+			if matches(lq, r.Type, r.Payload, r.Proxy, env.TargetName(r.Proxy)) {
+				sub = append(sub, r)
+				at = append(at, i)
+			}
+		}
+		// Sort positions with their rules.
+		idx := make([]int, len(sub))
+		for i := range idx {
+			idx[i] = i
+		}
+		sort.SliceStable(idx, func(i, j int) bool { return ruleLess(sub[idx[i]], sub[idx[j]], p.sort) })
+		for _, i := range idx {
+			sc.pos = append(sc.pos, at[i])
+		}
+	}
+	rows = make([]model.Rule, len(sc.pos))
+	for i, at := range sc.pos {
+		rows[i] = rules[at]
+	}
+	if byHits {
+		sortRules(rows, p.sort)
+	}
+	return rows, sc.total
+}
+
+func (p *Page) subSection(c *ui.Context, t *ui.Theme, rules []model.Rule) {
 	e := p.e
-	var sub []model.Rule
-	for _, r := range e.API.Rules() {
-		if !r.Custom {
-			sub = append(sub, r)
-		}
-	}
-	total := len(sub)
-	rows := sub[:0:0]
-	for _, r := range sub {
-		if p.matches(r.Type, r.Payload, r.Proxy, env.TargetName(r.Proxy)) {
-			rows = append(rows, r)
-		}
-	}
-	sortRules(rows, p.sort)
+	rows, total := p.subRows(rules)
 	subName := ""
 	for _, s := range e.API.Subscriptions() {
 		if s.Current {
@@ -297,18 +371,20 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, r model.Rule, col int, q string)
 }
 
 func sortRules(rows []model.Rule, s ui.SortOrder) {
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if s.Descending {
-			a, b = b, a
+	sort.SliceStable(rows, func(i, j int) bool { return ruleLess(rows[i], rows[j], s) })
+}
+
+// ruleLess orders rules by s: by hits or by position.
+func ruleLess(a, b model.Rule, s ui.SortOrder) bool {
+	if s.Descending {
+		a, b = b, a
+	}
+	if s.Column == "hits" {
+		if a.HitCount != b.HitCount {
+			return a.HitCount < b.HitCount
 		}
-		if s.Column == "hits" {
-			if a.HitCount != b.HitCount {
-				return a.HitCount < b.HitCount
-			}
-		}
-		return a.Index < b.Index
-	})
+	}
+	return a.Index < b.Index
 }
 
 // ---- rule providers ----
