@@ -1,7 +1,9 @@
 package app
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	"lanflow/internal/model"
 	"lanflow/internal/profile"
@@ -55,5 +57,76 @@ func TestImportSnapsAutoUpdateInterval(t *testing.T) {
 	}
 	if got, _ := h.store.Get(cur.ID); got.AutoUpdateHours != 0 {
 		t.Fatalf("negative must turn auto-update off, got %d", got.AutoUpdateHours)
+	}
+}
+
+// A failing auto update is retried with a backoff of at least an hour, not
+// on every tick, and the same error raises one system notification.
+func TestAutoUpdateFailureBacksOff(t *testing.T) {
+	h := newHarness(t, nil)
+	cur, _ := h.store.Current()
+	cur.AutoUpdateHours = 6
+	_, _ = h.store.Put(cur)
+	now := time.Now()
+	h.s.d.now = func() time.Time { return now }
+	h.prof.mu.Lock()
+	h.prof.fetchErr = errors.New("connection refused")
+	h.prof.mu.Unlock()
+	attempts := func() int {
+		h.s.mu.Lock()
+		defer h.s.mu.Unlock()
+		return h.s.state.autoFail[cur.ID].failures
+	}
+	systemNotices := func() int {
+		n := 0
+		for _, x := range h.s.TakeNotices() {
+			if x.System {
+				n++
+			}
+		}
+		return n
+	}
+
+	h.s.runAutoUpdates()
+	if attempts() != 1 || systemNotices() != 1 {
+		t.Fatalf("first failure: attempts %d", attempts())
+	}
+	for i := 0; i < 5; i++ { // 10-minute ticks within the hour: no retry
+		now = now.Add(autoUpdateTick)
+		h.s.runAutoUpdates()
+	}
+	if attempts() != 1 {
+		t.Fatalf("retried within the backoff: %d attempts", attempts())
+	}
+	now = now.Add(time.Hour)
+	h.s.runAutoUpdates()
+	if attempts() != 2 || systemNotices() != 0 {
+		t.Fatalf("second failure: attempts %d (or a repeated notification)", attempts())
+	}
+	now = now.Add(time.Hour) // the backoff doubled to 2 h
+	h.s.runAutoUpdates()
+	if attempts() != 2 {
+		t.Fatalf("backoff did not double: %d attempts", attempts())
+	}
+
+	h.prof.mu.Lock()
+	h.prof.fetchErr = nil
+	h.prof.fetched = profile.Fetched{Data: []byte("proxies: []\n")}
+	h.prof.mu.Unlock()
+	now = now.Add(2 * time.Hour)
+	h.s.runAutoUpdates()
+	h.s.mu.Lock()
+	_, still := h.s.state.autoFail[cur.ID]
+	h.s.mu.Unlock()
+	if still {
+		t.Fatal("success did not clear the failure record")
+	}
+}
+
+func TestRetryAfter(t *testing.T) {
+	for n, want := range map[int]time.Duration{1: time.Hour, 2: 2 * time.Hour, 3: 4 * time.Hour, 4: 6 * time.Hour, 9: 6 * time.Hour} {
+		if got := retryAfter(n, 6*time.Hour); got != want {
+			t.Errorf("retryAfter(%d) = %v, want %v", n, got, want)
+		}
 	}
 }

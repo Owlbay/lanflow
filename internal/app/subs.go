@@ -419,24 +419,77 @@ func (s *Service) autoUpdateLoop() {
 	}
 }
 
+// autoUpdateFailure remembers failed automatic updates of a subscription,
+// whose UpdatedAt does not move on failure: without it a failing update
+// would be retried (and notified) on every 10-minute tick.
+type autoUpdateFailure struct {
+	lastAttempt time.Time
+	failures    int    // consecutive failures
+	notified    string // the error last raised as a system notification
+}
+
+// autoRetryMin is the first wait after a failed automatic update; it
+// doubles with each further failure, up to the subscription's own interval.
+const autoRetryMin = time.Hour
+
+// retryAfter is the wait after n consecutive failures of a subscription
+// updating every interval.
+func retryAfter(n int, interval time.Duration) time.Duration {
+	d := autoRetryMin
+	for i := 1; i < n && d < interval; i++ {
+		d *= 2
+	}
+	if d > interval && interval >= autoRetryMin {
+		d = interval
+	}
+	return d
+}
+
 // runAutoUpdates updates the subscriptions whose interval has elapsed and
-// reports failures as notices.
+// reports failures as notices: once per distinct error, retrying with an
+// exponential backoff (at least an hour) rather than on every tick.
 func (s *Service) runAutoUpdates() {
 	now := s.d.now()
 	for _, sub := range s.d.store.List() {
 		if sub.Source != urlSubscriptionK || sub.AutoUpdateHours <= 0 {
 			continue
 		}
-		if now.Sub(sub.UpdatedAt) < time.Duration(sub.AutoUpdateHours)*time.Hour {
+		interval := time.Duration(sub.AutoUpdateHours) * time.Hour
+		if now.Sub(sub.UpdatedAt) < interval {
+			continue
+		}
+		s.mu.Lock()
+		f, failed := s.state.autoFail[sub.ID]
+		s.mu.Unlock()
+		if failed && now.Sub(f.lastAttempt) < retryAfter(f.failures, interval) {
 			continue
 		}
 		if s.rootCtx.Err() != nil {
 			return
 		}
 		s.alog.Infof("subscription %q due for its %dh auto update", sub.Name, sub.AutoUpdateHours)
-		if err := s.UpdateSubscription(sub.ID); err != nil {
-			s.notify(Notice{Kind: "error", Title: fmt.Sprintf(i18n.T("订阅「%s」自动更新失败"), sub.Name), Detail: err.Error(), Subject: sub.ID, System: true})
+		err := s.UpdateSubscription(sub.ID)
+		s.mu.Lock()
+		if err == nil {
+			delete(s.state.autoFail, sub.ID)
+			s.mu.Unlock()
+			continue
 		}
+		if s.state.autoFail == nil {
+			s.state.autoFail = map[string]autoUpdateFailure{}
+		}
+		f = s.state.autoFail[sub.ID]
+		f.lastAttempt = now
+		f.failures++
+		repeat := f.notified == err.Error()
+		f.notified = err.Error()
+		s.state.autoFail[sub.ID] = f
+		s.mu.Unlock()
+		if repeat {
+			s.alog.Warnf("subscription %q auto update failed again (%d in a row): %v", sub.Name, f.failures, err)
+			continue
+		}
+		s.notify(Notice{Kind: "error", Title: fmt.Sprintf(i18n.T("订阅「%s」自动更新失败"), sub.Name), Detail: err.Error(), Subject: sub.ID, System: true})
 	}
 }
 

@@ -141,10 +141,7 @@ func (s *Service) systemChanged(reason string) {
 	if s.recheckTimer != nil {
 		s.recheckTimer.Stop()
 	}
-	s.recheckTimer = time.AfterFunc(recheckDebounce, func() {
-		if s.rootCtx.Err() != nil {
-			return
-		}
+	s.recheckTimer = s.afterFunc(recheckDebounce, func() {
 		s.alog.Infof("%s: rechecking core, system proxy and network", reason)
 		s.recheck()
 	})

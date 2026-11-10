@@ -70,6 +70,13 @@ type Service struct {
 
 	probeExitMu sync.Mutex // one 检测 probe uses the probe group at a time (probe.go)
 
+	f2 feat2State // Wi-Fi rules and WebDAV backup (feat2state.go); its own lock
+
+	// bgMu guards closing against wg.Add: once Shutdown sets closing, no
+	// new background goroutine or timer callback joins wg (Add racing Wait).
+	bgMu    sync.Mutex
+	closing bool
+
 	stats *statsStore // 流量统计 (stats.go); its own lock
 	cores coresState  // installed Mihomo versions and release lists (cores.go); its own lock
 }
@@ -139,6 +146,7 @@ type state struct {
 	runningTUN    bool        // the running config has TUN enabled
 	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
 	lastAutoStart time.Time
+	autoFail      map[string]autoUpdateFailure // subscription ID → failed auto updates (subs.go)
 	youDone       bool // You() fetched (or being fetched) for this start
 	youBusy       bool // a fetchYou loop is running
 	youGen        int  // bumps to stop an older fetchYou loop
@@ -283,11 +291,38 @@ func (s *Service) run() {
 }
 
 func (s *Service) goBackground(fn func()) {
-	s.wg.Add(1)
+	if !s.enterBackground() {
+		return
+	}
 	go func() {
 		defer s.wg.Done()
 		fn()
 	}()
+}
+
+// enterBackground adds one to wg unless Shutdown is waiting for it; the
+// caller must call wg.Done when it returns true.
+func (s *Service) enterBackground() bool {
+	s.bgMu.Lock()
+	defer s.bgMu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.wg.Add(1)
+	return true
+}
+
+// afterFunc is time.AfterFunc whose callback is tracked by wg (Shutdown
+// waits for a callback that already started) and skipped once the service
+// is shutting down.
+func (s *Service) afterFunc(d time.Duration, fn func()) *time.Timer {
+	return time.AfterFunc(d, func() {
+		if s.rootCtx.Err() != nil || !s.enterBackground() {
+			return
+		}
+		defer s.wg.Done()
+		fn()
+	})
 }
 
 // bootstrap runs once after creation: core version, helper availability,
@@ -491,7 +526,7 @@ func (s *Service) Status() model.Status {
 		s.state.hintDone = true
 		if !s.state.hintSaving {
 			s.state.hintSaving = true
-			go s.saveHintDone()
+			s.goBackground(s.saveHintDone)
 		}
 	}
 	st.ShowProxyHint = st.Core == model.CoreRunning && !st.SystemProxy && !s.state.hintDone
@@ -738,6 +773,9 @@ func (s *Service) Shutdown() {
 		s.mu.Unlock()
 		s.opMu.Unlock()
 
+		s.bgMu.Lock()
+		s.closing = true
+		s.bgMu.Unlock()
 		s.wg.Wait()
 		s.alog.Infof("Lanflow exited cleanly (system proxy restored: %v)", ours)
 		s.alog.Close()

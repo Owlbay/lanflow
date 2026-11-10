@@ -283,10 +283,7 @@ func (s *Service) scheduleMainProbe() {
 	if s.probeTimer != nil {
 		s.probeTimer.Stop()
 	}
-	s.probeTimer = time.AfterFunc(probeDebounce, func() {
-		if s.rootCtx.Err() != nil {
-			return
-		}
+	s.probeTimer = s.afterFunc(probeDebounce, func() {
 		s.mu.Lock()
 		snap := s.state.proxies
 		mode := s.state.st.Mode
