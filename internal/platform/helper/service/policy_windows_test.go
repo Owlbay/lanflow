@@ -5,8 +5,10 @@ package service
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
+	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
 )
 
@@ -83,4 +85,19 @@ func TestOpenLogFileWindowsRefusesLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = w.Close()
+}
+
+func TestCheckControllerRefusesExistingPipe(t *testing.T) {
+	name := `\\.\pipe\lanflow-test-` + strconv.Itoa(os.Getpid())
+	if _, err := checkController(nil, name); err != nil {
+		t.Fatalf("free pipe name refused: %v", err)
+	}
+	l, err := winio.ListenPipe(name, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if _, err := checkController(nil, name); err == nil {
+		t.Fatal("squatted pipe name accepted")
+	}
 }

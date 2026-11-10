@@ -52,11 +52,7 @@ func uninstall(ctx context.Context) error {
 
 // helperBinary prefers the installed copy, else the one next to the app.
 func helperBinary() (string, error) {
-	pf := os.Getenv("ProgramFiles")
-	if pf == "" {
-		pf = `C:\Program Files`
-	}
-	installedBin := filepath.Join(pf, "Lanflow Helper", "lanflow-helper.exe")
+	installedBin := installedHelperPath()
 	if fi, err := os.Stat(installedBin); err == nil && fi.Mode().IsRegular() {
 		return installedBin, nil
 	}

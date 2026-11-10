@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -139,5 +140,25 @@ func checkController(_ *Policy, controller string) (string, error) {
 	if strings.ContainsAny(controller[len(prefix):], `\/`) {
 		return "", fmt.Errorf("控制器管道名无效: %s", controller)
 	}
+	if pipeExists(controller) {
+		// Another process already serves this name: Mihomo could not
+		// create it as first instance, and the app would talk to that
+		// process instead.
+		return "", fmt.Errorf("控制器管道已被其他进程占用: %s", controller)
+	}
 	return controller, nil
+}
+
+var procWaitNamedPipeW = windows.NewLazySystemDLL("kernel32.dll").NewProc("WaitNamedPipeW")
+
+// pipeExists reports whether a pipe named name exists. WaitNamedPipe
+// fails with ERROR_FILE_NOT_FOUND when no instance exists and does not
+// connect to the pipe.
+func pipeExists(name string) bool {
+	p, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		return false
+	}
+	r, _, e := procWaitNamedPipeW.Call(uintptr(unsafe.Pointer(p)), 1)
+	return r != 0 || !errors.Is(e, windows.ERROR_FILE_NOT_FOUND)
 }
