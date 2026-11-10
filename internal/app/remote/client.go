@@ -44,6 +44,10 @@ type Client struct {
 	subbed  bool
 	closed  bool
 
+	bgMu   sync.Mutex // SetBackground's sender (window.go)
+	bgWant *bool
+	bgBusy bool
+
 	cache  *readCache // Options.Cache
 	mirror *mirror    // Options.Incremental
 }
@@ -60,6 +64,10 @@ type Options struct {
 	// Cache keeps the result of every read until a "changed" event of a
 	// topic it depends on (cache.go): views read the API on every frame.
 	Cache bool
+	// ReadTimeout bounds the reads (methods without an error result): the
+	// window reads on its main thread and must not hang on a service that
+	// stopped answering. 0 = Client.Timeout.
+	ReadTimeout time.Duration
 	// Incremental serves Connections, ClosedConnections, Logs and AppLogs
 	// from a copy kept current with the …Since methods (mirror.go).
 	Incremental bool
@@ -128,7 +136,10 @@ func (cl *Client) setErr(err error) {
 	cl.mu.Unlock()
 }
 
-func (cl *Client) ctx() (context.Context, context.CancelFunc) {
+func (cl *Client) ctx(method string) (context.Context, context.CancelFunc) {
+	if cl.o.ReadTimeout > 0 && (cacheable(method) || uncachedRead(method)) {
+		return context.WithTimeout(context.Background(), cl.o.ReadTimeout)
+	}
 	if cl.Timeout > 0 {
 		return context.WithTimeout(context.Background(), cl.Timeout)
 	}
@@ -165,7 +176,7 @@ func (cl *Client) raw(method string, args []any, outs ...any) error {
 		cl.setErr(ErrDisconnected)
 		return ErrDisconnected
 	}
-	ctx, cancel := cl.ctx()
+	ctx, cancel := cl.ctx(method)
 	defer cancel()
 	err := conn.CallAPI(ctx, method, args, outs...)
 	if err != nil {

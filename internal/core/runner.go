@@ -25,6 +25,7 @@ const unixSocketPathLimit = 100
 type execRunner struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
+	adopted  *os.Process // a Mihomo taken over from a previous Lanflow (adopt.go); cmd is nil then
 	spec     Spec
 	logf     *rotatingFile
 	done     chan struct{} // closed when Wait returns
@@ -96,6 +97,7 @@ func (r *execRunner) Start(ctx context.Context, spec Spec) error {
 	writePID(spec.WorkDir, cmd.Process.Pid)
 	trackServer(cmd.Process.Pid)
 	r.cmd = cmd
+	r.adopted = nil
 	r.spec = spec
 	r.logf = logf
 	r.stopping = false
@@ -142,13 +144,16 @@ func exitError(waitErr error, logFile string) error {
 
 func (r *execRunner) Stop(ctx context.Context) error {
 	r.mu.Lock()
-	cmd, done := r.cmd, r.done
-	if cmd == nil {
+	cmd, done, adopted := r.cmd, r.done, r.adopted
+	if cmd == nil && adopted == nil {
 		r.mu.Unlock()
 		return nil
 	}
 	r.stopping = true
 	r.mu.Unlock()
+	if cmd == nil {
+		return r.stopAdopted(ctx, adopted, done)
+	}
 
 	select {
 	case <-done:
@@ -186,7 +191,7 @@ func (r *execRunner) Running() bool {
 }
 
 func (r *execRunner) runningLocked() bool {
-	if r.cmd == nil {
+	if r.cmd == nil && r.adopted == nil {
 		return false
 	}
 	select {

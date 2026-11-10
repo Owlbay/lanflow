@@ -90,6 +90,14 @@ func NewManager(o Options) *Manager { return &Manager{newManager(o)} }
 // while running restarts. Concurrent calls are serialized.
 func (m *Manager) Start(ctx context.Context, spec Spec) error { return m.m.start(ctx, spec) }
 
+// Adopt takes over a core already running for spec through r (a Runner
+// that is an Adopter: the exec runner finds it by the PID file, the
+// helper's runner asks the helper), after checking it answers on
+// spec.Controller. On failure the process is left running.
+func (m *Manager) Adopt(ctx context.Context, spec Spec, r Runner) error {
+	return m.m.adopt(ctx, spec, r)
+}
+
 // Stop stops the core; no-op when stopped.
 func (m *Manager) Stop(ctx context.Context) error { return m.m.stop(ctx) }
 

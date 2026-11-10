@@ -50,6 +50,10 @@ func StartWindow(exe, open string) error {
 	return err
 }
 
+// ReadTimeout bounds every read of the window (on its main thread): a
+// service that stops answering shows as empty data, not a frozen window.
+const ReadTimeout = 3 * time.Second
+
 // ConnectOptions describe the window's connection to the service.
 type ConnectOptions struct {
 	DataDir string
@@ -81,6 +85,7 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 		o.Wait = 20 * time.Second
 	}
 	ro := remote.Options{DataDir: o.DataDir, Client: rpc.KindUI, Version: o.Version, Cache: true, Incremental: true, OnUI: o.OnUI,
+		ReadTimeout: ReadTimeout,
 		Reconnect: &remote.Reconnect{
 			Start:   o.Start,
 			OnState: o.OnState,

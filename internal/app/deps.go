@@ -59,6 +59,9 @@ type ctrlClient interface {
 // coreManager is the subset of *core.Manager the service uses.
 type coreManager interface {
 	Start(ctx context.Context, spec core.Spec) error
+	// Adopt takes over a core already running for spec through r
+	// (takeover.go); on failure the process is left running.
+	Adopt(ctx context.Context, spec core.Spec, r core.Runner) error
 	Stop(ctx context.Context) error
 	SetRunner(r core.Runner)
 	Running() bool
@@ -143,6 +146,14 @@ type composer interface {
 	CheckYAML(data []byte) error
 }
 
+// strayCores finds the cores of this data directory that outlived the
+// Lanflow that started them (takeover.go): a core in the privileged
+// helper (TUN) or an orphaned child named by the PID file.
+type strayCores interface {
+	Find(ctx context.Context, workDir string) (found, tun bool)
+	Stop(ctx context.Context, workDir string, tun bool) error
+}
+
 // deps bundles everything the service depends on.
 type deps struct {
 	ctrl       ctrlClient
@@ -160,6 +171,8 @@ type deps struct {
 	freePort   func() (int, error)
 	portInUse  func(port int, lan bool) bool
 	otherTUN   func(ctx context.Context) (string, bool)
+	// stray finds cores a previous run left (nil = none ever).
+	stray strayCores
 	// v6Route reads where the IPv6 default route points (the IPv6 leak
 	// check, leak.go); nil = unknown.
 	v6Route func(ctx context.Context) netinfo.V6Route
@@ -206,6 +219,24 @@ func (realCore) Validate(ctx context.Context, bin, workDir, config string) error
 }
 func (realCore) ExecRunner() core.Runner   { return core.NewExecRunner() }
 func (realCore) HelperRunner() core.Runner { return helper.NewRunner() }
+
+// realStray asks the helper, then the PID file.
+type realStray struct{}
+
+func (realStray) Find(ctx context.Context, workDir string) (bool, bool) {
+	if running, err := helper.CoreRunning(ctx); err == nil && running {
+		return true, true
+	}
+	return core.OrphanRunning(workDir), false
+}
+
+func (realStray) Stop(ctx context.Context, workDir string, tun bool) error {
+	if tun {
+		return helper.NewRunner().Stop(ctx)
+	}
+	core.StopOrphan(workDir)
+	return nil
+}
 
 type realSysProxy struct{}
 
@@ -295,6 +326,7 @@ func realDeps(ctrl *controller.Client, mgr *core.Manager, store *profile.Store, 
 		freePort:   freeTCPPort,
 		portInUse:  tcpPortInUse,
 		otherTUN:   netinfo.OtherTUN,
+		stray:      realStray{},
 		v6Route:    netinfo.IPv6Route,
 		vpnDetect:  atrust.Detect,
 		now:        time.Now,

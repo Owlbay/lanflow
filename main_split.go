@@ -80,7 +80,7 @@ func runService(args split.Args) {
 			}
 		},
 		Quit:     func() { mygo.App.Quit() },
-		Settings: func(set model.Settings) { applyAutostart(exe, set.OpenAtLogin) },
+		Settings: func(set model.Settings) { queueAutostart(exe, set.OpenAtLogin) },
 	})
 	box.OnNew = bg.SystemNotice
 	offNotices := api.OnChange(func(t app.Topic) {
@@ -119,12 +119,28 @@ func runService(args split.Args) {
 		mygo.Power.OnResume(w.Resumed)
 		mygo.Network.OnChanged(func(mygo.NetworkStatus) { w.NetworkChanged() })
 	}
+	var cleanup sync.Once
+	finish := func() {
+		cleanup.Do(func() {
+			srv.SendUI(rpc.UIQuit, "")
+			offNotices()
+			_ = srv.Close()
+			bg.Close()
+			api.Shutdown()
+		})
+	}
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigs
 		signaled.Store(true)
 		mygo.App.Quit()
+		// The main thread may be stuck (a system prompt): restore the
+		// proxy and go anyway.
+		time.Sleep(quitWatchdog)
+		log.Printf("lanflow: service: quit did not finish in %s; exiting", quitWatchdog)
+		finish()
+		os.Exit(0)
 	}()
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
 		if confirmed.Load() || signaled.Load() {
@@ -142,13 +158,7 @@ func runService(args split.Args) {
 			}
 		}()
 	})
-	mygo.App.OnWillQuit(func(*mygo.QuitEvent) {
-		srv.SendUI(rpc.UIQuit, "")
-		offNotices()
-		_ = srv.Close()
-		bg.Close()
-		api.Shutdown()
-	})
+	mygo.App.OnWillQuit(func(*mygo.QuitEvent) { finish() })
 	mygo.App.WhenReady(func() {
 		bg.Start()
 		registerURLScheme()
@@ -341,6 +351,12 @@ func runWindow(args split.Args) {
 		<-sigs
 		signaled.Store(true)
 		mygo.App.Quit()
+		time.Sleep(quitWatchdog) // the main thread may be stuck: leave anyway
+		log.Printf("lanflow: window: quit did not finish in %s; exiting", quitWatchdog)
+		if !serviceQuitting.Load() {
+			_ = cl.DetachUI()
+		}
+		os.Exit(0)
 	}()
 	mygo.App.OnActivate(func(hasVisibleWindows bool) {
 		if !hasVisibleWindows {
@@ -391,7 +407,7 @@ func runWindow(args split.Args) {
 				return
 			}
 			closingWindow.Store(true)
-			_ = cl.DetachUI() // a new window may attach while this one goes
+			go func() { _ = cl.DetachUI() }() // a new window may attach while this one goes
 			sh.HiddenToTray()
 		})
 		shellMu.Lock()
@@ -423,6 +439,10 @@ func runWindow(args split.Args) {
 		log.Fatal(err)
 	}
 }
+
+// quitWatchdog is how long a signalled process waits for the normal quit
+// before it exits on its own.
+const quitWatchdog = 5 * time.Second
 
 // showError tells the user why the window cannot open, without a window.
 func showError(msg string) {
