@@ -40,7 +40,7 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 - **统计**：按设备、域名、进程、规则、代理、地区、入站统计请求数与上下行流量，按天保存
 - **检测**：出口 IP 纯净度、常见服务解锁检测、按地区探查节点
 - **内核**：Mihomo 正式版 / 预发布多版本并存，一键切换与回滚，检查更新，下载镜像
-- **设置**：常规（快捷键、开机启动、WebDAV 备份）、代理、DNS、嗅探（跟随订阅 / 由澜流接管）、覆写与运行时配置、内核与外部资源、高级（独立端口、局域网访问控制与认证、TUN 细项、内核行为、DNS 与嗅探的其余字段）
+- **设置**：常规（快捷键、开机启动、配置同步、WebDAV 备份）、代理、DNS、嗅探（跟随订阅 / 由澜流接管）、覆写与运行时配置、内核与外部资源、高级（独立端口、局域网访问控制与认证、TUN 细项、内核行为、DNS 与嗅探的其余字段）
 - **共存**：与其他代理软件共存，深信服 aTrust 兼容模式
 - 托盘菜单、全局快捷键、单实例、关闭到托盘、异常退出后的系统代理恢复、内核崩溃自动重启
 
@@ -148,6 +148,18 @@ GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一
 
    更新日志取自 `CHANGELOG.md` 中对应版本的 `## 0.2.0` 小节（文件存在时必须有该小节）。开发构建（`mygo dev`、`go run`）和由包管理器安装的副本不会自更新。详见 MyGo 文档 `docs/updates.md`。
 
+## 配置同步
+
+「设置 › 常规 › 配置同步」把设置、覆写、自定义规则和订阅保存为一个声明式文件 `lanflow.yaml`（`format: 1`，结构见 [`docs/schema/lanflow.schema.json`](docs/schema/lanflow.schema.json)），放进 iCloud 云盘（macOS）或任意同步盘文件夹（OneDrive、坚果云、Dropbox……），多台设备共用：
+
+- 文件变化时澜流会校验（含 `mihomo -t`）后热加载，按改动热更新、重载或重启内核；不合法的修改被拒绝，配置保持原状，设置页和概览页给出原因与行号。本机自己的写入按内容哈希识别，不会被当成外部修改。
+- 订阅链接和 WebDAV 密码只以 `keychain:<id>` 引用写进文件，值存系统钥匙串（macOS Keychain / Windows 凭据管理器）。另一台设备的钥匙串里没有时，订阅标为「需要重新输入链接」，不影响其余配置。目前不能借助 iCloud 钥匙串同步这些条目（需要团队签名的应用权限），原因见文档。
+- TUN、内核路径、网卡名、界面状态、agent 授权等本机项不同步；缓存、统计、`runtime.yaml` 等运行时数据一直留在本机。
+- 开启时若文件夹里已有不同的配置，会让你选择用文件还是用本机配置覆盖；冲突副本（如 `lanflow 2.yaml`）只提示、由你选择保留哪个，不自动删除。
+- 导出 / 导入与 WebDAV 备份也改用这个格式，旧版本导出的 JSON 和 `.json` 备份仍可导入。
+
+agent 可以直接编辑 `lanflow.yaml`，或用 `lanflow ctl config sync apply <文件> --dry-run` 预览差异；`lanflow ctl config sync status` 查看同步状态。详见 [docs/config-sync.md](docs/config-sync.md)。
+
 ## 用 agent 管理澜流
 
 澜流运行时在本机提供一个只有当前用户能连接的接口（macOS `~/Library/Application Support/Lanflow/run/lanflow.sock`，Windows 命名管道 `\\.\pipe\lanflow-<用户 SID>`），不开 TCP 端口。同一个可执行文件提供两个客户端：
@@ -166,7 +178,7 @@ GitHub Actions（`.github/workflows/release.yml`）会校验 tag 与版本号一
   ```
 
   工具由接口的方法清单生成，另有组合工具 `route_domain`（让域名走某个节点或代理组：规则测试 → 生成规则 → 预览 → 应用 → 验证）、`diagnose_site`、`diagnose`、`switch_node`。仓库里的 [`skills/lanflow/SKILL.md`](skills/lanflow/SKILL.md) 是配套的 Claude skill（标准流程、常见请求、禁区）。
-- **`lanflow ctl <命令>`**：命令行，默认输出 JSON，`--format table` 给人看：`status`、`proxies list|select|test`、`mode set`、`sub list|add|use|update`、`rule add|test`、`config get|set|apply`（`--dry-run` 输出差异）、`diag`、`undo`、`audit`。macOS 上可以 `ln -s /Applications/Lanflow.app/Contents/MacOS/Lanflow /usr/local/bin/lanflow`。澜流没运行时以退出码 3 报错。
+- **`lanflow ctl <命令>`**：命令行，默认输出 JSON，`--format table` 给人看：`status`、`proxies list|select|test`、`mode set`、`sub list|add|use|update`、`rule add|test`、`config get|set|apply`（`--dry-run` 输出差异）、`config sync status|apply`、`diag`、`undo`、`audit`。macOS 上可以 `ln -s /Applications/Lanflow.app/Contents/MacOS/Lanflow /usr/local/bin/lanflow`。澜流没运行时以退出码 3 报错。
 
 权限分级（`docs/service-split.md` §4）：
 

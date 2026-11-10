@@ -554,3 +554,33 @@ func TestApplyConfigFile(t *testing.T) {
 		t.Fatal("empty path without sync accepted")
 	}
 }
+
+// TestSyncPlainLinkMovesToKeychain: a link written into the file by hand
+// is used, stored in the keychain, and the file rewritten with the
+// reference.
+func TestSyncPlainLinkMovesToKeychain(t *testing.T) {
+	h, ks, dir := syncHarness(t)
+	if err := h.s.SetConfigSync(model.SyncFolder, dir, ""); err != nil {
+		t.Fatal(err)
+	}
+	id := h.s.Subscriptions()[0].ID
+	writeExternal(t, dir, func(d *syncfile.Doc) { d.Subscriptions[0].URL = "https://new.example/sub?token=t0k" })
+	step(h)
+	step(h)
+	if got, _ := h.store.Get(id); got.URL != "https://new.example/sub?token=t0k" {
+		t.Fatalf("link not used: %q", got.URL)
+	}
+	if ks.get(syncfile.SubscriptionKey(id)) != "https://new.example/sub?token=t0k" {
+		t.Fatal("link not stored in the keychain")
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, syncfile.FileName))
+	if strings.Contains(string(data), "t0k") || !strings.Contains(string(data), syncfile.SubscriptionRef(id)) {
+		t.Fatalf("file not rewritten with the reference:\n%s", data)
+	}
+	// the rewrite is this machine's own: not loaded again
+	applied := h.s.ConfigSyncStatus().LastAppliedAt
+	step(h)
+	if !h.s.ConfigSyncStatus().LastAppliedAt.Equal(applied) {
+		t.Fatal("own rewrite loaded as an external change")
+	}
+}
