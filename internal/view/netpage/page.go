@@ -36,6 +36,14 @@ type Page struct {
 	addSession      int
 	sites           ui.ListState
 
+	// The effective DNS and sniffer settings (the service parses the
+	// subscription's YAML for them) are read again only when the
+	// settings or the status change.
+	effStale   *env.Stale
+	effDNS     model.EffectiveDNS
+	effSniffer model.EffectiveSniffer
+	snifferOn  bool
+
 	mu     sync.Mutex // guards the fields below, written by jobs
 	dnsRes *model.DNSResult
 	dnsErr string
@@ -44,7 +52,8 @@ type Page struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	return &Page{e: e, dnsName: "www.google.com", dnsType: "A", leakOpen: map[string]*bool{}}
+	return &Page{e: e, dnsName: "www.google.com", dnsType: "A", leakOpen: map[string]*bool{},
+		effStale: env.Watch(e.API, app.TopicSettings, app.TopicStatus)}
 }
 
 // View draws the whole content area including the header.
@@ -476,9 +485,23 @@ func (p *Page) localSection(c *ui.Context, t *ui.Theme) {
 	})
 }
 
+// effective reads the effective DNS and sniffer settings again when they
+// may have changed.
+func (p *Page) effective() {
+	if !p.effStale.Take() {
+		return
+	}
+	e := p.e
+	p.effDNS = e.API.EffectiveDNS()
+	p.snifferOn = e.API.Settings().Sniffer.Enable
+	if p.snifferOn {
+		p.effSniffer = e.API.EffectiveSniffer()
+	}
+}
+
 func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 	e := p.e
-	s := e.API.Settings()
+	p.effective()
 	p.panel(c, t, i18n.T("代理状态"), func() {
 		p.kvRich(c, t, i18n.T("系统代理"), func() {
 			if st.SystemProxy {
@@ -501,11 +524,11 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 		// 嗅探 and DNS report the effective config (docs/design.md:463): the
 		// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
 		snf := i18n.T("未开启")
-		if s.Sniffer.Enable {
-			snf = i18n.T("已开启") + " · " + sourceName(e.API.EffectiveSniffer().Source)
+		if p.snifferOn {
+			snf = i18n.T("已开启") + " · " + sourceName(p.effSniffer.Source)
 		}
 		p.kv(c, t, i18n.T("嗅探"), snf, nil)
-		p.kv(c, t, "DNS", dnsStatusText(e.API.EffectiveDNS()), nil)
+		p.kv(c, t, "DNS", dnsStatusText(p.effDNS), nil)
 		p.kv(c, t, i18n.T("控制接口"), i18n.T("本机套接字，仅澜流可访问"), nil)
 		if a := st.ATrust; a.Running {
 			p.kvRich(c, t, i18n.T("aTrust 兼容"), func() {
