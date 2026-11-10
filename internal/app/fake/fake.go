@@ -359,6 +359,18 @@ func (f *Fake) SaveUIState(u model.UIState) error {
 	f.set.UI = u
 	return nil
 }
+func (f *Fake) UpdateUIState(fn func(*model.UIState)) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	u := f.set.UI
+	u.OpenGroups = make(map[string]bool, len(f.set.UI.OpenGroups))
+	for k, v := range f.set.UI.OpenGroups {
+		u.OpenGroups[k] = v
+	}
+	fn(&u)
+	f.set.UI = u
+	return nil
+}
 
 // DataStrings returns the Chinese texts the fake fabricates as data: node,
 // group, provider and subscription names, places, ISPs and notes. The

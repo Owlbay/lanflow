@@ -294,8 +294,9 @@ func TestStoreAtomicWrite(t *testing.T) {
 	if err := atomicWrite(path, []byte("one")); err != nil {
 		t.Fatal(err)
 	}
-	// A write into a missing directory fails and leaves nothing behind.
-	if err := atomicWrite(filepath.Join(dir, "missing", "f"), []byte("x")); err == nil {
+	// A write that cannot happen (the parent is a file) fails and leaves
+	// nothing behind. (A missing directory is created: fsx.WriteFile.)
+	if err := atomicWrite(filepath.Join(path, "f"), []byte("x")); err == nil {
 		t.Error("expected error")
 	}
 	if b, _ := os.ReadFile(path); string(b) != "one" {

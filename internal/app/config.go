@@ -57,7 +57,7 @@ func (s *Service) SaveSettings(in model.Settings) error {
 	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, in.MainGroup)
 	s.mu.Unlock()
 	s.em.emit(TopicSettings, TopicProxies)
-	if err := saveSettings(s.opt.DataDir, in); err != nil {
+	if err := s.persistSettings(); err != nil {
 		s.alog.Errorf("save settings: %v", err)
 		return err
 	}
@@ -90,7 +90,7 @@ func (s *Service) SaveSettings(in model.Settings) error {
 		s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, old.MainGroup)
 		s.mu.Unlock()
 		i18n.SetLang(old.Language)
-		_ = saveSettings(s.opt.DataDir, old)
+		_ = s.persistSettings()
 		s.em.emit(TopicSettings, TopicProxies)
 		return err
 	}
@@ -329,13 +329,12 @@ func (s *Service) UpdateGeoData() error {
 	if err := s.d.ctrl.UpdateGeo(ctx); err != nil {
 		return fmt.Errorf(i18n.T("更新地理数据库失败：%v"), err)
 	}
-	s.mu.Lock()
-	s.state.settings.Geo.UpdatedAt = s.d.now()
-	s.state.geoInfoAt = time.Time{} // GeoDataInfo re-reads the files
-	set := copySettings(s.state.settings)
-	s.mu.Unlock()
+	err := s.updateSettings(func(set *model.Settings) {
+		set.Geo.UpdatedAt = s.d.now()
+		s.state.geoInfoAt = time.Time{} // GeoDataInfo re-reads the files
+	})
 	s.em.emit(TopicSettings)
-	return saveSettings(s.opt.DataDir, set)
+	return err
 }
 
 // changedSettings names the top-level settings that differ (the

@@ -211,13 +211,13 @@ func (s *Service) SetTUN(on bool) (err error) {
 			return err
 		}
 	}
-	s.mu.Lock()
-	s.state.settings.TUN = on
-	set := copySettings(s.state.settings)
-	wasRunning := s.state.st.Core == model.CoreRunning
-	s.mu.Unlock()
+	var wasRunning bool
+	err = s.updateSettings(func(set *model.Settings) {
+		set.TUN = on
+		wasRunning = s.state.st.Core == model.CoreRunning
+	})
 	s.em.emit(TopicSettings)
-	if err := saveSettings(s.opt.DataDir, set); err != nil {
+	if err != nil {
 		return err
 	}
 	if !wasRunning {
@@ -291,14 +291,13 @@ func (s *Service) SetMode(m model.Mode) (err error) {
 			s.ensureGlobalExit()
 		}
 	}
-	s.mu.Lock()
-	s.state.settings.Mode = m
-	s.state.st.Mode = m
-	set := copySettings(s.state.settings)
-	s.mu.Unlock()
+	err = s.updateSettings(func(set *model.Settings) {
+		set.Mode = m
+		s.state.st.Mode = m
+	})
 	s.em.emit(TopicStatus, TopicSettings)
 	s.rebuildRoutes()
-	return saveSettings(s.opt.DataDir, set)
+	return err
 }
 
 // ensureGlobalExit points Mihomo's GLOBAL group at the main group when it

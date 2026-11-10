@@ -109,6 +109,10 @@ type API interface {
 	// ---- UI state ----
 	UIState() model.UIState            // remembered presentation state (cheap read)
 	SaveUIState(u model.UIState) error // persists it; never touches the core
+	// UpdateUIState changes the remembered state under the settings lock
+	// (fn gets a private copy) and persists it: the race-free form of
+	// UIState + edit + SaveUIState. fn must not block or call the API.
+	UpdateUIState(fn func(*model.UIState)) error
 
 	// ---- subscriptions ----
 	ImportSubscriptionURL(url, name, userAgent string, viaProxy, use bool) (model.Subscription, error)

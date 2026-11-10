@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 )
@@ -205,10 +206,8 @@ func (s *Service) storeReleases(channel string, list []model.CoreRelease) {
 	}
 	s.cores.releases[channel] = rc
 	s.cores.mu.Unlock()
-	if err := os.MkdirAll(s.coresDir(), 0o700); err == nil {
-		if data, err := json.Marshal(rc); err == nil {
-			_ = os.WriteFile(s.releaseCachePath(channel), data, 0o600)
-		}
+	if data, err := json.Marshal(rc); err == nil {
+		_ = fsx.WriteFile(s.releaseCachePath(channel), data, 0o600)
 	}
 }
 

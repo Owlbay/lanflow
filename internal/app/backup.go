@@ -361,13 +361,10 @@ func (s *Service) backup(auto bool) (err error) {
 	}
 	s.alog.Infof("webdav: uploaded %s (%d bytes)", name, len(data))
 
-	s.mu.Lock()
-	s.state.settings.WebDAV.LastBackupAt = s.d.now()
-	saved := copySettings(s.state.settings)
-	s.mu.Unlock()
+	serr := s.updateSettings(func(set *model.Settings) { set.WebDAV.LastBackupAt = s.d.now() })
 	s.em.emit(TopicSettings)
-	if err := saveSettings(s.opt.DataDir, saved); err != nil {
-		s.alog.Errorf("webdav: remember backup time: %v", err)
+	if serr != nil {
+		s.alog.Errorf("webdav: remember backup time: %v", serr)
 	}
 
 	if set.Keep > 0 {

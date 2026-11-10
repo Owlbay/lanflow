@@ -47,6 +47,10 @@ type Service struct {
 
 	opMu sync.Mutex
 
+	// settingsMu serializes settings.json writes with the snapshot they
+	// write (persistSettings); taken before mu, never while mu is held.
+	settingsMu sync.Mutex
+
 	mu    sync.Mutex
 	state state
 	em    *emitter
@@ -458,7 +462,9 @@ func copyBundledGeo(src, dst string) {
 		}
 		_, cerr := io.Copy(out, in)
 		in.Close()
-		out.Close()
+		if err := out.Close(); cerr == nil {
+			cerr = err
+		}
 		if cerr != nil {
 			os.Remove(target + ".tmp")
 			continue
@@ -656,6 +662,10 @@ func copySettings(in model.Settings) model.Settings {
 	out.Sniffer.SkipDstAddress = append([]string(nil), in.Sniffer.SkipDstAddress...)
 	out.ATrust = in.ATrust.Clone()
 	out.Advanced = in.Advanced.Clone()
+	out.UI = copyUIState(in.UI)
+	out.ConnHiddenColumns = append([]string(nil), in.ConnHiddenColumns...)
+	out.Shortcuts = append([]model.Shortcut(nil), in.Shortcuts...)
+	out.SSIDRules = append([]model.SSIDRule(nil), in.SSIDRules...)
 	return out
 }
 

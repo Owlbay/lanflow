@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"lanflow/internal/fsx"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 )
@@ -134,7 +135,7 @@ func writeCoreMeta(dir string, m coreMeta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, coreMetaFile), data, 0o600)
+	return fsx.WriteFile(filepath.Join(dir, coreMetaFile), data, 0o600)
 }
 
 // fileSHA256 hashes a file.
@@ -413,7 +414,7 @@ func (s *Service) migrateLegacyCore() {
 	if s.state.settings.CorePath == legacy || s.state.settings.CorePath == dst {
 		s.state.settings.CorePath = dst
 		s.state.settings.CoreVersion = version
-		_ = saveSettings(s.opt.DataDir, copySettings(s.state.settings))
+		_ = s.persistSettings()
 	}
 	s.cores.mu.Lock()
 	s.cores.installed = nil

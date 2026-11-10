@@ -509,13 +509,12 @@ func (s *Service) HealthCheckProvider(name string) error {
 
 // SetMainGroup records the main group and recomputes the snapshot.
 func (s *Service) SetMainGroup(group string) error {
-	s.mu.Lock()
-	s.state.settings.MainGroup = group
-	set := s.state.settings
-	s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, group)
-	s.mu.Unlock()
+	err := s.updateSettings(func(set *model.Settings) {
+		set.MainGroup = group
+		s.state.proxies = buildSnapshot(s.state.rawProxy, s.state.testing, group)
+	})
 	s.em.emit(TopicProxies, TopicSettings)
 	s.rebuildRoutes()
 	s.scheduleMainProbe()
-	return saveSettings(s.opt.DataDir, set)
+	return err
 }

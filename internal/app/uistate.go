@@ -13,13 +13,24 @@ func (s *Service) UIState() model.UIState {
 	return copyUIState(s.state.settings.UI)
 }
 
-// SaveUIState records u and writes settings.json.
+// SaveUIState records u and writes settings.json. It replaces the whole
+// state: two pages that read, change and save their own field race with
+// each other; UpdateUIState does not.
 func (s *Service) SaveUIState(u model.UIState) error {
-	s.mu.Lock()
-	s.state.settings.UI = copyUIState(u)
-	set := s.state.settings
-	s.mu.Unlock()
-	return saveSettings(s.opt.DataDir, set)
+	return s.UpdateUIState(func(cur *model.UIState) { *cur = u })
+}
+
+// UpdateUIState changes the remembered presentation state in place and
+// writes settings.json: fn gets the current state (a private copy) under
+// the settings lock, so concurrent updates of different fields (one page's
+// open groups, another's log level) never lose each other. fn must not
+// block or call back into the service.
+func (s *Service) UpdateUIState(fn func(*model.UIState)) error {
+	return s.updateSettings(func(set *model.Settings) {
+		u := copyUIState(set.UI)
+		fn(&u)
+		set.UI = copyUIState(u)
+	})
 }
 
 func copyUIState(u model.UIState) model.UIState {
