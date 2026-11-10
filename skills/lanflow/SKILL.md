@@ -57,7 +57,7 @@ When the user has turned on 配置同步 (Settings › General › Configuration
 
 You may edit that file directly (settings, `overrides`, `customRules`, `subscriptions`); the structure is described by `docs/schema/lanflow.schema.json`, and a missing key means the default value. Lanflow notices the change within a few seconds, validates it (the file's own rules and `mihomo -t` on the composed config) and loads it — hot, by reloading the core, or by restarting it, as each change needs. An invalid change is refused and nothing changes; read `config_sync_status` afterwards and fix the line it names. To preview first, write your version to another file and call `apply_config_file {path, dryRun: true}` [`ctl config sync apply <file> --dry-run`], which returns the diff; without `dryRun` it loads that file the same way (undoable).
 
-- Keep `format: 1`. Subscription links are written `keychain:sub-<id>`; never replace a reference with the real link, and never put links, passwords or tokens into the file.
+- Keep `format: 1`. Subscription links are written `keychain:sub-<id>`, or `enc:v1:…` when the user encrypts them with a sync passphrase; never replace a reference or an `enc:` value with the real link, never edit or move `enc:` values or the `encryption` block, and never put links, passwords or tokens into the file. The passphrase is entered in Lanflow's window only.
 - Machine-local items (TUN, the core path, interface names, UI state, agent grants, the sync setting) are not in the file and are ignored if you add them.
 - Lanflow rewrites the file in its canonical form after loading it, so comments you add are not kept.
 

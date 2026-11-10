@@ -1,8 +1,8 @@
 # 配置同步：lanflow.yaml
 
-澜流把用户配置收拢成一个带版本号的声明式文件 `lanflow.yaml`，放进一个会被同步的文件夹（iCloud 云盘、OneDrive、坚果云、Dropbox、Syncthing……），多台设备读写同一个文件。订阅链接等密钥不进文件，只写成 `keychain:<id>` 引用，值在各台设备的系统钥匙串里。缓存、统计、窗口位置、`runtime.yaml`、界面状态等运行时数据一直留在本机。
+澜流把用户配置收拢成一个带版本号的声明式文件 `lanflow.yaml`，放进一个会被同步的文件夹（iCloud 云盘、OneDrive、坚果云、Dropbox、Syncthing……），多台设备读写同一个文件。订阅链接等密钥默认不进文件，只写成 `keychain:<id>` 引用，值在各台设备的系统钥匙串里；开启「用口令加密链接」后，密钥用同步口令加密写进文件（见下文「用口令加密链接」）。缓存、统计、窗口位置、`runtime.yaml`、界面状态等运行时数据一直留在本机。
 
-代码：格式在 `internal/syncfile`，与服务的衔接在 `internal/app/configdoc.go`（文档 ↔ 状态）、`configapply.go`（加载）、`configsync.go`（目录、轮询、写入、冲突）、`configsecrets.go`（钥匙串）；界面在 `internal/view/settings/configsync.go`。
+代码：格式在 `internal/syncfile`（加密在 `seal.go`），与服务的衔接在 `internal/app/configdoc.go`（文档 ↔ 状态）、`configapply.go`（加载）、`configsync.go`（目录、轮询、写入、冲突）、`configsecrets.go`（钥匙串）、`configseal.go`（同步口令）；界面在 `internal/view/settings/configsync.go` 与 `syncpass.go`。
 
 ## 开启
 
@@ -60,6 +60,24 @@ subscriptions:       # 带链接的订阅
     autoUpdateHours: 12
     overrides: [3fa2c1d0]
 webdavPassword: keychain:webdav-password   # 设置了 WebDAV 密码时才有
+```
+
+开启「用口令加密链接」时，`format` 之后多一个 `encryption` 块，密钥字段改写为密文：
+
+```yaml
+format: 1
+encryption:
+  kdf: argon2id
+  time: 3
+  memoryKiB: 65536
+  threads: 4
+  salt: 3q2+7w0rCZ…==          # 16 字节随机盐
+  check: enc:v1:…               # 口令校验块
+...
+subscriptions:
+  - id: a1b2c3d4
+    url: enc:v1:Lq9c…           # 订阅链接的密文
+webdavPassword: enc:v1:Zt3m…
 ```
 
 - `format` 是文件格式版本。本版本写 1、读 ≤1；读到更高的版本整份拒绝，不会只读一半。
@@ -137,30 +155,38 @@ iCloud 可能只留下占位文件 `.lanflow.yaml.icloud`。此时澜流运行 `
 
 等应用有了 Developer ID 团队签名后，可以在 `app.SecretStore` 之外为链接加一个「同步钥匙串」实现：以 `kSecAttrSynchronizable = true`、`kSecUseDataProtectionKeychain = true` 和团队的访问组写入，读取时用 `kSecAttrSynchronizableAny`。文件格式不需要改。
 
-### 设计：用口令加密密钥写入同步文件（未实现）
+### 用口令加密链接
 
-供不用 iCloud 钥匙串（或在 Windows 与 Mac 之间同步）的用户：密钥加密后放进同步文件，任何一台知道口令的设备都能解开。本次只做设计，原因是还需要口令的设置、修改与在新设备上输入的界面，以及口令丢失、轮换的处理，工作量超出本次范围。
+供不用 iCloud 钥匙串、或在 Windows 与 Mac 之间同步的用户：订阅链接和 WebDAV 密码用一个**同步口令**加密后写进同步文件，任何一台知道口令的设备都能取回。入口在「设置 › 常规 › 配置同步 › 用口令加密链接」。
 
-- **格式**：文件新增可选的顶层键（`format` 仍为 1，旧版本把它当未知键忽略）：
+**格式**（`internal/syncfile/seal.go`）
 
-  ```yaml
-  sealed:
-    kdf: pbkdf2-sha256       # Go 标准库 crypto/pbkdf2，无需新依赖
-    iterations: 600000
-    salt: <base64, 16 字节>
-    nonce: <base64, 12 字节>
-    data: <base64>           # AES-256-GCM 密文；明文为 {"sub-a1b2c3d4": "https://…", "webdav-password": "…"}
-  ```
+- 密钥派生：Argon2id（RFC 9106 推荐的第二组参数：64 MiB、t=3、p=4），32 字节密钥。参数和 16 字节随机盐写在文件头 `encryption` 块。选 Argon2id 而不是 PBKDF2：同步文件放在第三方云盘上，内存困难的 KDF 让离线猜口令每次都要 64 MiB 内存，而不只是 CPU 时间。`golang.org/x/crypto` 原本就在依赖图里（经 `golang.org/x/net`），只是改成直接依赖。
+- 每个密钥单独用 AES-256-GCM 加密，写成 `enc:v1:<base64(12 字节 nonce ‖ 密文)>`。附加数据（AAD）是 `lanflow.yaml/v1/` 加字段路径：订阅链接为 `subscriptions.<订阅 ID>.url`（按 ID 而非位置，调整顺序不影响），WebDAV 密码为 `webdavPassword`。把一段密文挪到别的订阅或别的字段，解密会失败。
+- `check` 是用同一密钥加密的固定文本（路径 `encryption.check`）。用它判断口令对不对，也用它发现口令在另一台设备上改过：本机保存的密钥打不开它，就要重新输入。
+- 读文件时校验 `encryption` 的参数范围（`time` ≤ 16、`memoryKiB` 8 MiB–1 GiB、`threads` ≤ 16、盐至少 16 字节），防止一份恶意文件让本机耗尽内存；有 `enc:` 值却没有 `encryption` 块、base64 无效等都会带行号拒绝。`format` 仍为 1：旧版本把 `encryption` 当未知键忽略，`enc:` 链接当作格式错误拒绝整份文件，不会误读。
+- 写文件时，明文没有变化的密钥沿用原来的密文（nonce 随机，每次重新加密都会得到不同的字节），所以规范形式的比较照常成立，没有改动就不写文件。
 
-  附加数据（AAD）取 `"lanflow-sealed-v1"`，防止把别处的密文挪过来。
-- **写入**：开启「用口令加密密钥」并设置口令后，口令本身存本机钥匙串（`sync-passphrase`）；每次写文件时把所有被引用的密钥加密进 `sealed`，引用写法不变（`keychain:sub-<id>`）。口令派生的密钥按 salt 缓存，salt 只在改口令时更换，避免每次写文件都跑一遍 KDF。
-- **读取**：解析 `keychain:<id>` 时先查本机钥匙串；没有且文件有 `sealed` 时，用本机保存的口令解密取值并写入本机钥匙串。本机没有口令时，设置页提示「输入同步口令以取回 N 个订阅链接」；输错口令（GCM 校验失败）只提示，不影响其余配置的加载。
-- **改口令 / 关闭**：改口令时用新 salt 重新加密；关闭时删除 `sealed`。丢失口令只影响取回密钥，其余配置照常同步，用户可以在各设备上重新输入链接。
-- **风险**：同步文件落在第三方云盘，安全性取决于口令强度；界面应要求一定长度并说明这一点。
+**本机存储**：口令本身不保存在任何地方。由口令派生出的密钥和它对应的盐存进本机钥匙串（键 `sync-key`，MyGo 的 Secrets 模块），之后每次启动不用再输入。解出的链接照常写入本机钥匙串（`sub-<id>`），WebDAV 密码写入它原本的位置。
+
+**新设备**：开启同步、选「使用文件中的配置」后，其余配置照常加载；加密的订阅标为「需要重新输入链接」，设置页和概览页提示「输入同步口令以解锁订阅链接」。输入正确的口令后（`UnlockSync`），派生密钥存入钥匙串，文件重新加载一次：链接填回订阅并开始下载，WebDAV 密码存好。口令错误时对话框里提示「同步口令不正确」，什么也不改。
+
+**未解锁的设备写文件**：本机拿不到明文的密文原样写回，不会因为本机解不开就把别的设备的链接丢掉；本机新加的订阅在解锁前写成 `keychain:` 引用，解锁后再写成密文。
+
+**修改口令**（`SetSyncPassphrase(新口令)`）：生成新盐，用新密钥重新加密全部密钥，原子写回文件（`writeFileAtomic`）。其他设备读到新文件时，保存的密钥打不开新的 `check`，横幅提示「同步口令已在另一台设备上修改」，在此之前它们已有的链接照常使用。只有已解锁的设备能修改口令。
+
+**关闭 / 开启**：关闭（`SetSyncPassphrase("")`）时文件改回 `keychain:` 引用、去掉 `encryption` 块，并删除本机的 `sync-key`；开启时把已有的 `keychain:` 引用换成密文。未解锁的设备也可以关闭，但本机没有的链接随之从文件中移除（其他设备需要自己的钥匙串里有）。
+
+**在本机忘记口令**（`ForgetSyncPassphrase`）：删除本机的 `sync-key`。本机已有的链接保留；之后文件里新增或修改的链接需要重新输入口令。
+
+**口令丢失**：密文无法恢复。其余配置照常同步；在任一设备上关闭加密（或设新口令前先关闭再开启），在各设备上重新输入链接即可。界面在设置和修改口令时都说明了这一点，并要求至少 8 个字符。
+
+**不会出现的地方**：日志、诊断导出和 `ConfigSyncStatus` 里没有链接、口令或密文（`applog.Redact` 另外把 `enc:v1:…` 一律打码；`internal/app/configseal_test.go` 检查这一点）。`ApplyConfigFile` 的差异仍以 `keychain:` 引用显示链接。
 
 ## 本机接口与 agent
 
-- `ConfigSyncStatus()`（读）：同步位置、文件路径、状态（`off` / `ok` / `waiting` / `error`）、上次加载 / 写入时间、拒绝原因与行号、冲突副本、缺少的钥匙串条目。`lanflow ctl config sync status`。
+- `ConfigSyncStatus()`（读）：同步位置、文件路径、状态（`off` / `ok` / `waiting` / `error`）、上次加载 / 写入时间、拒绝原因与行号、冲突副本、缺少的钥匙串条目，以及加密状态（`Encrypted`、`Locked`、`PassphraseChanged`、`LockedSecrets`）。`lanflow ctl config sync status`。
+- `SetSyncPassphrase(passphrase)`、`UnlockSync(passphrase)`、`ForgetSyncPassphrase()` 为「仅窗口」级（`LevelUI`）：口令只在澜流界面里输入，agent 既不能设置也不能输入口令。
 - `ApplyConfigFile(path, dryRun)`（写，可撤销）：按「加载」的流程加载任意一个 `lanflow.yaml`（`path` 为空表示同步文件），返回改动的部分和差异；`dryRun` 只返回差异。差异是本机 `lanflow.yaml` 的文本，订阅链接只以引用出现。`lanflow ctl config sync apply [文件] [--dry-run]`；MCP 工具 `apply_config_file`。
 - `SetConfigSync`、`ResolveConfigConflict` 为危险级：MCP 不提供，ctl 每次都要在澜流里确认。
 - agent 可以直接编辑同步文件夹里的 `lanflow.yaml`，澜流校验通过后自动加载，不通过则保持原状并在 `config_sync_status` 里给出行号（见 `skills/lanflow/SKILL.md`）。注意这条路径不经过 MCP 的逐次授权，能写同步文件夹的程序都能改配置；`agentGrants` 等本机授权因此不在文件里。
