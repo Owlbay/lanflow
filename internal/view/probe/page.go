@@ -1,8 +1,9 @@
-// Package probe is the 检测 page: what the chosen exit looks like from the
-// outside (IP 纯净度), which services it unlocks (解锁检测) and how the
-// nodes of one region compare (地区探查). Every check runs only when the
-// user presses its button; third-party sources are named next to their
-// results.
+// Package probe is the 检测 page (docs/design.md §5.9): whether this
+// machine's traffic bypasses the proxy (泄漏检查), what the chosen exit
+// looks like from the outside (IP 纯净度), which services it unlocks
+// (解锁检测) and how the nodes of one region compare (地区探查). Every
+// check runs only when the user presses its button; third-party sources
+// are named next to their results.
 package probe
 
 import (
@@ -20,22 +21,39 @@ import (
 	"lanflow/internal/view/env"
 )
 
-// ippureURL is the site the IP 纯净度 tab opens in the browser when the
-// online sources could not be read.
+// ippureURL is the third-party IP risk-score site the IP 纯净度 tab opens
+// in the browser; the app itself requests only its free API, and only on
+// 在线检测.
 const ippureURL = "https://ippure.com/"
 
 // Tabs of the page.
 const (
-	tabIP = iota
+	tabLeak = iota
+	tabIP
 	tabUnlock
 	tabRegion
 )
+
+// tabKeys are the stored names of the tabs (model.UIState.ProbeTab), by tab.
+var tabKeys = []string{"leak", "ip", "unlock", "region"}
+
+// tabFromKey is the tab stored as k; the first one for "" or a key it
+// does not know.
+func tabFromKey(k string) int {
+	for i, v := range tabKeys {
+		if v == k {
+			return i
+		}
+	}
+	return tabLeak
+}
 
 // Page holds page-local UI state.
 type Page struct {
 	e *env.Env
 
 	tab         int
+	loaded      bool   // tab restored from API.UIState
 	target      string // node name or model.ProbeDirect; "" = follow the main group
 	targetLabel string // the Select's current label
 
@@ -46,14 +64,36 @@ type Page struct {
 	unlockList ui.ListState
 	regionList ui.ListState
 	regionSort ui.SortOrder
+
+	leakDomain string           // optional domain for the DNS comparison of 泄漏检查
+	leakOpen   map[string]*bool // 泄漏检查 items whose details are expanded, by name
 }
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	p := &Page{e: e, regionSort: ui.SortOrder{Column: "delay"}}
+	p := &Page{e: e, regionSort: ui.SortOrder{Column: "delay"}, leakOpen: map[string]*bool{}}
 	p.regionList.Sort = &p.regionSort
 	return p
 }
+
+// restore loads the remembered tab once.
+func (p *Page) restore() {
+	if p.loaded {
+		return
+	}
+	p.loaded = true
+	p.tab = tabFromKey(p.e.API.UIState().ProbeTab)
+}
+
+// persist remembers the tab across restarts.
+func (p *Page) persist() {
+	key := tabKeys[p.tab]
+	p.e.SaveUIState("probe", func(u *model.UIState) { u.ProbeTab = key })
+}
+
+// targetTab reports whether tab probes the exit chosen in the header:
+// 泄漏检查 is about this machine and 地区探查 picks its own nodes.
+func targetTab(tab int) bool { return tab == tabIP || tab == tabUnlock }
 
 // targets lists the exits the user can choose: the direct connection and
 // every node (not groups).
@@ -129,12 +169,16 @@ func targetLabel(t string) string {
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
+	p.restore()
 	st := e.API.Status()
 	snap := e.API.Proxies()
 	running := st.Core == model.CoreRunning
 	target := p.current(snap, st)
 	ui.Column(c).Fill().Children(func() {
 		e.Kit.Header(c, i18n.T("检测"), "", func() {
+			if !targetTab(p.tab) {
+				return
+			}
 			ui.Text(c, i18n.T("出口")).FontSize(12).TextColor(t.TextMuted)
 			opts := targets(snap)
 			labels := make([]string, len(opts))
@@ -152,8 +196,10 @@ func (p *Page) View(c *ui.Context) {
 			}
 		})
 		ui.Column(c).Grow(1).Padding(0, 24, 16, 24).Gap(12).Children(func() {
-			ui.Segmented(c, &p.tab, i18n.T("IP 纯净度"), i18n.T("解锁检测"), i18n.T("地区探查")).Label(i18n.T("检测项目"))
-			if !running && target != model.ProbeDirect {
+			if ui.Segmented(c.Key("tabs"), &p.tab, i18n.T("泄漏检查"), i18n.T("IP 纯净度"), i18n.T("解锁检测"), i18n.T("地区探查")).Label(i18n.T("检测项目")).Changed() {
+				p.persist()
+			}
+			if targetTab(p.tab) && !running && target != model.ProbeDirect {
 				e.Kit.Banner(c, "warn", i18n.T("内核未启动：只能检测直连出口。"), nil)
 			}
 			switch p.tab {
@@ -161,8 +207,10 @@ func (p *Page) View(c *ui.Context) {
 				p.ipTab(c, t, target)
 			case tabUnlock:
 				p.unlockTab(c, t, target)
-			default:
+			case tabRegion:
 				p.regionTab(c, t, st, snap)
+			default:
+				p.leakTab(c, t, st)
 			}
 		})
 	})
@@ -232,6 +280,12 @@ func (p *Page) ipTab(c *ui.Context, t *ui.Theme, target string) {
 				}
 			})
 			env.InfoCard(c, i18n.T("风险评估"), func() {
+				// The finer score in the browser: handed to it, never
+				// requested by the app.
+				link := env.LinkText(c, i18n.T("在浏览器中检查 IP 纯净度"), "").FontSize(11).Tooltip(i18n.T("在浏览器中打开 ippure.com，查看更细的 IP 风险评分"))
+				if link.Clicked() {
+					_ = mygo.Shell.OpenExternal(ippureURL)
+				}
 				if rep.Running {
 					return
 				}
@@ -660,7 +714,8 @@ func kindTagKind(kind string) string {
 }
 
 // Topics are the service topics this page's view reads; the shell
-// rebuilds it only for these (and its own).
+// rebuilds it only for these (and its own). TopicNet carries the
+// 泄漏检查 results (API.LeakCheck).
 func (p *Page) Topics() []app.Topic {
-	return []app.Topic{app.TopicStatus, app.TopicProbe, app.TopicProxies}
+	return []app.Topic{app.TopicStatus, app.TopicProbe, app.TopicProxies, app.TopicNet}
 }

@@ -223,10 +223,15 @@ type UIState struct {
 	// ProxySort is the 代理 page's node order: "" (subscription order),
 	// "delay" or "name".
 	ProxySort          string
-	ProxyHideTimeout   bool   // the 代理 page hides timed-out nodes
-	ProxyProvidersOpen bool   // the 代理 page's 代理集合 section is expanded
-	LogLevel           string // the 日志 page's lowest level shown ("debug"…"error"); "" = default
-	LogSource          string // the 日志 page's source: "core" or "app"; "" = default
+	ProxyHideTimeout   bool // the 代理 page hides timed-out nodes
+	ProxyProvidersOpen bool // the 代理 page's 代理集合 section is expanded
+	// NetTab is the 网络 page's tab: "overview", "connectivity" or "dns";
+	// ProbeTab the 检测 page's: "leak", "ip", "unlock" or "region".
+	// "" or an unknown key = the first tab.
+	NetTab    string
+	ProbeTab  string
+	LogLevel  string // the 日志 page's lowest level shown ("debug"…"error"); "" = default
+	LogSource string // the 日志 page's source: "core" or "app"; "" = default
 }
 
 // RuleMatch is the result of testing an address against the rules.

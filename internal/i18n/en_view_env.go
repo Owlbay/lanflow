@@ -33,6 +33,13 @@ func init() {
 		"安装并开启": "Install and Turn On",
 		"权限组件已安装，但暂时无法连接。请稍后再试一次": "The helper is installed but cannot be reached right now. Try again in a moment",
 		"权限组件已安装，TUN 模式已开启":       "Helper installed; TUN Mode on",
+
+		// internal/view/env/golink.go
+		"设置 › 代理":  "Settings › Proxy",
+		"设置 › DNS": "Settings › DNS",
+		"设置 › 嗅探":  "Settings › Sniffing",
+		"设置 › 高级":  "Settings › Advanced",
+		"前往%s":     "Go to %s",
 	} {
 		en[k] = v
 	}

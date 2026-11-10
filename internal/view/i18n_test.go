@@ -192,8 +192,20 @@ func TestEnglishUIHasNoChinese(t *testing.T) {
 	click(t, tt, "www.google.com:443")
 	c.frame("connection detail", tt)
 
-	// Network: the add-site dialog.
+	// 检测: the leak results with their fix link, and the IP 纯净度 tab.
+	s.navigate(env.Probe, "")
+	tt.Frame()
+	click(t, tt, i18n.T("开始检查"))
+	c.frame("leak check results", tt)
+	click(t, tt, i18n.T("IP 纯净度"))
+	c.frame("probe IP tab", tt)
+
+	// Network: the DNS tab and the add-site dialog on 连通性.
 	s.navigate(env.Net, "")
+	tt.Frame()
+	click(t, tt, "DNS")
+	c.frame("net DNS tab", tt)
+	click(t, tt, i18n.T("连通性"))
 	tt.Frame()
 	click(t, tt, i18n.T("＋ 添加网站"))
 	c.frame("add site dialog", tt)

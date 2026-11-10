@@ -73,6 +73,27 @@ func init() {
 		"在「%s」中选择「%s」": "In \"%s\", select \"%s\"",
 		"已切换到「%s」":     "Switched to \"%s\"",
 		"住宅 / 运营商":     "Residential / ISP",
+
+		// internal/view/probe/leak.go
+		"泄漏检查":        "Leak Check",
+		"开始检查":        "Start Check",
+		"按需运行，不会自动检查": "Runs on demand only",
+		"上次检查 %s":     "Last checked %s",
+		"重新检查":        "Check Again",
+		"未检查":         "Unchecked",
+		"正常":          "OK",
+		"部分":          "Partial",
+		"泄漏":          "Leak",
+		"跳过":          "Skipped",
+		"系统解析器、强制 IPv6 的直连请求和直接发出的 STUN（UDP）各测一次，与内核和代理出口比较；并列出出口 IP 的归属与三路 DNS 结果": "Probes the system resolver, an IPv6-only direct request and a directly sent STUN (UDP) request once each and compares them with the core and the proxy exit; also lists the exit IP's network and three DNS answers side by side",
+		"检查 DNS、IPv6 和 WebRTC 是否绕过代理，以及出口 IP 的类型":                                   "Check whether DNS, IPv6 and WebRTC bypass the proxy, and the exit IP's type",
+		"附加对比的域名（可选）":    "Extra domain to compare (optional)",
+		"在浏览器中检查 IP 纯净度": "Check IP Purity in Browser",
+		"尚未检查":           "Not checked yet",
+		"正在比较系统解析器、内核和代理出口看到的地址。":             "Comparing the addresses seen by the system resolver, the core and the proxy exit.",
+		"启动内核后可以检查 DNS、IPv6 和 WebRTC 是否绕过代理。": "Start the core to check whether DNS, IPv6 and WebRTC bypass the proxy.",
+		"%s：前往%s": "%s: go to %s",
+		"在浏览器中打开 ippure.com，查看更细的 IP 风险评分": "Open ippure.com in the browser for a finer IP risk score",
 	} {
 		en[k] = v
 	}

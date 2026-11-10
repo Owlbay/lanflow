@@ -1,6 +1,9 @@
-// Package netpage is the 网络 page (docs/design.md §5.7): where the direct
-// and the proxied traffic come out, site connectivity, the local network,
-// the proxy status and the DNS query tool.
+// Package netpage is the 网络 page (docs/design.md §5.7): the passive
+// state of this machine and its connection, in three tabs. 概况: where
+// the direct and the proxied traffic come out, the local network and the
+// proxy status, each status linking to where it is configured; 连通性:
+// site connectivity; DNS: the effective DNS and the query tool. It never
+// calls a third-party service; the on-demand checks are on 检测.
 package netpage
 
 import (
@@ -8,7 +11,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/app"
@@ -19,16 +21,37 @@ import (
 
 var dnsTypes = []string{"A", "AAAA", "CNAME", "HTTPS"}
 
+// Tabs of the page.
+const (
+	tabOverview = iota
+	tabConn
+	tabDNS
+)
+
+// tabKeys are the stored names of the tabs (model.UIState.NetTab), by tab.
+var tabKeys = []string{"overview", "connectivity", "dns"}
+
+// tabFromKey is the tab stored as k; the first one for "" or a key it
+// does not know.
+func tabFromKey(k string) int {
+	for i, v := range tabKeys {
+		if v == k {
+			return i
+		}
+	}
+	return tabOverview
+}
+
 // Page holds page-local UI state.
 type Page struct {
 	e *env.Env
 
+	tab    int
+	loaded bool // tab restored from API.UIState
+
 	dnsName  string
 	dnsType  string
 	querying bool
-
-	leakDomain string           // optional domain for the DNS comparison of 泄漏检查
-	leakOpen   map[string]*bool // 泄漏检查 items whose details are expanded, by name
 
 	addOpen         bool
 	addName, addURL string
@@ -52,18 +75,33 @@ type Page struct {
 
 // New returns the page.
 func New(e *env.Env) *Page {
-	return &Page{e: e, dnsName: "www.google.com", dnsType: "A", leakOpen: map[string]*bool{},
+	return &Page{e: e, dnsName: "www.google.com", dnsType: "A",
 		effStale: env.Watch(e.API, app.TopicSettings, app.TopicStatus)}
+}
+
+// restore loads the remembered tab once.
+func (p *Page) restore() {
+	if p.loaded {
+		return
+	}
+	p.loaded = true
+	p.tab = tabFromKey(p.e.API.UIState().NetTab)
+}
+
+// persist remembers the tab across restarts.
+func (p *Page) persist() {
+	key := tabKeys[p.tab]
+	p.e.SaveUIState("net", func(u *model.UIState) { u.NetTab = key })
 }
 
 // View draws the whole content area including the header.
 func (p *Page) View(c *ui.Context) {
 	e, t := p.e, c.Theme()
 	p.flushToast()
+	p.restore()
 	st := e.API.Status()
 	running := st.Core == model.CoreRunning
 	sites := e.API.Sites()
-	net := e.API.NetInfo() // once a build, for the two parts that show it
 	testing := false
 	for _, s := range sites {
 		if s.ViaProxy == -2 || s.Direct == -2 {
@@ -84,30 +122,55 @@ func (p *Page) View(c *ui.Context) {
 				ui.Text(c, i18n.T("重新测试"))
 			}).OnClick(p.retest)
 		})
-		// Two columns that fit the window without page scrolling
-		// (docs/design.md §4 / §5.7): the exit cards on top; below, the
-		// site table and the DNS query on the left, the local network,
-		// the proxy status and the leak check on the right. The site
-		// table and the leak results are the only parts that scroll.
-		ui.Column(c).Grow(1).Padding(4, 24, 20, 24).Gap(16).Clip().Children(func() {
-			ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
-				p.directCard(c, t, net)
-				p.exitCard(c, t, st)
-			})
-			ui.Row(c).Gap(16).Grow(1).AlignItems(ui.Stretch).Children(func() {
-				ui.Column(c).Grow(1).Basis(0).Gap(16).Children(func() {
-					p.sitesSection(c, t, sites, running)
-					p.dnsSection(c, t, running)
-				})
-				ui.Column(c).Grow(1).Basis(0).Gap(16).Children(func() {
-					p.localSection(c, t, net)
-					p.proxySection(c, t, st)
-					p.leakSection(c, t, running)
-				})
-			})
+		// Three tabs (docs/design.md §5.7). 概况: the exit cards on top,
+		// the local network and the proxy status side by side below;
+		// 连通性: the site table taking the whole height; DNS: the
+		// effective DNS and the query tool.
+		ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(12).Clip().Children(func() {
+			if ui.Segmented(c.Key("tabs"), &p.tab, i18n.T("概况"), i18n.T("连通性"), "DNS").Label(i18n.T("网络分栏")).Changed() {
+				p.persist()
+			}
+			switch p.tab {
+			case tabConn:
+				p.sitesSection(c, t, sites, running)
+			case tabDNS:
+				p.dnsTab(c, t, running)
+			default:
+				p.overviewTab(c, t, st)
+			}
 		})
 	})
 	p.addDialog(c, t)
+}
+
+// overviewTab is 概况: the two exit cards, then 本机网络 and 代理状态
+// side by side. It scrolls when the window is too short for it.
+func (p *Page) overviewTab(c *ui.Context, t *ui.Theme, st model.Status) {
+	net := p.e.API.NetInfo()
+	ui.Scroll(c.Key("overview")).Grow(1).Gap(16).Children(func() {
+		ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+			p.directCard(c, t, net)
+			p.exitCard(c, t, st)
+		})
+		ui.Row(c).Gap(16).AlignItems(ui.Stretch).Shrink(0).Children(func() {
+			ui.Column(c).Grow(1).Basis(0).Children(func() { p.localSection(c, t, net) })
+			ui.Column(c).Grow(1).Basis(0).Children(func() { p.proxySection(c, t, st) })
+		})
+	})
+}
+
+// dnsTab is the DNS tab: the DNS in effect, linking to Settings › DNS,
+// and the query tool.
+func (p *Page) dnsTab(c *ui.Context, t *ui.Theme, running bool) {
+	p.effective()
+	ui.Column(c).Grow(1).Gap(16).Children(func() {
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Padding(0, 4).Shrink(0).Children(func() {
+			ui.Text(c, i18n.T("当前 DNS")).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
+			ui.Text(c, dnsStatusText(p.effDNS)).FontSize(12).SingleLine().Shrink(1)
+			p.e.GoLink(c, i18n.T("更改"), i18n.Tf("更改%s", "DNS"), env.Settings, "dns")
+		})
+		p.dnsSection(c, t, running)
+	})
 }
 
 // sectionTitle is a group heading: bold title, muted note and, right
@@ -126,11 +189,12 @@ func sectionTitle(c *ui.Context, t *ui.Theme, title, note string, tools func()) 
 }
 
 // panel is a rounded surface holding compact key-value lines: the
-// 本机网络 and 代理状态 groups (docs/design.md §5.7 wireframe).
+// 本机网络 and 代理状态 groups (docs/design.md §5.7 wireframe). It fills
+// the height of its column, so the two side by side end level.
 func (p *Page) panel(c *ui.Context, t *ui.Theme, title string, body func()) {
-	ui.Column(c).Gap(6).Shrink(0).Children(func() {
+	ui.Column(c).Gap(6).Grow(1).Children(func() {
 		sectionTitle(c, t, title, "", nil)
-		ui.Column(c).Padding(10, 14).Gap(6).Radius(10).Background(t.Surface).Border(1, t.Border).Children(body)
+		ui.Column(c).Grow(1).Padding(10, 14).Gap(6).Radius(10).Background(t.Surface).Border(1, t.Border).Children(body)
 	})
 }
 
@@ -321,14 +385,6 @@ func (p *Page) pathRow(c *ui.Context, t *ui.Theme, x model.ExitInfo) {
 	})
 }
 
-// kvRich is kv with the value drawn by value (a dot and text, say).
-func (p *Page) kvRich(c *ui.Context, t *ui.Theme, k string, value func()) {
-	ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, k).Width(56).Shrink(0).FontSize(12).TextColor(t.TextMuted).SingleLine()
-		ui.Row(c).Gap(6).AlignItems(ui.Center).Shrink(1).Children(value)
-	})
-}
-
 // ---- sites ----
 
 var siteCols = []ui.TableColumn{
@@ -479,41 +535,69 @@ func (p *Page) proxySection(c *ui.Context, t *ui.Theme, st model.Status) {
 	e := p.e
 	p.effective()
 	p.panel(c, t, i18n.T("代理状态"), func() {
-		p.kvRich(c, t, i18n.T("系统代理"), func() {
-			if st.SystemProxy {
-				e.Kit.Dot(c, "green")
-				ui.Text(c, i18n.Tf("指向澜流 127.0.0.1:%d", st.MixedPort)).FontSize(12).FontFeatures("tnum").SingleLine()
-			} else {
-				e.Kit.Dot(c, "gray")
-				ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
+		// Label, value and a link to where it is configured, one line each.
+		ui.Grid(c).ColumnTracks(ui.FitContent(), ui.Fr(1), ui.FitContent()).GapX(8).GapY(6).AlignItems(ui.Center).Children(func() {
+			p.statusLine(c, t, i18n.T("系统代理"), func() {
+				if st.SystemProxy {
+					e.Kit.Dot(c, "green")
+					statusText(c, i18n.Tf("指向澜流 127.0.0.1:%d", st.MixedPort))
+				} else {
+					e.Kit.Dot(c, "gray")
+					ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
+				}
+			}, env.Overview, "")
+			port := i18n.Tf("%d（HTTP + SOCKS5）", st.MixedPort)
+			if st.AllowLAN {
+				port += " · " + i18n.T("允许局域网连接")
+			}
+			p.statusLine(c, t, i18n.T("监听端口"), func() { statusText(c, port) }, env.Settings, "proxy")
+			p.statusLine(c, t, i18n.T("TUN 模式"), func() {
+				if st.TUN {
+					e.Kit.Dot(c, "green")
+					statusText(c, i18n.T("已开启"))
+				} else {
+					e.Kit.Dot(c, "gray")
+					ui.Text(c, i18n.T("未开启")).FontSize(12).TextColor(t.TextMuted)
+				}
+			}, env.Settings, "proxy")
+			// 嗅探 and DNS report the effective config (docs/design.md §5.7): the
+			// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
+			snf := i18n.T("未开启")
+			if p.snifferOn {
+				snf = i18n.T("已开启") + " · " + sourceName(p.effSniffer.Source)
+			}
+			p.statusLine(c, t, i18n.T("嗅探"), func() { statusText(c, snf) }, env.Settings, "sniffer")
+			p.statusLine(c, t, "DNS", func() { statusText(c, dnsStatusText(p.effDNS)) }, env.Settings, "dns")
+			p.statusLine(c, t, i18n.T("控制接口"), func() { statusText(c, i18n.T("本机套接字，仅澜流可访问")) }, "", "")
+			if a := st.ATrust; a.Running {
+				p.statusLine(c, t, i18n.T("aTrust 兼容"), func() {
+					e.Kit.Dot(c, "green")
+					ui.Column(c).Gap(2).Shrink(1).Children(func() {
+						statusText(c, atrustSummary(a))
+						ui.Text(c, atrustDetail(a)).FontSize(11).TextColor(t.TextMuted).Selectable()
+					})
+				}, env.Settings, "proxy")
 			}
 		})
-		port := i18n.Tf("%d（HTTP + SOCKS5）", st.MixedPort)
-		if st.AllowLAN {
-			port += " · " + i18n.T("允许局域网连接")
-		}
-		tun := i18n.T("未开启")
-		if st.TUN {
-			tun = i18n.T("已开启")
-		}
-		env.KV(c, i18n.T("监听端口"), i18n.Tf("%s · TUN 模式 %s", port, tun), 56, true, nil)
-		// 嗅探 and DNS report the effective config (docs/design.md:463): the
-		// subscription's sections in 跟随订阅 mode, Lanflow's when taken over.
-		snf := i18n.T("未开启")
-		if p.snifferOn {
-			snf = i18n.T("已开启") + " · " + sourceName(p.effSniffer.Source)
-		}
-		env.KV(c, i18n.T("嗅探"), snf, 56, true, nil)
-		env.KV(c, "DNS", dnsStatusText(p.effDNS), 56, true, nil)
-		env.KV(c, i18n.T("控制接口"), i18n.T("本机套接字，仅澜流可访问"), 56, true, nil)
-		if a := st.ATrust; a.Running {
-			p.kvRich(c, t, i18n.T("aTrust 兼容"), func() {
-				e.Kit.Dot(c, "green")
-				ui.Text(c, atrustSummary(a)).FontSize(12).FontFeatures("tnum").SingleLine()
-			})
-			ui.Text(c, atrustDetail(a)).FontSize(11).TextColor(t.TextMuted).Margin(0, 0, 0, 64).Selectable()
-		}
 	})
+}
+
+// statusLine is one 代理状态 line as three grid cells: the label, the
+// value value draws and the link to page (with arg) where it is
+// configured; no link when page is "".
+func (p *Page) statusLine(c *ui.Context, t *ui.Theme, k string, value func(), page env.Page, arg string) {
+	ui.Text(c, k).FontSize(12).TextColor(t.TextMuted).SingleLine()
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(value)
+	if page == "" {
+		ui.Box(c)
+		return
+	}
+	p.e.GoLink(c, i18n.T("更改"), i18n.Tf("更改%s", k), page, arg)
+}
+
+// statusText is a 代理状态 value.
+func statusText(c *ui.Context, s string) {
+	ui.Text(c, s).FontSize(12).FontFeatures("tnum").SingleLine().Shrink(1).Tooltip(s)
 }
 
 // atrustSummary is the 代理状态 line for a detected aTrust.
@@ -563,130 +647,6 @@ func dnsStatusText(d model.EffectiveDNS) string {
 		mode = i18n.T("内置 DNS 未启用")
 	}
 	return sourceName(d.Source) + " · " + mode
-}
-
-// ---- 泄漏检查 ----
-
-func (p *Page) leakSection(c *ui.Context, t *ui.Theme, running bool) {
-	e := p.e
-	lk := e.API.LeakCheck()
-	note := i18n.T("按需运行，不会自动检查")
-	if !running {
-		note = i18n.T("需要内核运行")
-	} else if !lk.CheckedAt.IsZero() {
-		note = i18n.Tf("上次检查 %s", lk.CheckedAt.Format("15:04:05"))
-	}
-	// The results take the height left in the column and scroll inside;
-	// each line opens its details on a click.
-	ui.Column(c).Gap(6).Grow(1).Basis(0).MinHeight(100).Children(func() {
-		sectionTitle(c, t, i18n.T("泄漏检查"), note, func() {
-			// The finer IP risk score is a third-party page: handed to the
-			// browser, never requested by the app (also in 「检测」).
-			link := env.LinkText(c, i18n.T("在浏览器中检查 IP 纯净度"), "").Tooltip(i18n.T("更细的 IP 风险评分（纯净度）可在「检测」页按需在线检测，也可在浏览器中查看"))
-			if link.Clicked() {
-				_ = mygo.Shell.OpenExternal(ipPurityURL)
-			}
-		})
-		ui.Column(c).Grow(1).Radius(10).Background(t.Surface).Border(1, t.Border).Clip().Dividers(1, t.Border).Children(func() {
-			ui.Row(c).Gap(8).PaddingX(12).MinHeight(40).AlignItems(ui.Center).Shrink(0).Children(func() {
-				ui.TextInput(c.Key("leakdomain"), &p.leakDomain).Placeholder(i18n.T("附加对比的域名（可选）")).Font("monospace").Grow(1).
-					Label(i18n.T("附加对比的域名（可选）")).Tooltip(i18n.T("系统解析器、强制 IPv6 的直连请求和直接发出的 STUN（UDP）各测一次，与内核和代理出口比较；并列出出口 IP 的归属与三路 DNS 结果"))
-				if lk.Checking {
-					ui.Spinner(c).Size(12, 12).Label(i18n.T("检查中…"))
-					ui.Text(c, i18n.T("检查中…")).TextColor(t.TextMuted)
-					return
-				}
-				label := i18n.T("开始检查")
-				if len(lk.Items) > 0 {
-					label = i18n.T("重新检查")
-				}
-				domain := strings.TrimSpace(p.leakDomain)
-				ui.Button(c, label).Disabled(!running).Tooltip(i18n.T("检查 DNS、IPv6 和 WebRTC 是否绕过代理，以及出口 IP 的类型")).OnClick(func() {
-					e.Run(func() error { return e.API.RunLeakCheckWith(domain) }, "")
-				})
-			})
-			if lk.Error != "" {
-				ui.Text(c, lk.Error).FontSize(12).TextColor(t.Danger).Padding(6, 12)
-			}
-			if len(lk.Items) == 0 {
-				// No icon: the panel is short at the minimum window height.
-				switch {
-				case lk.Checking:
-					e.Kit.Empty(c, "", i18n.T("检查中…"), i18n.T("正在比较系统解析器、内核和代理出口看到的地址。"), nil)
-				case !running:
-					e.Kit.Empty(c, "", i18n.T("内核未启动"), i18n.T("启动内核后可以检查 DNS、IPv6 和 WebRTC 是否绕过代理。"), nil)
-				default:
-					e.Kit.Empty(c, "", i18n.T("尚未检查"), i18n.T("检查 DNS、IPv6 和 WebRTC 是否绕过代理，以及出口 IP 的类型")+i18n.T("。"), nil)
-				}
-				return
-			}
-			ui.Scroll(c).Grow(1).Children(func() {
-				ui.Column(c).Dividers(1, t.Border).Children(func() {
-					for _, it := range lk.Items {
-						p.leakRow(c, t, it)
-					}
-				})
-			})
-		})
-	})
-}
-
-// ipPurityURL is the third-party IP risk-score site the leak section
-// opens in the browser; the app itself never requests it.
-const ipPurityURL = "https://ippure.com/"
-
-// leakRow draws one result as a line (status dot, name, state, summary)
-// that opens the structured rows and the explanation under it.
-func (p *Page) leakRow(c *ui.Context, t *ui.Theme, it model.LeakItem) {
-	e := p.e
-	dot, word := "gray", i18n.T("未检查")
-	switch it.Status {
-	case model.LeakOK:
-		dot, word = "green", i18n.T("正常")
-	case model.LeakWarn:
-		dot, word = "orange", i18n.T("部分")
-	case model.LeakFail:
-		dot, word = "red", i18n.T("泄漏")
-	case model.LeakSkipped:
-		dot, word = "gray", i18n.T("跳过")
-	}
-	name := it.Title
-	if name == "" {
-		name = it.Name
-	}
-	open := p.leakOpen[it.Name]
-	if open == nil {
-		open = new(bool)
-		p.leakOpen[it.Name] = open
-	}
-	ui.Column(c.Key(it.Name)).Children(func() {
-		parts := ui.CollapsibleBase(c.Key("coll"), open)
-		parts.Trigger.Gap(8).PaddingX(12).MinHeight(32).AlignItems(ui.Center).Label(name + " · " + word).Children(func() {
-			ui.Box(c).TextColor(t.TextMuted).Children(func() { e.Kit.Icon(c, "chevron", 12) }).Rotate(90 * parts.Progress())
-			e.Kit.Dot(c, dot)
-			ui.Text(c, name).Bold().FontSize(13).SingleLine().Shrink(0)
-			ui.Text(c, word).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(0)
-			ui.Text(c, it.Summary).FontSize(12).Grow(1).Shrink(1).SingleLine()
-		})
-		parts.Panel(func() {
-			ui.Column(c).Gap(4).Padding(0, 12, 10, 40).Children(func() {
-				if len(it.Rows) > 0 {
-					ui.Column(c).Gap(2).Children(func() {
-						for _, r := range it.Rows {
-							ui.Row(c).Gap(8).AlignItems(ui.Start).Children(func() {
-								ui.Text(c, r.Label).FontSize(11).TextColor(t.TextMuted).Width(120).Shrink(0)
-								ui.Text(c, r.Value).FontSize(11).Font("monospace").Grow(1).Selectable()
-							})
-						}
-					})
-				}
-				ui.Text(c, it.Summary).FontSize(12).Selectable()
-				if it.Detail != "" {
-					ui.Text(c, it.Detail).FontSize(11).TextColor(t.TextMuted).Selectable()
-				}
-			})
-		})
-	})
 }
 
 // ---- DNS query ----

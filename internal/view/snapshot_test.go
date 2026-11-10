@@ -63,11 +63,11 @@ var snapshots = []snapshot{
 		click(t, tt, i18n.T("测试…"))
 	}},
 	{name: "net", page: env.Net},
-	{name: "net-leak", page: env.Net, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
-		click(t, tt, i18n.T("开始检查"))
+	{name: "net-connectivity", page: env.Net, prep: clickOnly("连通性")},
+	{name: "net-dns", page: env.Net, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		click(t, tt, "DNS")
 		tt.Frame()
-		_ = tt.Click(i18n.T("仅遵守系统代理的应用由澜流解析域名"))
-		_ = tt.Click(i18n.T("查询"))
+		click(t, tt, i18n.T("查询"))
 	}},
 	{name: "stats", page: env.Stats},
 	{name: "stats-domain", page: env.Stats, prep: clickOnly("域名")},
@@ -83,7 +83,15 @@ var snapshots = []snapshot{
 		}
 	}},
 	{name: "probe", page: env.Probe},
+	{name: "probe-leak-result", page: env.Probe, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		click(t, tt, i18n.T("开始检查"))
+		tt.Frame()
+		_ = tt.Click(i18n.T("仅遵守系统代理的应用由澜流解析域名"))
+	}},
+	{name: "probe-ip", page: env.Probe, prep: clickOnly("IP 纯净度")},
 	{name: "probe-ip-result", page: env.Probe, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		click(t, tt, i18n.T("IP 纯净度"))
+		tt.Frame()
 		click(t, tt, i18n.T("检测出口"))
 		tt.Frame()
 		click(t, tt, i18n.T("在线检测"))
