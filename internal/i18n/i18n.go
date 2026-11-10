@@ -30,6 +30,18 @@ var Languages = []string{ZH, EN}
 
 var current atomic.Pointer[string]
 
+// en maps each Chinese key to its English text. The en_*.go files fill it,
+// one file per part of the app (en_view_conns.go for the 连接 page, en_app.go
+// for the service, en_common.go for the words several parts share); a key
+// is given in one place only (TestNoDuplicateKeys). Terminology follows
+// docs/design.md §10: 内核 → Core, 系统代理 → System Proxy, 订阅 →
+// Subscription, 节点 → Node, 代理组 → Proxy Group, 规则 / 全局 / 直连 →
+// Rule / Global / Direct, 测速 → Latency Test, 连接 → Connections, TUN
+// 模式（增强模式） → TUN Mode (Enhanced). Titles, buttons and menu items
+// are in Title Case ("Install Another Version…"); labels, descriptions and
+// messages in sentence case ("Wi-Fi name", "Core started").
+var en = map[string]string{}
+
 // Lang returns the language the process shows: ZH or EN.
 func Lang() string {
 	if p := current.Load(); p != nil {
