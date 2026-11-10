@@ -1,0 +1,12 @@
+{
+  "name": "Lanflow",
+  "identifier": "com.example.lanflow",
+  "version": "0.1.0",
+  "urlSchemes": ["lanflow", "clash"],
+  "out": "build",
+  "macos": {
+    "infoPlist": {
+      "NSLocalNetworkUsageDescription": "澜流需要连接局域网中的代理服务器（如路由器或 NAS 上的节点）和设备。Lanflow connects to proxy servers and devices on your local network."
+    }
+  }
+}

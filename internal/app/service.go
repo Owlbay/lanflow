@@ -1,0 +1,736 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"lanflow/internal/applog"
+	"lanflow/internal/controller"
+	"lanflow/internal/core"
+	"lanflow/internal/i18n"
+	"lanflow/internal/locate"
+	"lanflow/internal/model"
+	"lanflow/internal/platform/atrust"
+	"lanflow/internal/profile"
+)
+
+// Service is the real implementation of API.
+//
+// Locking: mu guards every field of state and is never held across I/O
+// (process start, controller calls, disk, network). opMu serializes the
+// actions that change the core's configuration (start, stop, reload,
+// subscription switch) and is held across their I/O; it is never taken
+// while mu is held.
+type Service struct {
+	opt Options
+	d   deps
+
+	ctrlAddr string         // controller socket / pipe
+	workDir  string         // <DataDir>/core
+	runtime  string         // <DataDir>/core/runtime.yaml
+	logFile  string         // <LogDir>/mihomo.log
+	alog     *applog.Logger // <LogDir>/lanflow.log (applog.go)
+	pac      pacServer      // PAC file server for the PAC system-proxy mode (pac.go)
+
+	rootCtx    context.Context
+	rootCancel context.CancelFunc
+	wg         sync.WaitGroup // background goroutines (schedulers, streams)
+	shutdown   sync.Once
+
+	opMu sync.Mutex
+
+	mu    sync.Mutex
+	state state
+	em    *emitter
+
+	// streams of the running core (guarded by mu)
+	streamCancel context.CancelFunc
+	logsCancel   context.CancelFunc
+	connsCancel  context.CancelFunc
+	streamWG     sync.WaitGroup
+	background   atomic.Bool // the window is out of sight (SetBackground, streams.go)
+
+	probeMu    sync.Mutex // debounces the automatic main-exit probe
+	probeTimer *time.Timer
+
+	recheckMu    sync.Mutex // debounces the wake / network-change recheck (watch.go)
+	recheckTimer *time.Timer
+
+	probeExitMu sync.Mutex // one 检测 probe uses the probe group at a time (probe.go)
+
+	stats *statsStore // 流量统计 (stats.go); its own lock
+	cores coresState  // installed Mihomo versions and release lists (cores.go); its own lock
+}
+
+// state is everything the reads return. Every slice/map handed out is copied.
+type state struct {
+	st       model.Status
+	settings model.Settings
+	up, down []int64
+	totalUp  int64 // last connections snapshot totals
+	totalDn  int64
+
+	proxies  model.ProxySnapshot
+	rawProxy map[string]controller.Proxy
+	testing  map[string]bool
+
+	pprovs    []model.ProxyProvider // proxy-providers, sorted by name (proxies.go)
+	pprovBusy map[string]string     // provider → "update" | "check" while an action runs
+
+	subs         []model.Subscription
+	subsUpdating map[string]bool
+
+	conns   []model.Connection
+	closed  []model.Connection
+	tracker connTracker
+
+	logs []model.LogEntry
+
+	rules        []model.Rule
+	custom       []model.CustomRule
+	provs        []model.RuleProvider
+	provUpdating map[string]bool
+
+	exits     map[string]model.ExitInfo // by node
+	exitEntry map[string]string         // node → entry IP last analysed
+	routes    []model.ExitRoute
+	you       *model.EndpointInfo
+
+	net   model.NetInfo
+	sites []model.SiteCheck
+	leak  model.LeakResult // 泄漏检查 (leak.go)
+	probe probeState       // 检测 page (probe.go)
+
+	// effective DNS / sniffer sections (effective.go): what the current
+	// subscription's config says after the overrides, refreshed with the
+	// store caches; Lanflow's own settings take over at read time.
+	effDNS model.EffectiveDNS
+	effSnf model.EffectiveSniffer
+
+	geoInfo   model.GeoDataInfo // geo file times (geoinfo.go), re-read when geoInfoAt is stale
+	geoInfoAt time.Time
+
+	overrides    model.Overrides
+	runtimeYAML  []byte
+	runtimeLines []model.RuntimeLine
+	groupIcons   map[string]string // proxy-group name → icon reference of the runtime config (icons.go)
+	icons        *iconCache        // decoded / downloaded icons (icons.go), allocated lazily
+	procIcons    *procIconCache    // application icons by process path (procicon.go), allocated lazily
+
+	notices []Notice
+
+	coreBin       string // resolved binary ("" when missing)
+	probePort     int
+	weSetProxy    bool        // Lanflow pointed the system proxy at itself
+	tunRunner     bool        // the manager currently uses the helper runner
+	helperOK      bool        // helper.Installed at last check
+	runningTUN    bool        // the running config has TUN enabled
+	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
+	lastAutoStart time.Time
+	youDone       bool // You() fetched (or being fetched) for this start
+	youBusy       bool // a fetchYou loop is running
+	youGen        int  // bumps to stop an older fetchYou loop
+	hintDone      bool // the system-proxy hint bubble was dismissed or the proxy was turned on once (hintFile)
+	hintSaving    bool // hintFile write in flight
+}
+
+var _ API = (*Service)(nil)
+
+// NewService wires the real packages and returns a ready service. It does
+// not start the core; that happens in the background (auto system proxy,
+// or a current subscription exists) once the service is created.
+func NewService(o Options) (*Service, error) {
+	for _, dir := range []string{o.DataDir, o.LogDir, o.CacheDir, filepath.Join(o.DataDir, "core")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf(i18n.T("无法创建数据目录 %s：%v"), dir, err)
+		}
+	}
+	store, err := profile.Open(o.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf(i18n.T("无法打开订阅存储：%v"), err)
+	}
+	addr := core.ControllerAddress()
+	ctrl := controller.New(func(ctx context.Context) (net.Conn, error) { return core.Dial(ctx, addr) })
+	mgr := core.NewManager(core.Options{
+		Runner: core.NewExecRunner(),
+		Ready: func(ctx context.Context) error {
+			_, err := ctrl.Version(ctx)
+			return err
+		},
+	})
+	workDir := filepath.Join(o.DataDir, "core")
+	copyBundledGeo(filepath.Join(o.ResourceDir, "geo"), workDir)
+	loc := locate.New(filepath.Join(o.CacheDir, "exits.json"),
+		filepath.Join(workDir, "geoip.metadb"), filepath.Join(workDir, "GeoLite2-ASN.mmdb"))
+
+	s, err := newServiceWith(o, realDeps(ctrl, mgr, store, loc))
+	if err != nil {
+		return nil, err
+	}
+	s.ctrlAddr = addr
+	s.run()
+	return s, nil
+}
+
+// newServiceWith builds a service from explicit dependencies (tests pass
+// fakes). It loads settings, resolves the core binary and detects a
+// leftover system proxy, but starts no goroutines; see run.
+func newServiceWith(o Options, d deps) (*Service, error) {
+	if d.now == nil {
+		d.now = time.Now
+	}
+	if d.freePort == nil {
+		d.freePort = freeTCPPort
+	}
+	if d.portInUse == nil {
+		d.portInUse = tcpPortInUse
+	}
+	if d.otherTUN == nil {
+		d.otherTUN = func(context.Context) (string, bool) { return "", false }
+	}
+	if d.appDNS == nil {
+		d.appDNS = lookupVia
+	}
+	if err := os.MkdirAll(o.DataDir, 0o700); err != nil {
+		return nil, fmt.Errorf(i18n.T("无法创建数据目录：%v"), err)
+	}
+	_, statErr := os.Stat(filepath.Join(o.DataDir, settingsFile))
+	set, loadErr := loadSettings(o.DataDir)
+	if os.IsNotExist(statErr) && o.Language != "" {
+		set.Language = i18n.Normalize(o.Language)
+	}
+	i18n.SetLang(set.Language)
+	if os.IsNotExist(statErr) && d.portInUse(set.MixedPort, set.AllowLAN) {
+		// First run next to another proxy client that holds 7890: take the
+		// next free port instead of silently sharing theirs.
+		for p := set.MixedPort + 1; p < set.MixedPort+100; p++ {
+			if !d.portInUse(p, set.AllowLAN) {
+				set.MixedPort = p
+				_ = saveSettings(o.DataDir, set)
+				break
+			}
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &Service{
+		opt:        o,
+		d:          d,
+		workDir:    filepath.Join(o.DataDir, "core"),
+		runtime:    filepath.Join(o.DataDir, "core", "runtime.yaml"),
+		logFile:    filepath.Join(o.LogDir, "mihomo.log"),
+		rootCtx:    ctx,
+		rootCancel: cancel,
+		em:         newEmitter(),
+	}
+	s.alog, _ = applog.Open(o.LogDir) // a failure keeps the log in memory only
+	s.alog.OnWrite(func() { s.em.emit(TopicLogs) })
+	s.alog.Infof("Lanflow starting (%s/%s), data %s", runtime.GOOS, runtime.GOARCH, o.DataDir)
+	s.state = state{
+		settings:     set,
+		testing:      map[string]bool{},
+		subsUpdating: map[string]bool{},
+		provUpdating: map[string]bool{},
+		exits:        map[string]model.ExitInfo{},
+		exitEntry:    map[string]string{},
+		overrides:    model.Overrides{PerSub: map[string]string{}},
+	}
+	s.state.st = model.Status{Core: model.CoreStopped, Mode: set.Mode, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN}
+	if loadErr != nil {
+		s.state.notices = append(s.state.notices, Notice{Kind: "error", Title: i18n.T("设置文件有问题"), Detail: loadErr.Error()})
+		s.alog.Errorf("settings file: %v", loadErr)
+	}
+	if port, err := d.freePort(); err == nil {
+		s.state.probePort = port
+	}
+	if _, err := os.Stat(s.hintPath()); err == nil {
+		s.state.hintDone = true
+	}
+	s.migrateLegacyCore()
+	s.resolveBinaryLocked()
+	s.reloadStoreLocked()
+	s.state.effDNS, s.state.effSnf = s.subscriptionSections(s.d.store.Current())
+	s.detectRecovery()
+	s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
+	s.stats = newStatsStore(filepath.Join(o.DataDir, "stats"), d.now, s.statsCountry)
+	if err := s.stats.load(); err != nil {
+		s.alog.Errorf("traffic statistics: %v", err)
+	}
+	return s, nil
+}
+
+// run starts the background work: crash watcher, subscription scheduler,
+// sleep/network watcher, one-off startup tasks and the automatic core start.
+func (s *Service) run() {
+	s.goBackground(s.watchCrashes)
+	s.goBackground(s.autoUpdateLoop)
+	s.goBackground(s.watchSystem)
+	s.goBackground(s.watchCoexist)
+	s.goBackground(s.bootstrap)
+	s.goBackground(s.coreUpdateLoop)
+	s.goBackground(func() { s.stats.loop(s.rootCtx) })
+}
+
+func (s *Service) goBackground(fn func()) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		fn()
+	}()
+}
+
+// bootstrap runs once after creation: core version, helper availability,
+// network info, then starts the core when appropriate.
+func (s *Service) bootstrap() {
+	s.mu.Lock()
+	bin := s.state.coreBin
+	set := s.state.settings
+	pending := s.state.st.PendingRecovery
+	s.mu.Unlock()
+
+	if bin != "" {
+		ctx, cancel := context.WithTimeout(s.rootCtx, 10*time.Second)
+		v, err := s.d.core.Version(ctx, bin)
+		cancel()
+		if err == nil {
+			s.mu.Lock()
+			if s.state.st.CoreVersion == "" {
+				s.state.st.CoreVersion = v
+			}
+			s.mu.Unlock()
+			s.em.emit(TopicStatus)
+		}
+	}
+	s.refreshHelper()
+	s.learnBundledVersion()
+	_ = s.RefreshNetwork()
+
+	if s.rootCtx.Err() != nil || pending {
+		return // the recovery answer decides whether to start
+	}
+	_, hasSub := s.d.store.Current()
+	switch {
+	case set.AutoSystemProxy && hasSub:
+		_ = s.SetSystemProxy(true)
+	case hasSub:
+		_ = s.ensureStarted()
+	}
+}
+
+// refreshHelper re-checks whether the privileged helper is installed.
+func (s *Service) refreshHelper() bool {
+	ctx, cancel := context.WithTimeout(s.rootCtx, 3*time.Second)
+	ok := s.d.helper.Installed(ctx)
+	cancel()
+	s.mu.Lock()
+	changed := s.state.helperOK != ok
+	s.state.helperOK = ok
+	s.state.st.TUNAvailable = ok
+	s.mu.Unlock()
+	if changed {
+		s.em.emit(TopicStatus)
+	}
+	return ok
+}
+
+// resolveBinaryLocked finds the core binary and updates Status; call with mu held or before run.
+func (s *Service) resolveBinaryLocked() {
+	bin, err := s.d.core.FindBinary(s.state.settings.CorePath)
+	if err != nil {
+		s.state.coreBin = ""
+		if s.state.st.Core == model.CoreStopped || s.state.st.Core == model.CoreMissing {
+			s.state.st.Core = model.CoreMissing
+			s.state.st.CoreError = coreMissingText(s.state.settings.CorePath, err)
+		}
+		return
+	}
+	s.state.coreBin = bin
+	if s.state.st.Core == model.CoreMissing {
+		s.state.st.Core = model.CoreStopped
+		s.state.st.CoreError = ""
+	}
+}
+
+func coreMissingText(custom string, err error) string {
+	if custom != "" {
+		return fmt.Sprintf(i18n.T("未找到 Mihomo 内核：%s 不存在或不可执行。请在设置 › 内核中重新选择内核文件。"), custom)
+	}
+	return i18n.T("未找到 Mihomo 内核。请在设置 › 内核中选择内核文件，或重新安装澜流。")
+}
+
+// reloadStoreLocked refreshes the cached subscription list, overrides and
+// custom rules from the store; call with mu held or before run.
+func (s *Service) reloadStoreLocked() {
+	subs := s.d.store.List()
+	cur, hasCur := s.d.store.Current()
+	for i := range subs {
+		subs[i].Current = hasCur && subs[i].ID == cur.ID
+		subs[i].Updating = s.state.subsUpdating[subs[i].ID]
+	}
+	s.state.subs = subs
+	s.state.st.HasSubscriptions = len(subs) > 0
+	s.state.st.CurrentSubscription = ""
+	if hasCur {
+		s.state.st.CurrentSubscription = cur.ID
+	}
+	s.state.overrides = overridesSnapshot(s.d.store.Overrides(), subs)
+	s.state.custom = s.d.store.CustomRules()
+}
+
+// refreshStore reloads the store caches under the lock and emits. The
+// effective dns / sniffer sections (effective.go) are read from disk first,
+// outside the lock.
+func (s *Service) refreshStore(topics ...Topic) {
+	dns, snf := s.subscriptionSections(s.d.store.Current())
+	s.mu.Lock()
+	s.reloadStoreLocked()
+	s.state.effDNS, s.state.effSnf = dns, snf
+	s.mu.Unlock()
+	s.em.emit(append(topics, TopicStatus)...)
+}
+
+// detectRecovery checks whether a previous run left the system proxy
+// pointing at Lanflow (marker present, proxy at 127.0.0.1:<our port>).
+func (s *Service) detectRecovery() {
+	m, ok := s.readMarker()
+	if !ok {
+		return
+	}
+	st, err := s.d.sys.Get()
+	port := m.Port
+	if port == 0 {
+		port = s.state.settings.MixedPort
+	}
+	if err != nil || !proxyIsOurs(st, m, port) {
+		// Something else changed the proxy since; our marker is stale.
+		s.removeMarker()
+		return
+	}
+	if s.d.mgr.Running() {
+		return
+	}
+	s.state.st.PendingRecovery = true
+	detail := fmt.Sprintf(i18n.T("系统代理仍指向 127.0.0.1:%d。可以恢复为关闭，或保持开启并启动内核。"), port)
+	if m.PAC != "" {
+		detail = i18n.T("系统代理仍使用澜流的 PAC 文件。可以恢复为关闭，或保持开启并启动内核。")
+	}
+	s.state.notices = append(s.state.notices, Notice{
+		Kind:   "recovery",
+		Title:  i18n.T("上次澜流未正常退出"),
+		Detail: detail,
+	})
+}
+
+func isLoopback(host string) bool {
+	return host == "127.0.0.1" || host == "localhost" || host == "::1" || host == "[::1]"
+}
+
+// copyBundledGeo copies the bundled geodata files into the work dir when
+// they are missing, so the first start needs no download.
+func copyBundledGeo(src, dst string) {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		target := filepath.Join(dst, e.Name())
+		if _, err := os.Stat(target); err == nil {
+			continue
+		}
+		in, err := os.Open(filepath.Join(src, e.Name()))
+		if err != nil {
+			continue
+		}
+		out, err := os.OpenFile(target+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+		if err != nil {
+			in.Close()
+			continue
+		}
+		_, cerr := io.Copy(out, in)
+		in.Close()
+		out.Close()
+		if cerr != nil {
+			os.Remove(target + ".tmp")
+			continue
+		}
+		// Keep the bundle's time, so GeoDataInfo can tell the shipped copy
+		// from a download (and show when it was built, not when it was copied).
+		if fi, err := e.Info(); err == nil {
+			_ = os.Chtimes(target+".tmp", fi.ModTime(), fi.ModTime())
+		}
+		_ = os.Rename(target+".tmp", target)
+	}
+}
+
+// ---- reads ----
+
+func (s *Service) Status() model.Status {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := s.state.st
+	// The first-run bubble (docs/design.md §8.1): shown from the first
+	// successful start until the user turns the system proxy on or
+	// dismisses it. Turning the proxy on settles it for good.
+	if st.SystemProxy && !s.state.hintDone {
+		s.state.hintDone = true
+		if !s.state.hintSaving {
+			s.state.hintSaving = true
+			go s.saveHintDone()
+		}
+	}
+	st.ShowProxyHint = st.Core == model.CoreRunning && !st.SystemProxy && !s.state.hintDone
+	return st
+}
+
+// hintFile exists once the system-proxy hint bubble has served its purpose.
+const hintFile = "sysproxy-hint-done"
+
+func (s *Service) hintPath() string { return filepath.Join(s.opt.DataDir, hintFile) }
+
+func (s *Service) saveHintDone() {
+	_ = writeFileAtomic(s.hintPath(), []byte("1\n"), 0o600)
+	s.mu.Lock()
+	s.state.hintSaving = false
+	s.mu.Unlock()
+}
+
+// DismissProxyHint hides the first-run bubble next to the system proxy
+// switch, now and in later runs.
+func (s *Service) DismissProxyHint() error {
+	s.mu.Lock()
+	s.state.hintDone = true
+	s.mu.Unlock()
+	s.em.emit(TopicStatus)
+	if err := writeFileAtomic(s.hintPath(), []byte("1\n"), 0o600); err != nil {
+		return fmt.Errorf(i18n.T("记录提示状态失败：%v"), err)
+	}
+	return nil
+}
+
+func (s *Service) TrafficHistory() (up, down []int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.state.up...), append([]int64(nil), s.state.down...)
+}
+
+func (s *Service) Proxies() model.ProxySnapshot {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := copySnapshot(s.state.proxies)
+	for i := range out.Groups {
+		out.Groups[i].Icon = s.state.groupIcons[out.Groups[i].Name] // icons.go
+	}
+	return out
+}
+
+func copySnapshot(p model.ProxySnapshot) model.ProxySnapshot {
+	out := model.ProxySnapshot{MainGroup: p.MainGroup, Proxies: make(map[string]model.Proxy, len(p.Proxies))}
+	out.Groups = make([]model.ProxyGroup, len(p.Groups))
+	for i, g := range p.Groups {
+		g.All = append([]string(nil), g.All...)
+		out.Groups[i] = g
+	}
+	for k, v := range p.Proxies {
+		out.Proxies[k] = v
+	}
+	return out
+}
+
+func (s *Service) Subscriptions() []model.Subscription {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := append([]model.Subscription(nil), s.state.subs...)
+	for i := range out {
+		out[i].Updating = s.state.subsUpdating[out[i].ID]
+	}
+	return out
+}
+
+func (s *Service) Connections() []model.Connection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return copyConns(s.state.conns)
+}
+
+func (s *Service) ClosedConnections() []model.Connection {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return copyConns(s.state.closed)
+}
+
+func copyConns(in []model.Connection) []model.Connection {
+	out := make([]model.Connection, len(in))
+	for i, c := range in {
+		c.Chains = append([]string(nil), c.Chains...)
+		out[i] = c
+	}
+	return out
+}
+
+func (s *Service) Logs() []model.LogEntry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.LogEntry(nil), s.state.logs...)
+}
+
+func (s *Service) Rules() []model.Rule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.Rule(nil), s.state.rules...)
+}
+
+func (s *Service) CustomRules() []model.CustomRule {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.CustomRule(nil), s.state.custom...)
+}
+
+func (s *Service) RuleProviders() []model.RuleProvider {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := append([]model.RuleProvider(nil), s.state.provs...)
+	for i := range out {
+		out[i].Updating = s.state.provUpdating[out[i].Name]
+	}
+	return out
+}
+
+func (s *Service) ExitRoutes() []model.ExitRoute {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.ExitRoute(nil), s.state.routes...)
+}
+
+func (s *Service) You() *model.EndpointInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state.you == nil {
+		return nil
+	}
+	y := *s.state.you
+	return &y
+}
+
+func (s *Service) NetInfo() model.NetInfo {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.state.net
+	n.DNS = append([]string(nil), n.DNS...)
+	return n
+}
+
+func (s *Service) Sites() []model.SiteCheck {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]model.SiteCheck(nil), s.state.sites...)
+}
+
+func (s *Service) Settings() model.Settings {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return copySettings(s.state.settings)
+}
+
+func copySettings(in model.Settings) model.Settings {
+	out := in
+	out.Bypass = append([]string(nil), in.Bypass...)
+	out.Sites = append([]model.Site(nil), in.Sites...)
+	out.DNS.Nameserver = append([]string(nil), in.DNS.Nameserver...)
+	out.DNS.ProxyServerNameserver = append([]string(nil), in.DNS.ProxyServerNameserver...)
+	out.DNS.DirectNameserver = append([]string(nil), in.DNS.DirectNameserver...)
+	out.DNS.Policy = append([]model.KV(nil), in.DNS.Policy...)
+	out.DNS.FakeIPFilter = append([]string(nil), in.DNS.FakeIPFilter...)
+	out.DNS.Hosts = append([]model.KV(nil), in.DNS.Hosts...)
+	out.Sniffer.ForceDomain = append([]string(nil), in.Sniffer.ForceDomain...)
+	out.Sniffer.SkipDomain = append([]string(nil), in.Sniffer.SkipDomain...)
+	out.Sniffer.SkipDstAddress = append([]string(nil), in.Sniffer.SkipDstAddress...)
+	out.ATrust = in.ATrust.Clone()
+	out.Advanced = in.Advanced.Clone()
+	return out
+}
+
+func (s *Service) Overrides() model.Overrides {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := model.Overrides{Global: s.state.overrides.Global, PerSub: make(map[string]string, len(s.state.overrides.PerSub)),
+		List: append([]model.Override(nil), s.state.overrides.List...)}
+	for k, v := range s.state.overrides.PerSub {
+		out.PerSub[k] = v
+	}
+	return out
+}
+
+func (s *Service) TakeNotices() []Notice {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n := s.state.notices
+	s.state.notices = nil
+	return n
+}
+
+func (s *Service) ConfigDir() string { return s.opt.DataDir }
+func (s *Service) LogDir() string    { return s.opt.LogDir }
+
+func (s *Service) OnChange(fn func(Topic)) (off func()) { return s.em.add(fn) }
+
+// notify queues a notice for the UI.
+func (s *Service) notify(n Notice) {
+	s.logNotice(n)
+	s.mu.Lock()
+	s.state.notices = append(s.state.notices, n)
+	s.mu.Unlock()
+	s.em.emit(TopicNotice)
+}
+
+// Shutdown restores the system proxy if Lanflow set it, stops the core and
+// every background goroutine. Safe to call more than once.
+func (s *Service) Shutdown() {
+	s.shutdown.Do(func() {
+		s.rootCancel()
+		s.probeMu.Lock()
+		if s.probeTimer != nil {
+			s.probeTimer.Stop()
+		}
+		s.probeMu.Unlock()
+		s.recheckMu.Lock()
+		if s.recheckTimer != nil {
+			s.recheckTimer.Stop()
+		}
+		s.recheckMu.Unlock()
+
+		s.opMu.Lock()
+		s.stopStreams()
+		s.mu.Lock()
+		ours := s.state.weSetProxy
+		s.mu.Unlock()
+		if ours {
+			_ = s.releaseProxy()
+		}
+		s.stopPAC()
+		s.releaseDNS()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_ = s.d.mgr.Stop(ctx)
+		cancel()
+		s.mu.Lock()
+		s.state.weSetProxy = false
+		s.state.st.SystemProxy = false
+		s.state.st.Core = model.CoreStopped
+		s.mu.Unlock()
+		s.opMu.Unlock()
+
+		s.wg.Wait()
+		s.alog.Infof("Lanflow exited cleanly (system proxy restored: %v)", ours)
+		s.alog.Close()
+		s.em.close()
+	})
+}
