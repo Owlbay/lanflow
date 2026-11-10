@@ -462,12 +462,26 @@ type fakeHelper struct {
 	installed  bool
 	installs   []helper.InstallOptions // every Install call (coredl tests)
 	installErr error
+	checkErr   error  // when set, Check returns it (version mismatch tests)
+	bundled    string // last SetBundled path
 }
 
-func (h *fakeHelper) Installed(context.Context) bool {
+func (h *fakeHelper) Check(context.Context) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return h.installed
+	if h.checkErr != nil {
+		return h.checkErr
+	}
+	if !h.installed {
+		return helper.ErrNotRunning
+	}
+	return nil
+}
+func (h *fakeHelper) SetBundled(_ context.Context, path string) error {
+	h.mu.Lock()
+	h.bundled = path
+	h.mu.Unlock()
+	return nil
 }
 func (h *fakeHelper) Install(_ context.Context, o helper.InstallOptions) error {
 	h.mu.Lock()
@@ -477,6 +491,7 @@ func (h *fakeHelper) Install(_ context.Context, o helper.InstallOptions) error {
 		return h.installErr
 	}
 	h.installed = true
+	h.checkErr = nil
 	h.mu.Unlock()
 	return nil
 }

@@ -32,6 +32,11 @@ func (s *Service) refreshNetInfo() error {
 	ctx, cancel := s.ctrlCtx(nil, 5*time.Second)
 	defer cancel()
 	info, err := s.d.netinfo(ctx)
+	return s.storeNetInfo(info, err)
+}
+
+// storeNetInfo keeps network information just read (err: its error).
+func (s *Service) storeNetInfo(info model.NetInfo, err error) error {
 	s.mu.Lock()
 	if err == nil || info.LANIP != "" {
 		info.PublicIPStatus, info.PublicIPError = s.state.net.PublicIPStatus, s.state.net.PublicIPError

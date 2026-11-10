@@ -38,10 +38,13 @@ type Status struct {
 	SystemProxy  bool // the system proxy currently points at Lanflow and Lanflow set it
 	TUN          bool // TUN is enabled in the running config
 	TUNAvailable bool // the privileged helper is installed and reachable
-	Mode         Mode
-	MixedPort    int
-	AllowLAN     bool
-	LANAddress   string // e.g. "192.168.1.23", empty if unknown
+	// HelperReinstall: a helper is installed but of another version or
+	// protocol than this app ships, so TUN needs a reinstall.
+	HelperReinstall bool
+	Mode            Mode
+	MixedPort       int
+	AllowLAN        bool
+	LANAddress      string // e.g. "192.168.1.23", empty if unknown
 
 	Up, Down           int64 // current speed, bytes per second
 	TotalUp, TotalDown int64 // since core start, bytes

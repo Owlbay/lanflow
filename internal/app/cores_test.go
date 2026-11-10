@@ -615,7 +615,7 @@ func TestCoreReleasesRateLimit(t *testing.T) {
 // storeStale caches list as if fetched two hours ago.
 func (h *harness) storeStale(t *testing.T, channel string, list []model.CoreRelease) {
 	t.Helper()
-	h.s.storeReleases(channel, list)
+	h.s.storeReleases(channel, list, "")
 	h.s.cores.mu.Lock()
 	rc := h.s.cores.releases[channel]
 	rc.At = time.Now().Add(-2 * time.Hour)

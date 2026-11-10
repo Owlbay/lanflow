@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"lanflow/internal/locate"
 	"lanflow/internal/model"
 	"lanflow/internal/platform/atrust"
+	"lanflow/internal/platform/helper"
 	"lanflow/internal/profile"
 )
 
@@ -73,6 +75,7 @@ type Service struct {
 
 	recheckMu    sync.Mutex // debounces the wake / network-change recheck (watch.go)
 	recheckTimer *time.Timer
+	nw           *watchState // what the recheck compares and Lanflow's own changes (watch.go)
 
 	probeExitMu sync.Mutex // one 检测 probe uses the probe group at a time (probe.go)
 
@@ -154,7 +157,8 @@ type state struct {
 	probePort     int
 	weSetProxy    bool        // Lanflow pointed the system proxy at itself
 	tunRunner     bool        // the manager currently uses the helper runner
-	helperOK      bool        // helper.Installed at last check
+	helperOK      bool        // helper.Check passed at last check
+	helperStale   bool        // last Check: installed helper of another version/protocol
 	runningTUN    bool        // the running config has TUN enabled
 	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
 	lastAutoStart time.Time
@@ -244,7 +248,10 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	nw := &watchState{}
+	noteSelfChanges(&d, nw)
 	s := &Service{
+		nw:         nw,
 		opt:        o,
 		d:          d,
 		workDir:    filepath.Join(o.DataDir, "core"),
@@ -254,6 +261,7 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		rootCancel: cancel,
 		em:         newEmitter(),
 	}
+	nw.clock = func() time.Time { return s.d.now() }
 	s.alog, _ = applog.Open(o.LogDir) // a failure keeps the log in memory only
 	s.alog.OnWrite(func() { s.em.emit(TopicLogs) })
 	s.alog.Infof("Lanflow starting (%s/%s), data %s", runtime.GOOS, runtime.GOARCH, o.DataDir)
@@ -362,6 +370,7 @@ func (s *Service) bootstrap() {
 			s.em.emit(TopicStatus)
 		}
 	}
+	s.learnBundledHelper()
 	s.refreshHelper()
 	s.learnBundledVersion()
 	_ = s.RefreshNetwork()
@@ -378,20 +387,55 @@ func (s *Service) bootstrap() {
 	}
 }
 
-// refreshHelper re-checks whether the privileged helper is installed.
+// refreshHelper re-checks whether the privileged helper is installed and
+// of this app's version. A helper left over from another release counts
+// as not installed (TUN needs a reinstall); the first time that is seen
+// the user is told so.
 func (s *Service) refreshHelper() bool {
 	ctx, cancel := s.ctrlCtx(nil, 3*time.Second)
-	ok := s.d.helper.Installed(ctx)
+	err := s.d.helper.Check(ctx)
 	cancel()
+	ok := err == nil
+	stale := errors.Is(err, helper.ErrVersionMismatch) || errors.Is(err, helper.ErrProtocolMismatch)
 	s.mu.Lock()
-	changed := s.state.helperOK != ok
+	changed := s.state.helperOK != ok || s.state.helperStale != stale
+	becameStale := stale && !s.state.helperStale
 	s.state.helperOK = ok
+	s.state.helperStale = stale
 	s.state.st.TUNAvailable = ok
+	s.state.st.HelperReinstall = stale
 	s.mu.Unlock()
+	if becameStale {
+		s.notify(Notice{Kind: "toast", Title: i18n.T("需要重新安装权限组件"), Detail: helperStaleText(err)})
+	}
 	if changed {
 		s.em.emit(TopicStatus)
 	}
 	return ok
+}
+
+// helperStaleText explains a version/protocol mismatch of the helper.
+func helperStaleText(err error) string {
+	var ve *helper.VersionError
+	if errors.As(err, &ve) {
+		return i18n.Tf("已安装的权限组件（%s）与澜流自带的版本（%s）不一致，TUN 模式暂不可用。请在「设置 › 代理」中重新安装权限组件。", ve.Installed, ve.Bundled)
+	}
+	return i18n.T("已安装的权限组件与这个版本的澜流不兼容，TUN 模式暂不可用。请在「设置 › 代理」中重新安装权限组件。")
+}
+
+// learnBundledHelper tells the helper package which helper version this
+// app ships, so Check can spot a helper left over from another release.
+// A build without a bundled helper (go run, tests) skips it.
+func (s *Service) learnBundledHelper() {
+	bin := s.opt.helperBinary()
+	if _, err := os.Stat(bin); err != nil {
+		return
+	}
+	ctx, cancel := s.ctrlCtx(nil, 10*time.Second)
+	defer cancel()
+	if err := s.d.helper.SetBundled(ctx, bin); err != nil {
+		s.alog.Warnf("read bundled helper version: %v", err)
+	}
 }
 
 // resolveBinaryLocked finds the core binary and updates Status; call with mu held or before run.

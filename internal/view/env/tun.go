@@ -32,3 +32,24 @@ func SetTUN(e *Env, on bool) {
 		}, i18n.T("权限组件已安装，TUN 模式已开启"))
 	})
 }
+
+// ReinstallHelper replaces a helper left over from another Lanflow release
+// (administrator prompt). When TUN is saved on it is then switched on again,
+// which restarts the core through the new helper.
+func ReinstallHelper(e *Env, tunWanted bool) {
+	e.Confirm(i18n.T("重新安装权限组件"), i18n.T("已安装的权限组件来自另一个版本的澜流，需要换成这个版本自带的权限组件后才能使用 TUN 模式。安装时会请求管理员权限。"), i18n.T("重新安装"), false, func() {
+		e.Run(func() error {
+			if err := e.API.InstallTUNHelper(); err != nil {
+				return err
+			}
+			if !tunWanted {
+				return nil
+			}
+			err := e.API.SetTUN(true)
+			if err == app.ErrHelperRequired {
+				return errors.New(i18n.T("权限组件已安装，但暂时无法连接。请稍后再试一次"))
+			}
+			return err
+		}, i18n.T("权限组件已重新安装"))
+	})
+}

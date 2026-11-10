@@ -4,15 +4,19 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/user"
+	"path/filepath"
 	"strings"
 	"syscall"
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows"
+
+	"lanflow/internal/platform/helper/service"
 )
 
 // controllerArgs tells Mihomo to serve its controller on a named pipe.
@@ -92,13 +96,65 @@ func currentUserName() string {
 	}, name)
 }
 
-// dial connects to the controller named pipe.
+// dial connects to the controller named pipe and checks who serves it.
+// Pipe names are global: a process of another user (or any process that
+// got there first) could create \\.\pipe\lanflow-<user> and answer the
+// controller calls in place of Mihomo. Like the helper client
+// (internal/platform/helper/dial_windows.go), the server process is looked
+// up with GetNamedPipeServerProcessId and must be the core this app
+// started itself, or the core the helper runs as LocalSystem from its
+// install directory.
 func dial(ctx context.Context, address string) (net.Conn, error) {
 	conn, err := winio.DialPipeContext(ctx, address)
 	if err != nil {
 		return nil, fmt.Errorf("无法连接内核控制器：%w", err)
 	}
+	if err := verifyControllerServer(conn, address); err != nil {
+		_ = conn.Close()
+		return nil, &net.OpError{Op: "dial", Net: "pipe", Err: err}
+	}
 	return conn, nil
+}
+
+// verifyControllerServer accepts the pipe's server process when this app
+// started it (execRunner), or when it runs as LocalSystem from the
+// helper's core path (service.CoreBin).
+func verifyControllerServer(conn net.Conn, address string) error {
+	fc, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return errors.New("无法获取内核控制器管道句柄")
+	}
+	var pid uint32
+	if err := windows.GetNamedPipeServerProcessId(windows.Handle(fc.Fd()), &pid); err != nil {
+		return fmt.Errorf("无法获取内核控制器进程：%w", err)
+	}
+	if ownServer(int(pid)) {
+		return nil
+	}
+	proc, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+	if err != nil {
+		return fmt.Errorf("无法检查内核控制器进程 %d：%w", pid, err)
+	}
+	defer windows.CloseHandle(proc)
+	var tok windows.Token
+	if err := windows.OpenProcessToken(proc, windows.TOKEN_QUERY, &tok); err != nil {
+		return fmt.Errorf("无法检查内核控制器进程 %d：%w", pid, err)
+	}
+	defer tok.Close()
+	tu, err := tok.GetTokenUser()
+	if err != nil {
+		return err
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	n := uint32(len(buf))
+	if err := windows.QueryFullProcessImageName(proc, 0, &buf[0], &n); err != nil {
+		return err
+	}
+	image := windows.UTF16ToString(buf[:n])
+	if tu.User.Sid.IsWellKnown(windows.WinLocalSystemSid) && strings.EqualFold(filepath.Clean(image), filepath.Clean(service.CoreBin)) {
+		return nil
+	}
+	return fmt.Errorf("管道 %s 的服务进程 %d（%s）不是澜流启动的 Mihomo 内核", address, pid, image)
 }
 
 // isExecutable: Windows has no execute bit; the extension decides.

@@ -71,7 +71,7 @@ func (s *Service) expectedCoreSHA256(ctx context.Context, channel, version, asse
 	var lastErr error
 	for _, c := range s.githubClients(releaseTimeout) {
 		var rel ghDigestRelease
-		lastErr = githubJSON(ctx, c, u, &rel)
+		_, lastErr = s.githubJSON(ctx, c, u, "", &rel)
 		if lastErr == nil {
 			return digestOf(rel, asset)
 		}

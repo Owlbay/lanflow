@@ -234,7 +234,10 @@ func (p *Page) modeRows(c *ui.Context, st model.Status, pm *model.Mode, busy boo
 		// to 设置 › 代理 (the first time it guides through the helper install).
 		row(c, i18n.T("TUN 模式"), func() {
 			desc := i18n.T("接管所有应用的流量")
-			if !st.TUNAvailable {
+			switch {
+			case st.HelperReinstall:
+				desc = i18n.T("需要重新安装权限组件")
+			case !st.TUNAvailable:
 				desc = i18n.T("首次开启需安装权限组件")
 			}
 			ui.Text(c, desc).FontSize(12).TextColor(t.TextMuted)
