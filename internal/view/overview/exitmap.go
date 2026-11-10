@@ -26,7 +26,9 @@ const (
 	rippleFrom  = 5.0
 	rippleTo    = 20.0
 	arcSamples  = 48
-	speedSmooth = 0.4
+	// speedTau is the time constant over which a route's shown speed
+	// follows the measured one, whatever the build rate.
+	speedTau = time.Second
 	// pulseDur is the period of the ring that pulses around 「你」.
 	pulseDur = 2200 * time.Millisecond
 	// Marker and label sizes.
@@ -61,6 +63,7 @@ var routeColors = []ui.Color{ui.Hex("#AF52DE"), ui.Hex("#FF2D55"), ui.Hex("#30B0
 type flow struct {
 	start time.Time // when the current request left; zero = not armed
 	speed float64   // smoothed bytes/s
+	eased time.Time // when speed was last eased
 	armed bool
 
 	// The displayed exit glides from `from` to `to` after a node switch.
@@ -208,8 +211,10 @@ func (p *Page) youPlace() (*model.Place, bool) {
 }
 
 // routes collects the exit routes with their places and colors, and
-// updates the smoothed speeds.
-func (p *Page) routes() []route {
+// eases the smoothed speeds towards the measured ones by the time since
+// the last call (k = 1 − e^(−dt/τ)), so the easing does not depend on
+// how often the page is built.
+func (p *Page) routes(now time.Time) []route {
 	rs := p.e.API.ExitRoutes()
 	out := make([]route, 0, len(rs))
 	k := 0
@@ -226,10 +231,10 @@ func (p *Page) routes() []route {
 		seen[r.Group] = true
 		f := p.flows[r.Group]
 		if f == nil {
-			f = &flow{speed: float64(r.Speed)}
+			f = &flow{speed: float64(r.Speed), eased: now}
 			p.flows[r.Group] = f
 		}
-		f.speed = f.speed*(1-speedSmooth) + float64(r.Speed)*speedSmooth
+		f.ease(float64(r.Speed), now)
 	}
 	for g := range p.flows {
 		if !seen[g] {
@@ -237,6 +242,22 @@ func (p *Page) routes() []route {
 		}
 	}
 	return out
+}
+
+// ease moves the shown speed towards target by the time since the last
+// easing; a flow drawn before it had a speed (eased zero) takes it at once.
+func (f *flow) ease(target float64, now time.Time) {
+	if f.eased.IsZero() {
+		f.speed, f.eased = target, now
+		return
+	}
+	dt := now.Sub(f.eased)
+	if dt <= 0 {
+		return
+	}
+	f.eased = now
+	k := 1 - math.Exp(-float64(dt)/float64(speedTau))
+	f.speed += (target - f.speed) * k
 }
 
 // destinations returns the destination countries of each route's live
@@ -374,11 +395,10 @@ func dist(x0, y0, x1, y1 float32) float32 {
 
 // ---- the card ----
 
-func (p *Page) exitCard(c *ui.Context, st model.Status) {
+func (p *Page) exitCard(c *ui.Context, st model.Status, rs []route) {
 	t := c.Theme()
 	run := st.Core == model.CoreRunning
 	direct := st.Mode == model.ModeDirect
-	rs := p.routes()
 	you, guessed := p.youPlace()
 	var dests map[string][]dest
 	if run && !direct {
@@ -487,11 +507,10 @@ func (p *Page) exitCard(c *ui.Context, st model.Status) {
 }
 
 // routeCard is the list of routes beside the globe: 当前出口, then 其他路由.
-func (p *Page) routeCard(c *ui.Context, st model.Status) {
+func (p *Page) routeCard(c *ui.Context, st model.Status, rs []route) {
 	t := c.Theme()
 	run := st.Core == model.CoreRunning
 	direct := st.Mode == model.ModeDirect
-	rs := p.routes()
 	p.mu.Lock()
 	probing := p.probing
 	p.mu.Unlock()

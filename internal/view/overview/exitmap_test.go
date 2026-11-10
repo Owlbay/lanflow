@@ -133,3 +133,23 @@ func TestPathNoteStyling(t *testing.T) {
 		t.Errorf("empty note shown: %q", note)
 	}
 }
+
+// TestSpeedEaseByTime: the shown speed follows the measured one by time,
+// not by how many builds there were.
+func TestSpeedEaseByTime(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	a := &flow{}
+	a.ease(0, t0)
+	a.ease(1000, t0.Add(time.Second))
+	b := &flow{}
+	b.ease(0, t0)
+	for i := 1; i <= 10; i++ {
+		b.ease(1000, t0.Add(time.Duration(i)*100*time.Millisecond))
+	}
+	if math.Abs(a.speed-b.speed) > 1e-6 {
+		t.Fatalf("one step %v, ten steps %v", a.speed, b.speed)
+	}
+	if want := 1000 * (1 - math.Exp(-1)); math.Abs(a.speed-want) > 1e-6 {
+		t.Fatalf("speed %v, want %v", a.speed, want)
+	}
+}

@@ -64,12 +64,15 @@ func (p *Page) View(c *ui.Context) {
 	// and all the height; the routes, the subscription, the speed and the
 	// terminal command stack on the right, the routes taking what the
 	// others leave.
+	// The routes are read, and their speeds eased, once per build for
+	// both the map and the list.
+	rs := p.routes(time.Now())
 	ui.Column(c).Grow(1).Padding(0, 24, 20, 24).Gap(16).Clip().Children(func() {
 		p.switches(c, st)
 		ui.Row(c).Grow(1).Gap(16).AlignItems(ui.Stretch).Children(func() {
-			p.exitCard(c, st)
+			p.exitCard(c, st, rs)
 			ui.Column(c).Grow(36).Basis(0).Gap(12).Children(func() {
-				p.routeCard(c, st)
+				p.routeCard(c, st, rs)
 				p.subscriptionCard(c, st)
 				p.speedCard(c, st)
 				p.terminalRow(c, st)
