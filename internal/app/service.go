@@ -488,6 +488,7 @@ func (s *Service) applyStoreLocked(v storeView) {
 	for i := range subs {
 		subs[i].Current = hasCur && subs[i].ID == cur.ID
 		subs[i].Updating = s.state.subsUpdating[subs[i].ID]
+		subs[i].NeedsURL = subs[i].Source == urlSubscriptionK && subs[i].URL == ""
 	}
 	s.state.subs = subs
 	s.state.st.HasSubscriptions = len(subs) > 0

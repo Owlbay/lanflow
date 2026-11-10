@@ -4,4 +4,5 @@ package app
 type configSyncState struct {
 	// secrets replaces Secrets for this service (tests); nil = Secrets.
 	secrets SecretStore
+	links   linkSecrets // links this run put into the keychain (configsecrets.go)
 }

@@ -297,6 +297,11 @@ func (p *Page) cell(c *ui.Context, s model.Subscription, col string, switching s
 			case switching == s.ID:
 				ui.Spinner(c).Size(12, 12).Label(i18n.T("切换中"))
 				ui.Text(c, i18n.T("切换中…")).FontSize(12).TextColor(t.TextMuted)
+			case s.NeedsURL:
+				// From lanflow.yaml with a keychain reference this machine
+				// does not have (docs/config-sync.md): 编辑 asks for the link.
+				ui.Text(c, i18n.T("需要重新输入链接")).FontSize(12).TextColor(t.Warning).
+					Tooltip(i18n.T("这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。"))
 			default:
 				ui.Text(c, env.FmtAgo(s.UpdatedAt)).FontSize(12).TextColor(t.TextMuted).FontFeatures("tnum")
 				if s.LastError != "" {

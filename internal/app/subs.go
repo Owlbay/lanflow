@@ -311,6 +311,9 @@ func (s *Service) updateOne(sub model.Subscription) error {
 	var data []byte
 	switch sub.Source {
 	case urlSubscriptionK:
+		if sub.URL == "" {
+			return errNeedsURL // nothing to download until the user enters the link (configsync.go)
+		}
 		timeout := subTimeout(sub)
 		ctx, cancel := s.ctrlCtx(nil, timeout)
 		f, err := s.d.prof.Fetch(ctx, s.fetchClient(sub.ViaProxy, timeout), sub.URL, sub.UserAgent)
@@ -450,7 +453,7 @@ func retryAfter(n int, interval time.Duration) time.Duration {
 func (s *Service) runAutoUpdates() {
 	now := s.d.now()
 	for _, sub := range s.d.store.List() {
-		if sub.Source != urlSubscriptionK || sub.AutoUpdateHours <= 0 {
+		if sub.Source != urlSubscriptionK || sub.AutoUpdateHours <= 0 || sub.URL == "" {
 			continue
 		}
 		interval := time.Duration(sub.AutoUpdateHours) * time.Hour
@@ -600,6 +603,9 @@ func (s *Service) DeleteSubscription(id string) (err error) {
 	}
 	if err := s.d.store.Delete(id); err != nil {
 		return fmt.Errorf(i18n.T("删除订阅失败：%v"), err)
+	}
+	if s.Settings().Sync.Mode != model.SyncOff && sub.Source == urlSubscriptionK {
+		s.forgetLinkSecret(id) // its keychain:sub-<id> reference leaves the file too
 	}
 	s.refreshStore(TopicSubs, TopicSettings)
 	return nil

@@ -41,6 +41,10 @@ func init() {
 		// internal/app/configdoc.go
 		"文件无效：%v": "The file is not valid: %v",
 		"订阅「%s」（文件中只有钥匙串引用，本机钥匙串里没有它的链接）": "subscription \"%s\" (the file has only a keychain reference, and this machine's keychain does not have its link)",
+
+		// internal/app/configsecrets.go, internal/view/subs/page.go
+		"这个订阅来自配置同步，本机钥匙串里没有它的链接。请在「编辑」中重新输入订阅链接。": "This subscription came through configuration sync, and this machine's keychain does not have its link. Enter the subscription link again in Edit.",
+		"需要重新输入链接": "Link needed",
 	} {
 		en[k] = v
 	}
