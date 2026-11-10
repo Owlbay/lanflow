@@ -25,8 +25,9 @@ type fakeHelper struct {
 	stopped   chan struct{}
 	listener  net.Listener
 	dialErrOn bool
-	version   string // ping version; "fake" when empty
-	protocol  int    // ping protocol; protocol.Version when zero
+	stalled   chan struct{} // while non-nil and open, status answers wait for it
+	version   string        // ping version; "fake" when empty
+	protocol  int           // ping protocol; protocol.Version when zero
 }
 
 func startFakeHelper(t *testing.T) *fakeHelper {
@@ -57,6 +58,12 @@ func startFakeHelper(t *testing.T) *fakeHelper {
 }
 
 func (f *fakeHelper) handle(_ context.Context, req protocol.Request) protocol.Response {
+	f.mu.Lock()
+	st := f.stalled
+	f.mu.Unlock()
+	if st != nil && req.Op == protocol.OpStatus {
+		<-st
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	switch req.Op {
@@ -217,6 +224,50 @@ func TestRunnerExitedWhenHelperVanishes(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("unreachable helper not reported")
+	}
+}
+
+// A helper that stalls (accepts, answers late) is waited out for the
+// stall limit: the core is not reported gone while it runs on.
+func TestRunnerWaitsOutAStalledHelper(t *testing.T) {
+	f := startFakeHelper(t)
+	r := newTestRunner()
+	r.statusWait = 30 * time.Millisecond
+	r.stall = 2 * time.Second
+	if err := r.Start(context.Background(), core.Spec{Bin: "/b"}); err != nil {
+		t.Fatal(err)
+	}
+	exited := r.Exited()
+	stall := make(chan struct{})
+	f.mu.Lock()
+	f.stalled = stall
+	f.mu.Unlock()
+	select {
+	case err := <-exited:
+		t.Fatalf("stall of 0.5 s reported as exit: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	f.mu.Lock()
+	f.stalled = nil
+	f.mu.Unlock()
+	close(stall)
+	time.Sleep(100 * time.Millisecond)
+	if !r.Running() {
+		t.Fatal("not running after the helper answered again")
+	}
+	// a stall past the limit is reported
+	stall = make(chan struct{})
+	defer close(stall)
+	f.mu.Lock()
+	f.stalled = stall
+	f.mu.Unlock()
+	select {
+	case err := <-exited:
+		if err == nil || !strings.Contains(err.Error(), "权限组件无响应") {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("a stall past the limit was not reported")
 	}
 }
 

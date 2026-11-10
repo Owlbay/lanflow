@@ -204,6 +204,8 @@ type runner struct {
 	c            *protocol.Client
 	pollInterval time.Duration
 	callTimeout  time.Duration
+	stall        time.Duration // pollStallLimit when zero (tests shorten it)
+	statusWait   time.Duration // one status poll; 3 s when zero
 
 	mu      sync.Mutex
 	running bool
@@ -327,19 +329,31 @@ func (r *runner) stopPollingLocked() {
 	}
 }
 
+// pollStallLimit is how long poll waits out a helper that accepts but does
+// not answer (a stalled machine: the VM froze ~10 s at a time) before
+// reporting the core's state unknown. A helper that refuses connections
+// is reported after three polls.
+const pollStallLimit = 30 * time.Second
+
 // poll asks the helper for status every pollInterval and reports an exit
-// (or an unreachable helper, after three failures) once on ch.
+// once on ch: the core exited, or the helper is unreachable (three
+// refused polls) or silent for pollStallLimit.
 func (r *runner) poll(ctx context.Context, ch chan error) {
 	t := time.NewTicker(r.pollInterval)
 	defer t.Stop()
 	failures := 0
+	lastOK := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
 		}
-		cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		wait := r.statusWait
+		if wait <= 0 {
+			wait = 3 * time.Second
+		}
+		cctx, cancel := context.WithTimeout(ctx, wait)
 		resp, err := r.c.Call(cctx, protocol.Request{Op: protocol.OpStatus})
 		cancel()
 		if ctx.Err() != nil {
@@ -349,12 +363,14 @@ func (r *runner) poll(ctx context.Context, ch chan error) {
 		switch {
 		case err != nil:
 			failures++
-			if failures < 3 {
+			stalled := errors.Is(err, context.DeadlineExceeded) || isTimeoutErr(err)
+			if stalled && time.Since(lastOK) < r.stallLimit() || !stalled && failures < 3 {
 				continue
 			}
-			exit = fmt.Errorf("权限组件无响应，Mihomo 状态未知: %w", err)
+			exit = fmt.Errorf("权限组件无响应，%w: %w", core.ErrStateUnknown, err)
 		case resp.Running:
 			failures = 0
+			lastOK = time.Now()
 			continue
 		case resp.ExitError != "":
 			exit = errors.New(resp.ExitError)
@@ -390,4 +406,17 @@ func isTransport(err error) bool {
 	var ne net.Error
 	var opErr *net.OpError
 	return errors.As(err, &opErr) || errors.As(err, &ne) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (r *runner) stallLimit() time.Duration {
+	if r.stall > 0 {
+		return r.stall
+	}
+	return pollStallLimit
+}
+
+// isTimeoutErr reports whether err is a network timeout.
+func isTimeoutErr(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }

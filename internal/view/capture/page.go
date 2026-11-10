@@ -46,8 +46,8 @@ type Page struct {
 	list     ui.ListState
 	selected int
 	sel      int64 // selected row: a record ID, or a connection's negative ID
-	tab      int  // detail tab
-	reveal   bool // show masked values (never remembered)
+	tab      int   // detail tab
+	reveal   bool  // show masked values (never remembered)
 	icons    *procicon.Cache
 
 	// connections shown as rows get stable negative IDs

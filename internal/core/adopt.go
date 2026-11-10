@@ -28,6 +28,11 @@ type Adopter interface {
 // ErrNothingToAdopt: no process of spec runs.
 var ErrNothingToAdopt = errors.New("没有可接管的 Mihomo 内核")
 
+// ErrStateUnknown wraps a runner's exit report when the core's state could
+// not be learned (the helper stopped answering): it may still be running,
+// so a restart has to stop it first.
+var ErrStateUnknown = errors.New("Mihomo 状态未知")
+
 // OrphanRunning reports whether the PID file in workDir names a running
 // Mihomo (left by a previous Lanflow).
 func OrphanRunning(workDir string) bool { return orphanPID(workDir) > 0 }

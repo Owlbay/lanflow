@@ -604,9 +604,19 @@ func (s *Service) handleCrash(cause error) {
 		}
 	}
 	s.mu.Lock()
+	tun := s.state.runningTUN
 	s.state.runningTUN = false
 	s.mu.Unlock()
 	s.releaseDNS() // the restart below sets it again when TUN comes back
+	if errors.Is(cause, core.ErrStateUnknown) && s.d.stray != nil {
+		// The helper went silent: the core may well still run and hold
+		// its ports, which would fail the restart below.
+		sctx, scancel := context.WithTimeout(context.Background(), 15*time.Second)
+		if err := s.d.stray.Stop(sctx, s.workDir, tun); err != nil {
+			s.alog.Warnf("stop the core of unknown state: %v", err)
+		}
+		scancel()
+	}
 
 	if s.rootCtx.Err() == nil && (last.IsZero() || now.Sub(last) > autoRestartGap) {
 		s.mu.Lock()

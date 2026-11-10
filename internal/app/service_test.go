@@ -2,6 +2,7 @@ package app
 
 import (
 	"errors"
+	"fmt"
 	"lanflow/internal/platform/sysproxy"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"lanflow/internal/controller"
+	"lanflow/internal/core"
 	"lanflow/internal/model"
 	"lanflow/internal/platform/helper"
 )
@@ -434,6 +436,27 @@ func TestHotPatchForModeAndPort(t *testing.T) {
 	st := h.s.Status()
 	if st.Mode != model.ModeGlobal || st.MixedPort != 7777 || !st.AllowLAN {
 		t.Fatalf("status = %+v", st)
+	}
+}
+
+// A helper that went silent leaves the core's state unknown: it may still
+// run and hold its ports, so it is stopped before the restart (an exit
+// the core reported itself needs no stop).
+func TestCrashOfUnknownStateStopsTheCoreFirst(t *testing.T) {
+	h := newHarness(t, nil)
+	h.s.goBackground(h.s.watchCrashes)
+	if err := h.s.SetSystemProxy(true); err != nil {
+		t.Fatal(err)
+	}
+	h.mgr.crash(fmt.Errorf("权限组件无响应，%w: i/o timeout", core.ErrStateUnknown))
+	if !waitFor(func() bool { h.mgr.mu.Lock(); defer h.mgr.mu.Unlock(); return h.mgr.starts == 2 }) {
+		t.Fatal("expected one automatic restart")
+	}
+	h.stray.mu.Lock()
+	stops := h.stray.stops
+	h.stray.mu.Unlock()
+	if stops != 1 {
+		t.Fatalf("stray stops = %d, want 1 before the restart", stops)
 	}
 }
 
