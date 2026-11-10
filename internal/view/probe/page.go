@@ -565,8 +565,7 @@ func (p *Page) regionTab(c *ui.Context, t *ui.Theme, st model.Status, snap model
 					return
 				}
 				node := r.Node
-				b := ui.Text(c, i18n.T("设为当前")).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).
-					Role(ui.RoleButton).Label(i18n.Tf("设为当前 %s", node)).Tooltip(i18n.Tf("在「%s」中选择「%s」", mainGroup, node))
+				b := env.LinkText(c, i18n.T("设为当前"), i18n.Tf("设为当前 %s", node)).Tooltip(i18n.Tf("在「%s」中选择「%s」", mainGroup, node))
 				if b.Clicked() && mainGroup != "" {
 					e.Run(func() error { return e.API.SelectProxy(mainGroup, node) }, i18n.Tf("已切换到「%s」", node))
 				}

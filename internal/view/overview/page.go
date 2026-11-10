@@ -202,8 +202,7 @@ func (p *Page) coreRows(c *ui.Context, st model.Status, pc, pp *bool, busy bool)
 			on := proxyOn
 			if st.ShowProxyHint && !on {
 				// First-run bubble after the first import + start (docs/design.md §8.1).
-				tip := ui.Row(c).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(8).Background(t.Accent).
-					Cursor(ui.CursorPointer).Role(ui.RoleButton).Label(i18n.T("打开以让系统流量走代理，点击关闭提示")).Shrink(0)
+				tip := env.ClickableRow(c, i18n.T("打开以让系统流量走代理，点击关闭提示")).Gap(6).AlignItems(ui.Center).Padding(4, 10).Radius(8).Background(t.Accent).Shrink(0)
 				tip.Children(func() {
 					ui.Text(c, i18n.T("打开以让系统流量走代理")).FontSize(12).TextColor(t.AccentText).SingleLine()
 					ui.Box(c).TextColor(t.AccentText.Alpha(0.8)).Children(func() { k.Icon(c, "close", 11) })
@@ -390,7 +389,7 @@ func (p *Page) subscriptionCard(c *ui.Context, st model.Status) {
 			break
 		}
 	}
-	cd := card(c).Shrink(0).Cursor(ui.CursorPointer).Label(i18n.T("当前订阅，打开订阅页")).Role(ui.RoleButton)
+	cd := env.Clickable(card(c).Shrink(0), i18n.T("当前订阅，打开订阅页"))
 	cd.Children(func() {
 		cardTitle(c, i18n.T("当前订阅"), func() { ui.Text(c, "›").TextColor(t.TextMuted) })
 		name := "—"

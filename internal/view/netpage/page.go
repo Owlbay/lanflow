@@ -199,8 +199,8 @@ func (p *Page) directCard(c *ui.Context, t *ui.Theme) {
 		if fetching {
 			ui.Spinner(c).Size(12, 12).Label(i18n.T("正在获取"))
 		} else {
-			b := ui.Box(c).Padding(2).Radius(4).Cursor(ui.CursorPointer).TextColor(t.TextMuted).
-				Role(ui.RoleButton).Label(i18n.T("重新获取公网地址")).Tooltip(i18n.T("重新获取公网地址"))
+			b := env.Clickable(ui.Box(c), i18n.T("重新获取公网地址")).Padding(2).Radius(4).TextColor(t.TextMuted).
+				Tooltip(i18n.T("重新获取公网地址"))
 			b.Children(func() { e.Kit.Icon(c, "refresh", 13) })
 			if b.Clicked() {
 				e.Run(e.API.RefreshNetwork, "")
@@ -254,7 +254,7 @@ func (p *Page) exitCard(c *ui.Context, t *ui.Theme, st model.Status) {
 	}
 	p.card(c, t, title, func() {
 		if main != nil {
-			link := ui.Text(c, i18n.T("在地图中查看")).FontSize(11).TextColor(t.Accent).Cursor(ui.CursorPointer)
+			link := env.LinkText(c, i18n.T("在地图中查看"), "").FontSize(11)
 			if link.Clicked() {
 				e.Navigate(env.Overview, "")
 			}
@@ -365,7 +365,7 @@ func (p *Page) sitesSection(c *ui.Context, t *ui.Theme, sites []model.SiteCheck,
 	// The table takes the height left in its column and scrolls inside.
 	ui.Column(c).Gap(6).Grow(1).Basis(0).MinHeight(120).Children(func() {
 		sectionTitle(c, t, i18n.T("网站连通性"), i18n.T("· 分别经代理和直连访问一次"), func() {
-			add := ui.Text(c, i18n.T("＋ 添加网站")).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).Role(ui.RoleButton)
+			add := env.LinkText(c, i18n.T("＋ 添加网站"), "")
 			if add.Clicked() {
 				p.addName, p.addURL, p.addErr = "", "https://", ""
 				p.addSession++
@@ -606,8 +606,7 @@ func (p *Page) leakSection(c *ui.Context, t *ui.Theme, running bool) {
 		sectionTitle(c, t, i18n.T("泄漏检查"), note, func() {
 			// The finer IP risk score is a third-party page: handed to the
 			// browser, never requested by the app (also in 「检测」).
-			link := ui.Text(c, i18n.T("在浏览器中检查 IP 纯净度")).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).
-				Role(ui.RoleButton).SingleLine().Tooltip(i18n.T("更细的 IP 风险评分（纯净度）可在「检测」页按需在线检测，也可在浏览器中查看"))
+			link := env.LinkText(c, i18n.T("在浏览器中检查 IP 纯净度"), "").Tooltip(i18n.T("更细的 IP 风险评分（纯净度）可在「检测」页按需在线检测，也可在浏览器中查看"))
 			if link.Clicked() {
 				_ = mygo.Shell.OpenExternal(ipPurityURL)
 			}
@@ -724,9 +723,9 @@ func (p *Page) dnsSection(c *ui.Context, t *ui.Theme, running bool) {
 	ui.Column(c).Gap(6).Shrink(0).Children(func() {
 		sectionTitle(c, t, i18n.T("DNS 查询"), i18n.T("经内核的解析器"), func() {
 			flush := func(label string, job func() error, ok string) {
-				b := ui.Text(c, label).FontSize(12).TextColor(t.Accent).Cursor(ui.CursorPointer).Role(ui.RoleButton).SingleLine()
+				b := env.LinkText(c, label, "")
 				if !running {
-					b.TextColor(t.TextMuted).Cursor(ui.CursorDefault)
+					b.TextColor(t.TextMuted).Cursor(ui.CursorDefault).Disabled(true)
 				} else if b.Clicked() {
 					e.Run(job, ok)
 				}

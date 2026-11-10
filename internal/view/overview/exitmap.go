@@ -1018,8 +1018,7 @@ func (p *Page) routeList(c *ui.Context, st model.Status, rs []route, run, direct
 		}
 		rt := r
 		col := routeColor(rt, t)
-		item := ui.Column(c.Key("route:" + rt.Group)).Padding(6).Gap(3).Radius(6).Cursor(ui.CursorPointer).
-			Label(fmt.Sprintf(i18n.T("%s：%s，在代理页查看"), rt.Group, rt.Node)).Role(ui.RoleButton)
+		item := env.ClickableColumn(c.Key("route:"+rt.Group), i18n.Tf("%s：%s，在代理页查看", rt.Group, rt.Node)).Padding(6).Gap(3).Radius(6)
 		if item.Hovered() {
 			item.Background(t.SurfaceHover)
 		}

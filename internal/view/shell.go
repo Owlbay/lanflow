@@ -934,8 +934,7 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status, vib bool) {
 func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 	t := c.Theme()
 	k := s.env.Kit
-	bar := ui.Column(c).Padding(10, 18, 14, 18).Gap(3).Shrink(0).Cursor(ui.CursorPointer).
-		Label(i18n.T("状态：回到概览")).Role(ui.RoleButton)
+	bar := env.ClickableColumn(c, i18n.T("状态：回到概览")).Padding(10, 18, 14, 18).Gap(3).Shrink(0)
 	bar.Children(func() {
 		ui.Box(c).Height(1).Background(t.Border).Margin(0, -8, 8, -8)
 		ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
