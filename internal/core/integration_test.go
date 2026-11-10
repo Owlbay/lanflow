@@ -166,6 +166,12 @@ func TestIntegrationPortConflictReportsLog(t *testing.T) {
 		}
 		return
 	}
+	// The controller comes up before the listeners are bound: the bind
+	// error reaches the log a moment after Start returns.
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(log, "address already in use") && time.Now().Before(deadline); {
+		time.Sleep(50 * time.Millisecond)
+		log = tailLines(spec.LogFile, 30)
+	}
 	if !strings.Contains(log, "address already in use") {
 		t.Fatalf("bind error not visible in log:\n%s", log)
 	}
