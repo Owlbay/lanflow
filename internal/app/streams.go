@@ -25,21 +25,28 @@ const (
 )
 
 // startStreams opens the controller WebSocket streams and the periodic
-// refreshers for the running core. Each runs until stopStreams.
+// refreshers for the running core. Each runs until stopStreams. Streams
+// still open from an earlier start are stopped (and waited for) first.
+//
+// Every goroutine joins streamWG under mu while streamCancel is set, and
+// stopStreams clears streamCancel under mu before it waits: no Add can
+// race the Wait. The connections and log streams can be replaced on their
+// own (startConnStream, restartLogStream); their contexts derive from the
+// streams' context, and a replacement starts only after the stream it
+// replaces has returned, so two never feed the same state at once.
 func (s *Service) startStreams() {
+	s.stopStreams()
 	ctx, cancel := context.WithCancel(s.rootCtx)
 	logCtx, logCancel := context.WithCancel(ctx)
+	logsDone := make(chan struct{})
 	s.mu.Lock()
-	if s.streamCancel != nil {
-		s.streamCancel()
-	}
-	s.streamCancel = cancel
-	s.logsCancel = logCancel
+	s.streamCtx, s.streamCancel = ctx, cancel
+	s.logsCancel, s.logsDone = logCancel, logsDone
 	level := s.state.settings.LogLevel
+	s.streamWG.Add(4)
 	s.mu.Unlock()
 
 	run := func(fn func(context.Context)) {
-		s.streamWG.Add(1)
 		go func() {
 			defer s.streamWG.Done()
 			fn(ctx)
@@ -48,9 +55,9 @@ func (s *Service) startStreams() {
 	run(func(ctx context.Context) { _ = s.d.ctrl.StreamTraffic(ctx, s.onTraffic) })
 	run(func(ctx context.Context) { _ = s.d.ctrl.StreamMemory(ctx, s.onMemory) })
 	run(s.refreshLoop)
-	s.streamWG.Add(1)
 	go func() {
 		defer s.streamWG.Done()
+		defer close(logsDone)
 		s.runLogStream(logCtx, level)
 	}()
 	s.startConnStream()
@@ -65,7 +72,8 @@ func (s *Service) connInterval() time.Duration {
 }
 
 // startConnStream opens the connections stream at the current interval,
-// closing the previous one. Call with the streams started.
+// replacing the previous one: the new stream starts once the old one has
+// returned. Nothing happens while the streams are stopped.
 func (s *Service) startConnStream() {
 	s.mu.Lock()
 	if s.streamCancel == nil {
@@ -75,13 +83,22 @@ func (s *Service) startConnStream() {
 	if s.connsCancel != nil {
 		s.connsCancel()
 	}
-	ctx, cancel := context.WithCancel(s.rootCtx)
-	s.connsCancel = cancel
+	prev := s.connsDone
+	ctx, cancel := context.WithCancel(s.streamCtx)
+	done := make(chan struct{})
+	s.connsCancel, s.connsDone = cancel, done
+	s.streamWG.Add(1)
 	s.mu.Unlock()
 	interval := s.connInterval()
-	s.streamWG.Add(1)
 	go func() {
 		defer s.streamWG.Done()
+		defer close(done)
+		if prev != nil {
+			<-prev
+		}
+		if ctx.Err() != nil {
+			return
+		}
 		_ = s.d.ctrl.StreamConnections(ctx, interval, s.onConnections)
 	}()
 }
@@ -98,7 +115,8 @@ func (s *Service) SetBackground(background bool) {
 	s.startConnStream()
 }
 
-// restartLogStream reopens the log stream at a new level.
+// restartLogStream reopens the log stream at a new level, once the old
+// stream has returned.
 func (s *Service) restartLogStream(level string) {
 	s.mu.Lock()
 	if s.streamCancel == nil || s.logsCancel == nil {
@@ -106,13 +124,21 @@ func (s *Service) restartLogStream(level string) {
 		return
 	}
 	s.logsCancel()
-	parent := s.rootCtx
-	logCtx, logCancel := context.WithCancel(parent)
-	s.logsCancel = logCancel
-	s.mu.Unlock()
+	prev := s.logsDone
+	logCtx, logCancel := context.WithCancel(s.streamCtx)
+	done := make(chan struct{})
+	s.logsCancel, s.logsDone = logCancel, done
 	s.streamWG.Add(1)
+	s.mu.Unlock()
 	go func() {
 		defer s.streamWG.Done()
+		defer close(done)
+		if prev != nil {
+			<-prev
+		}
+		if logCtx.Err() != nil {
+			return
+		}
 		s.runLogStream(logCtx, level)
 	}()
 }
@@ -135,6 +161,7 @@ func (s *Service) stopStreams() {
 	logCancel := s.logsCancel
 	connCancel := s.connsCancel
 	s.streamCancel, s.logsCancel, s.connsCancel = nil, nil, nil
+	s.streamCtx, s.logsDone, s.connsDone = nil, nil, nil
 	s.mu.Unlock()
 	if logCancel != nil {
 		logCancel()
@@ -219,10 +246,7 @@ func logLevel(t string) string {
 func (s *Service) onLog(l controller.Log) {
 	e := model.LogEntry{Time: s.d.now(), Level: logLevel(l.Type), Payload: l.Payload}
 	s.mu.Lock()
-	s.state.logs = append(s.state.logs, e)
-	if len(s.state.logs) > logRing {
-		s.state.logs = s.state.logs[len(s.state.logs)-logRing:]
-	}
+	s.state.logs.push(e)
 	s.mu.Unlock()
 	s.em.emit(TopicLogs)
 }
@@ -232,11 +256,8 @@ func (s *Service) onConnections(c controller.Connections) {
 	s.mu.Lock()
 	active, closed := s.state.tracker.update(c, now)
 	s.state.conns = active
-	if len(closed) > 0 {
-		s.state.closed = append(closed, s.state.closed...)
-		if len(s.state.closed) > closedRing {
-			s.state.closed = s.state.closed[:closedRing]
-		}
+	for i := len(closed) - 1; i >= 0; i-- { // closed is newest first
+		s.state.closed.push(closed[i])
 	}
 	s.state.st.Connections = len(active)
 	s.state.st.TotalUp, s.state.st.TotalDown = c.UploadTotal, c.DownloadTotal
@@ -254,7 +275,7 @@ func (s *Service) onConnections(c controller.Connections) {
 // ClearLogs empties the log ring.
 func (s *Service) ClearLogs() {
 	s.mu.Lock()
-	s.state.logs = nil
+	s.state.logs.reset()
 	s.mu.Unlock()
 	s.em.emit(TopicLogs)
 }

@@ -54,6 +54,10 @@ func (e *emitter) emit(topics ...Topic) {
 		e.timers[t] = time.AfterFunc(coalesceWindow, func() { e.windowEnd(t) })
 		fire = append(fire, t)
 	}
+	if len(fire) == 0 { // all coalesced into the trailing callbacks
+		e.mu.Unlock()
+		return
+	}
 	fns := e.snapshot()
 	e.mu.Unlock()
 	for _, t := range fire {

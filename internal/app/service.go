@@ -56,9 +56,12 @@ type Service struct {
 	em    *emitter
 
 	// streams of the running core (guarded by mu)
+	streamCtx    context.Context // parent of every stream; nil while stopped
 	streamCancel context.CancelFunc
 	logsCancel   context.CancelFunc
+	logsDone     chan struct{} // closed when the current log stream returned
 	connsCancel  context.CancelFunc
+	connsDone    chan struct{} // closed when the current connections stream returned
 	streamWG     sync.WaitGroup
 	background   atomic.Bool // the window is out of sight (SetBackground, streams.go)
 
@@ -100,10 +103,10 @@ type state struct {
 	subsUpdating map[string]bool
 
 	conns   []model.Connection
-	closed  []model.Connection
+	closed  ring[model.Connection] // the newest closedRing closed connections
 	tracker connTracker
 
-	logs []model.LogEntry
+	logs ring[model.LogEntry] // the newest logRing core log lines
 
 	rules        []model.Rule
 	custom       []model.CustomRule
@@ -147,11 +150,11 @@ type state struct {
 	coexist       atrust.Info // aTrust found beside Lanflow (coexist.go)
 	lastAutoStart time.Time
 	autoFail      map[string]autoUpdateFailure // subscription ID → failed auto updates (subs.go)
-	youDone       bool // You() fetched (or being fetched) for this start
-	youBusy       bool // a fetchYou loop is running
-	youGen        int  // bumps to stop an older fetchYou loop
-	hintDone      bool // the system-proxy hint bubble was dismissed or the proxy was turned on once (hintFile)
-	hintSaving    bool // hintFile write in flight
+	youDone       bool                         // You() fetched (or being fetched) for this start
+	youBusy       bool                         // a fetchYou loop is running
+	youGen        int                          // bumps to stop an older fetchYou loop
+	hintDone      bool                         // the system-proxy hint bubble was dismissed or the proxy was turned on once (hintFile)
+	hintSaving    bool                         // hintFile write in flight
 }
 
 var _ API = (*Service)(nil)
@@ -252,6 +255,8 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 		provUpdating: map[string]bool{},
 		exits:        map[string]model.ExitInfo{},
 		exitEntry:    map[string]string{},
+		logs:         newRing[model.LogEntry](logRing),
+		closed:       newRing[model.Connection](closedRing),
 		overrides:    model.Overrides{PerSub: map[string]string{}},
 	}
 	s.state.st = model.Status{Core: model.CoreStopped, Mode: set.Mode, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN}
@@ -606,7 +611,7 @@ func (s *Service) Connections() []model.Connection {
 func (s *Service) ClosedConnections() []model.Connection {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return copyConns(s.state.closed)
+	return copyConns(s.state.closed.newestFirst())
 }
 
 func copyConns(in []model.Connection) []model.Connection {
@@ -621,7 +626,7 @@ func copyConns(in []model.Connection) []model.Connection {
 func (s *Service) Logs() []model.LogEntry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return append([]model.LogEntry(nil), s.state.logs...)
+	return s.state.logs.oldestFirst()
 }
 
 func (s *Service) Rules() []model.Rule {

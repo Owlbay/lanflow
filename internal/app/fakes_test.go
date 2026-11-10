@@ -40,6 +40,9 @@ type fakeCtrl struct {
 	logsC    chan controller.Log
 	// connIntervals are the intervals of every StreamConnections call.
 	connIntervals []time.Duration
+	// connActive counts the connections streams open now; connMaxActive is
+	// the most that were ever open at once (one, when replacements wait).
+	connActive, connMaxActive int
 
 	// proxy providers
 	pprovs   map[string]controller.ProxyProvider
@@ -216,7 +219,16 @@ func (f *fakeCtrl) StreamLogs(ctx context.Context, _ string, fn func(controller.
 func (f *fakeCtrl) StreamConnections(ctx context.Context, interval time.Duration, fn func(controller.Connections)) error {
 	f.mu.Lock()
 	f.connIntervals = append(f.connIntervals, interval)
+	f.connActive++
+	if f.connActive > f.connMaxActive {
+		f.connMaxActive = f.connActive
+	}
 	f.mu.Unlock()
+	defer func() {
+		f.mu.Lock()
+		f.connActive--
+		f.mu.Unlock()
+	}()
 	for {
 		select {
 		case <-ctx.Done():

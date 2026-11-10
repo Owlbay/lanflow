@@ -322,59 +322,60 @@ func (s *Service) TestRule(input string) (model.RuleMatch, error) {
 			resp.Body.Close()
 		}
 	}()
-	deadline := time.Now().Add(testRuleWait)
-	var found *controller.Connection
-	for found == nil && time.Now().Before(deadline) {
-		time.Sleep(testRulePoll)
-		ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
-		snap, err := s.d.ctrl.Connections(ctx)
-		cancel()
-		if err != nil {
-			continue
-		}
-		found = pickTestConn(snap.Connections, host, started)
+	// The connections stream already reports every connection each
+	// second (connInterval): watch its state instead of asking the core
+	// for the whole list five times a second.
+	wait := testRuleWait
+	if iv := 2*s.connInterval() + time.Second; iv > wait {
+		wait = iv // the window is in the background: the stream is slower
 	}
-	if found == nil {
-		// the connection may have closed already: look at the closed ring
+	deadline := time.Now().Add(wait)
+	for time.Now().Before(deadline) {
+		time.Sleep(testRulePoll)
 		s.mu.Lock()
-		for _, c := range s.state.closed {
-			if connHost(c.Host) == host && !c.Start.Before(started.Add(-time.Second)) {
-				cc := c
-				s.mu.Unlock()
-				return matchFrom(cc.Rule, cc.RulePayload, cc.Chains, host, rules, customCount), nil
-			}
+		found, open := pickTestConnState(s.state.conns, &s.state.closed, host, started)
+		var m model.Connection
+		if found != nil {
+			m = *found
+			m.Chains = append([]string(nil), found.Chains...)
 		}
 		s.mu.Unlock()
-		<-done
-		return model.RuleMatch{}, errors.New(i18n.T("3 秒内没有在连接列表中看到这次请求，无法得知命中的规则。请检查内核是否正常，然后重试。"))
+		if found == nil {
+			continue
+		}
+		if open {
+			ctx, cancel := s.ctrlCtx(nil, ctrlTimeout)
+			_ = s.d.ctrl.CloseConnection(ctx, m.ID)
+			cancel()
+		}
+		return matchFrom(m.Rule, m.RulePayload, m.Chains, host, rules, customCount), nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), ctrlTimeout)
-	_ = s.d.ctrl.CloseConnection(ctx, found.ID)
-	cancel()
-	m := toConnection(*found)
-	return matchFrom(m.Rule, m.RulePayload, m.Chains, host, rules, customCount), nil
+	<-done
+	return model.RuleMatch{}, errors.New(i18n.T("3 秒内没有在连接列表中看到这次请求，无法得知命中的规则。请检查内核是否正常，然后重试。"))
 }
 
-// pickTestConn returns the newest connection to host started after since.
-func pickTestConn(conns []controller.Connection, host string, since time.Time) *controller.Connection {
-	var best *controller.Connection
+// pickTestConnState returns the newest connection to host started after
+// since, among the open connections (open = true) or else the closed ring.
+// Call with mu held; the result points into state.
+func pickTestConnState(conns []model.Connection, closed *ring[model.Connection], host string, since time.Time) (best *model.Connection, open bool) {
+	match := func(c *model.Connection) bool {
+		return (connHost(c.Host) == host || c.DstIP == host) && !c.Start.Before(since.Add(-time.Second))
+	}
 	for i := range conns {
-		c := &conns[i]
-		h := c.Metadata.Host
-		if h == "" {
-			h = c.Metadata.SniffHost
-		}
-		if h != host && c.Metadata.DestinationIP != host {
-			continue
-		}
-		if c.Start.Before(since.Add(-time.Second)) {
-			continue
-		}
-		if best == nil || c.Start.After(best.Start) {
+		if c := &conns[i]; match(c) && (best == nil || c.Start.After(best.Start)) {
 			best = c
 		}
 	}
-	return best
+	if best != nil {
+		return best, true
+	}
+	for i := closed.len() - 1; i >= 0; i-- { // newest closed first
+		c := closed.at(i)
+		if match(&c) {
+			return &c, false
+		}
+	}
+	return nil, false
 }
 
 func connHost(hostPort string) string {
