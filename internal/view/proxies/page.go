@@ -5,6 +5,7 @@ package proxies
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -50,6 +51,7 @@ type Page struct {
 	locate      locateState               // 定位当前节点 (locate.go)
 	icons       map[string]ui.ImageSource // decoded group icons by reference (locate.go)
 	iconFail    map[string]bool           // references that do not decode
+	lists       map[string]*ui.ListState  // the virtual lists of large groups, by group
 
 	mu      sync.Mutex
 	pending map[string]string // optimistic selection by group
@@ -59,7 +61,7 @@ type Page struct {
 // New returns the page.
 func New(e *env.Env) *Page {
 	return &Page{e: e, open: map[string]bool{}, openInit: map[string]bool{}, pending: map[string]string{},
-		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}}
+		icons: map[string]ui.ImageSource{}, iconFail: map[string]bool{}, lists: map[string]*ui.ListState{}}
 }
 
 // restore loads the remembered expanded states and view once.
@@ -184,6 +186,7 @@ func (p *Page) View(c *ui.Context) {
 				})
 			}
 			groups := p.visibleGroups(px, st)
+			names := groupNames(px)
 			shown := 0
 			list := ui.Column(c).Gap(10)
 			if st.Mode == model.ModeDirect {
@@ -191,12 +194,22 @@ func (p *Page) View(c *ui.Context) {
 			}
 			list.Children(func() {
 				for _, g := range groups {
-					nodes := p.filterNodes(g, px)
-					if p.query != "" && len(nodes) == 0 {
+					// Only an expanded group's members are filtered and
+					// sorted; a collapsed one only counts its matches while
+					// searching, to hide a group with none.
+					var nodes []string
+					matched := len(g.All)
+					if p.isOpen(g, px) {
+						nodes = p.filterNodes(g, px)
+						matched = len(nodes)
+					} else if p.query != "" {
+						matched = p.countMatches(g)
+					}
+					if p.query != "" && matched == 0 {
 						continue
 					}
 					shown++
-					p.group(c, g, nodes, px)
+					p.group(c, g, nodes, matched, px, names)
 				}
 			})
 			if shown == 0 && p.query != "" {
@@ -226,6 +239,27 @@ func (p *Page) visibleGroups(px model.ProxySnapshot, st model.Status) []model.Pr
 		out = append(out, g)
 	}
 	return out
+}
+
+// groupNames is the set of the group names, which members may be.
+func groupNames(px model.ProxySnapshot) map[string]bool {
+	set := make(map[string]bool, len(px.Groups))
+	for _, g := range px.Groups {
+		set[g.Name] = true
+	}
+	return set
+}
+
+// countMatches counts the members of g whose name has the search in it.
+func (p *Page) countMatches(g model.ProxyGroup) int {
+	q := strings.ToLower(strings.TrimSpace(p.query))
+	n := 0
+	for _, m := range g.All {
+		if strings.Contains(strings.ToLower(m), q) {
+			n++
+		}
+	}
+	return n
 }
 
 // filterNodes applies the search, the timeout filter and the sort.
@@ -288,13 +322,22 @@ func (p *Page) isOpen(g model.ProxyGroup, px model.ProxySnapshot) bool {
 	return p.open[g.Name]
 }
 
-// group draws one collapsible group with its header controls.
-func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model.ProxySnapshot) {
+// bigGroup is the member count from which the list view shows a group's
+// members in a virtual list bigGroupRows tall, which builds only the rows
+// in view.
+const (
+	bigGroup     = 60
+	bigGroupRows = 12
+	nodeRowH     = 32
+)
+
+// group draws one collapsible group with its header controls; nodes are
+// its members shown when it is open, matched how many match the search.
+func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, matched int, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	open := p.isOpen(g, px)
-	forced := p.query != ""
-	o := open || forced
+	o := open
 	p.mu.Lock()
 	pendingNow := p.pending[g.Name]
 	p.mu.Unlock()
@@ -329,7 +372,10 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				}
 				meta := groupTypeName(g.Type)
 				if now != "" {
-					meta += i18n.T(" · 当前 ") + now
+					meta = i18n.Tf("%s · 当前 %s", meta, now)
+				}
+				if p.query != "" {
+					meta = i18n.Tf("%s · %d 个匹配", meta, matched)
 				}
 				ui.Text(c, meta).FontSize(12).TextColor(t.TextMuted).SingleLine().Shrink(1)
 			})
@@ -363,7 +409,7 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				}
 			})
 		})
-		if !forced && o != open {
+		if o != open {
 			p.open[g.Name] = o
 			p.persist()
 		}
@@ -373,26 +419,47 @@ func (p *Page) group(c *ui.Context, g model.ProxyGroup, nodes []string, px model
 				if p.view == viewGrid {
 					ui.Grid(c).Columns(gridColumns).Gap(6).Padding(4, 6, 2, 6).Children(func() {
 						for _, n := range nodes {
-							p.cell(c, g, n, now, selectable, px)
+							p.cell(c, g, n, now, selectable, px, names)
 						}
 					})
 					return
 				}
+				if len(nodes) > bigGroup {
+					p.bigList(c, g, nodes, now, selectable, px, names)
+					return
+				}
 				for _, n := range nodes {
-					p.node(c, g, n, now, selectable, px)
+					p.node(c, g, n, now, selectable, px, names)
 				}
 			})
 		})
 	})
 }
 
-// memberKind classifies a group member for display: builtin (DIRECT/REJECT),
-// nested group, or node with its protocol.
-func memberKind(n string, px model.ProxySnapshot) (proto string, isGroup, builtin bool) {
-	for _, gg := range px.Groups {
-		if gg.Name == n {
-			return i18n.T("代理组"), true, false
+// bigList shows a large group's members in a virtual list, scrolled to
+// the current member when 定位当前节点 asks for it.
+func (p *Page) bigList(c *ui.Context, g model.ProxyGroup, nodes []string, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
+	ls := p.lists[g.Name]
+	if ls == nil {
+		ls = &ui.ListState{}
+		p.lists[g.Name] = ls
+	}
+	ls.Key = func(i int) any { return nodes[i] }
+	if l := p.locate; l.group == g.Name && !l.shown && !l.until.IsZero() {
+		if i := slices.Index(nodes, now); i >= 0 {
+			ls.ScrollTo(i, ui.Center)
 		}
+	}
+	ui.List(c.Key("nodes"), ls, len(nodes), func(i int) {
+		p.node(c, g, nodes[i], now, selectable, px, names)
+	}).Height(bigGroupRows * nodeRowH).FillWidth().Label(g.Name)
+}
+
+// memberKind classifies a group member for display: builtin (DIRECT/REJECT),
+// nested group (one of names), or node with its protocol.
+func memberKind(n string, px model.ProxySnapshot, names map[string]bool) (proto string, isGroup, builtin bool) {
+	if names[n] {
+		return i18n.T("代理组"), true, false
 	}
 	if n == "DIRECT" || n == "REJECT" {
 		return i18n.T("内置"), false, true
@@ -406,11 +473,11 @@ func memberKind(n string, px model.ProxySnapshot) (proto string, isGroup, builti
 // cell draws one member as a compact grid tile: name on top, protocol and
 // delay below; the current member is tinted and gets the dot/标签 as in the
 // list.
-func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot) {
+func (p *Page) cell(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
-	proto, isGroup, builtin := memberKind(n, px)
+	proto, isGroup, builtin := memberKind(n, px, names)
 	cur := n == now
 	var tile ui.Element
 	if selectable {
@@ -572,11 +639,11 @@ func (p *Page) provider(c *ui.Context, pv model.ProxyProvider, px model.ProxySna
 }
 
 // node draws one member row.
-func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot) {
+func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable bool, px model.ProxySnapshot, names map[string]bool) {
 	t := c.Theme()
 	k := p.e.Kit
 	pr := px.Proxies[n]
-	proto, isGroup, builtin := memberKind(n, px)
+	proto, isGroup, builtin := memberKind(n, px, names)
 	cur := n == now
 	var row ui.Element
 	if selectable {
@@ -587,7 +654,7 @@ func (p *Page) node(c *ui.Context, g model.ProxyGroup, n, now string, selectable
 	} else {
 		row = ui.Row(c.Key("node:" + n))
 	}
-	row.Height(32).Padding(0, 10, 0, 12).Gap(10).AlignItems(ui.Center).Radius(6)
+	row.Height(nodeRowH).Padding(0, 10, 0, 12).Gap(10).AlignItems(ui.Center).Radius(6)
 	if cur {
 		row.Background(t.Accent.Alpha(0.08))
 	}
