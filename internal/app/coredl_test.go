@@ -3,6 +3,9 @@ package app
 import (
 	"archive/zip"
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -40,6 +43,10 @@ func coreServer(t *testing.T, body []byte, status int) (*httptest.Server, *atomi
 		payload = gzipBytes(body)
 	}
 	suffix := strings.TrimPrefix(asset, "mihomo-"+runtime.GOOS+"-"+runtime.GOARCH+"-vX")
+	// The fake archive is what every version "publishes": its SHA-256 is
+	// the expected one for any asset (coresums_test.go covers the lookup).
+	sum := sha256.Sum256(payload)
+	trustDigest(t, hex.EncodeToString(sum[:]))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		hits.Add(1)
 		if !strings.HasSuffix(r.URL.Path, suffix) || !strings.Contains(r.URL.Path, "mihomo-") {
@@ -55,6 +62,15 @@ func coreServer(t *testing.T, body []byte, status int) (*httptest.Server, *atomi
 	}))
 	t.Cleanup(srv.Close)
 	return srv, &hits
+}
+
+// trustDigest makes sum the expected SHA-256 of every core asset for the
+// test.
+func trustDigest(t *testing.T, sum string) {
+	t.Helper()
+	prev := coreDigest
+	coreDigest = func(*Service, context.Context, string, string, string) (string, error) { return sum, nil }
+	t.Cleanup(func() { coreDigest = prev })
 }
 
 // useCoreServer points downloads at srv for the test.

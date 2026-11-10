@@ -13,8 +13,10 @@ import (
 )
 
 // InstallCore implements API.InstallCore: download into
-// cores/<version>/, verify (mihomo -v and -t against the current runtime
-// config), hash and record. It never switches; UseCore does.
+// cores/<version>/, check the archive's SHA-256 (coresums.go) before
+// anything is extracted or run, then verify the binary (mihomo -v and -t
+// against the current runtime config), hash and record. It never
+// switches; UseCore does.
 func (s *Service) InstallCore(channel, version string) (err error) {
 	channel, err = validChannel(channel)
 	if err != nil {
@@ -87,6 +89,13 @@ func (s *Service) installVersion(channel, version string) error {
 
 	ctx, cancel := context.WithTimeout(s.rootCtx, coreDownloadTimeout)
 	defer cancel()
+	// The expected SHA-256 is known before the download starts: pinned, or
+	// from api.github.com directly (never the mirror).
+	want, err := coreDigest(s, ctx, channel, version, asset)
+	if err != nil {
+		cleanup()
+		return err
+	}
 	src := coreAssetURL(channel, version, asset)
 	if err := s.fetchCoreArchive(ctx, s.mirrored(src), archive); err != nil {
 		cleanup()
@@ -94,6 +103,12 @@ func (s *Service) installVersion(channel, version string) error {
 	}
 
 	s.updateCoreDL(func(dl *model.CoreDownload) { dl.Phase = phaseVerify })
+	// Nothing from the download is extracted or executed before this check.
+	if err := verifyCoreArchive(archive, asset, want); err != nil {
+		cleanup()
+		s.alog.Warnf("core %s rejected: %v", version, err)
+		return err
+	}
 	if err := extractCore(archive, fresh, isZip); err != nil {
 		cleanup()
 		return fmt.Errorf(i18n.T("解压内核失败：%v"), err)
