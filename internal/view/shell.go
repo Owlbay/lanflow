@@ -18,6 +18,7 @@ import (
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/capture"
 	"lanflow/internal/view/conns"
 	"lanflow/internal/view/env"
 	"lanflow/internal/view/logs"
@@ -82,7 +83,7 @@ type topicPage interface{ Topics() []app.Topic }
 // shellTopics are the topics the shell's own parts draw: the sidebar's
 // status bar and badge (Status), the queued notices (Notice) and the
 // language and appearance (Settings). They rebuild whatever page shows.
-var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSettings}
+var shellTopics = []app.Topic{app.TopicStatus, app.TopicNotice, app.TopicSettings, app.TopicCapture}
 
 // toastReq is a queued toast, shown on the next build.
 type toastReq struct {
@@ -198,6 +199,7 @@ func New(api app.API, opts Options) *Shell {
 		env.Net:      netpage.New(s.env),
 		env.Stats:    stats.New(s.env),
 		env.Probe:    probe.New(s.env),
+		env.Capture:  capture.New(s.env),
 		env.Settings: settings.New(s.env),
 	}
 	s.topics = map[env.Page]map[app.Topic]bool{}
@@ -353,6 +355,14 @@ func (s *Shell) onChange(t app.Topic) {
 				// still shows when the window is visible.
 				s.systemNotice(n)
 			}
+		}
+	case app.TopicCapture:
+		if s.win != nil { // docs/capture.md §7.2: 窗口标题加「· 解密中」
+			title := i18n.T("澜流 Lanflow")
+			if s.api.CaptureStatus().Enabled {
+				title += " · " + i18n.T("解密中")
+			}
+			s.win.SetTitle(title)
 		}
 	case app.TopicSettings:
 		set := s.api.Settings()

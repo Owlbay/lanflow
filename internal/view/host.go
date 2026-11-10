@@ -39,6 +39,7 @@ const (
 	OpenFeedback = "feedback" // the 反馈问题 dialog
 	OpenTUN      = "tun"      // turn TUN on, installing the helper first (asks)
 	OpenLogs     = "logs"     // the 日志 page
+	OpenCapture  = "capture"  // the 抓包 page, where decryption is turned on
 )
 
 // toggleSystemProxy flips the system proxy (tray, shortcut).
@@ -102,6 +103,8 @@ func (s *Shell) Open(arg string) {
 		s.post(func() { env.SetTUN(s.env, true) })
 	case OpenLogs:
 		s.post(func() { s.navigate(env.Logs, "") })
+	case OpenCapture:
+		s.post(func() { s.navigate(env.Capture, "") })
 	default:
 		s.OpenImportLink(arg)
 	}

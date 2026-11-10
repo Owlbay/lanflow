@@ -36,6 +36,16 @@ var snapshots = []snapshot{
 	{name: "proxies", page: env.Proxies},
 	{name: "subs", page: env.Subs},
 	{name: "conns", page: env.Conns},
+	{name: "capture", page: env.Capture},
+	{name: "capture-detail", page: env.Capture, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		click(t, tt, "login.example.com/oauth/token")
+		time.Sleep(50 * time.Millisecond)
+		tt.Frame()
+		click(t, tt, i18n.T("请求体"))
+	}},
+	{name: "capture-editor", page: env.Capture, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
+		click(t, tt, i18n.T("选择…"))
+	}},
 	{name: "conns-detail", page: env.Conns, prep: func(t *testing.T, _ *fake.Fake, _ *Shell, tt *ui.Tester) {
 		click(t, tt, "www.google.com:443")
 	}},

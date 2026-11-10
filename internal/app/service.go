@@ -93,6 +93,7 @@ type Service struct {
 	cores   coresState    // installed Mihomo versions and release lists (cores.go); its own lock
 	started time.Time     // when the service was created
 	fb      feedbackState // reports built for 反馈问题 and the automatic report (feedback.go); its own lock
+	capst   captureState  // HTTPS 选择性解密 (capture.go); its own locks
 }
 
 // state is everything the reads return. Every slice/map handed out is copied.
@@ -321,6 +322,7 @@ func (s *Service) run() {
 	s.goBackground(s.bootstrap)
 	s.goBackground(s.coreUpdateLoop)
 	s.goBackground(func() { s.stats.loop(s.rootCtx) })
+	s.goBackground(s.captureLoop)
 }
 
 func (s *Service) goBackground(fn func()) {
@@ -659,6 +661,7 @@ func (s *Service) Proxies() model.ProxySnapshot {
 	for i := range out.Groups {
 		out.Groups[i].Icon = s.state.groupIcons[out.Groups[i].Name] // icons.go
 	}
+	hideCaptureProxies(&out) // capture.go
 	return out
 }
 

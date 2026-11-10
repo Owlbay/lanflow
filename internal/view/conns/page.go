@@ -375,6 +375,13 @@ func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, cn model.Connection, active bo
 	if m.Item(i18n.T("此程序始终走…")).Disabled(cn.Process == "").Chosen() {
 		p.addRuleForProcess(cn)
 	}
+	// HTTPS 选择性解密 (docs/capture.md §7.2): the 抓包 page confirms
+	if h := hostOnly(cn.Host); m.Item(i18n.T("解密此主机…")).Disabled(isIP(h)).Chosen() {
+		p.e.Navigate(env.Capture, "add-host:"+h)
+	}
+	if m.Item(i18n.T("解密此程序…")).Disabled(cn.Process == "").Chosen() {
+		p.e.Navigate(env.Capture, "add-app:"+cn.ProcessPath+"\n"+cn.Process)
+	}
 	m.Separator()
 	if m.Item(i18n.T("复制主机")).Chosen() {
 		c.WriteClipboard(cn.Host)

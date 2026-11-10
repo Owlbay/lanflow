@@ -10,6 +10,7 @@ import (
 
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
+	"lanflow/internal/view/capture"
 	"lanflow/internal/view/env"
 )
 
@@ -18,7 +19,7 @@ import (
 // at the bottom.
 var sidebarGroups = [][]env.Page{
 	{env.Overview, env.Proxies, env.Subs},
-	{env.Conns, env.Logs, env.Rules},
+	{env.Conns, env.Capture, env.Logs, env.Rules},
 	{env.Net, env.Stats, env.Probe},
 }
 
@@ -32,6 +33,9 @@ func (s *Shell) sidebar(c *ui.Context, st model.Status, vib bool) {
 			e.Children(func() {
 				ui.Badge(c, fmt.Sprint(st.Connections)).FontFeatures("tnum")
 			})
+		}
+		if p == env.Capture && s.env.API.CaptureStatus().Enabled {
+			e.Children(func() { ui.Badge(c, i18n.T("解密中")) }) // docs/capture.md §7.2 指示
 		}
 		return e
 	}
@@ -90,6 +94,13 @@ func (s *Shell) statusBar(c *ui.Context, st model.Status) {
 				ui.Text(c, i18n.T("未启动")).FontSize(12).TextColor(t.TextMuted)
 			}
 		})
+		if cs := s.env.API.CaptureStatus(); cs.Enabled {
+			// HTTPS decryption on: impossible to miss (docs/capture.md §7.2)
+			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+				k.Dot(c, "orange")
+				ui.Text(c, capture.StatusText(cs)).FontSize(11).TextColor(t.Warning).SingleLine()
+			})
+		}
 		if st.Core == model.CoreRunning {
 			if st.SystemProxy {
 				ui.Text(c, i18n.T("系统代理已开启")).FontSize(11).TextColor(t.TextMuted).Margin(0, 0, 0, 14)

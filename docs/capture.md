@@ -1,6 +1,6 @@
 # HTTPS 选择性解密（设计）
 
-状态：设计定稿，尚未实现。取代本文件旧版「解密层放在 Mihomo 前面」的方案。本文由设计草案与一轮对抗式评审合并而成：评审指出缺陷的地方以评审的修正为准。
+状态：M0 已完成（结论见 §14），M1 起按里程碑实现中（实现状态见 §15）。取代本文件旧版「解密层放在 Mihomo 前面」的方案。本文由设计草案与一轮对抗式评审合并而成：评审指出缺陷的地方以评审的修正为准。
 
 标注：**已验证** = 在 Mihomo v1.19.33 darwin/arm64（`bin/mihomo`）上实测，全部监听 127.0.0.1、未开 TUN；**待验证** = 写明验证方法，在 M0 完成。
 
@@ -62,7 +62,8 @@
 
 - 回流连接以域名进入 Mihomo，由 Mihomo 做 DNS 与选节点，解密进程不做 DNS（hosts 例外见 §9）。
 - 解密进程只拨回流入口，用不读环境代理的 `net.Dialer`。
-- **已验证**：全局 `interface-name: en0` 下 http 出站连 127.0.0.1 仍成功（非全局单播地址跳过网卡绑定）。**待验证**：TUN `auto-detect-interface` 下同样可达——在 Parallels VM 中用 `scripts/vm-e2e.sh` 的 TUN 流程加一项用例。
+- **已验证**：全局 `interface-name: en0` 下 http 出站连 127.0.0.1 仍成功（非全局单播地址跳过网卡绑定）。**待验证（VM）**：TUN `auto-detect-interface` 下同样可达——步骤见 §14.2 V1。
+- **已验证（M0）**：目标已被解析过时（hosts 映射，或前面任何 IP 类规则触发了解析），http 出站发出的是 `CONNECT <IP>`，回流因此丢失域名。agent 用内核 `/connections` 中该连接的 `metadata.host` 还原域名，回流、ECH 判定、记录都用还原后的名字（§14.1）。
 
 ### 3.2 规则模板
 
@@ -166,7 +167,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 1. accept → 校验口令与来源 → 回 200 → `Peek` 首包。明文 HTTP 同样以 CONNECT 到达（**已验证**，无需处理绝对 URI 形式）。非 TLS、非 HTTP 字节 → 透传，记「非 HTTP」。
 2. 解析 ClientHello（SNI、ALPN、ECH 扩展 0xfe0d），**缓存原始字节**。
 3. 决策（按序）：总开关关 → 透传；**CONNECT 主机 / SNI 不在选择集**（M2 起：或口令不对应某个程序选择项）→ 透传；命中旁路或临时跳过表 → 透传；ECH 判定成立 → 透传；回环熔断触发 → 拒绝并告警；否则解密。
-4. **回环熔断**：同一目标 N 毫秒内 accept 超过 K 次，或 agent 正在向回流入口拨号的目标又从入口进来 → 拒绝（N、K 在 M0 定）。
+4. **回环熔断**：回环时 agent 收到的首包正是自己刚写给上游的首包。agent 记录每条上游连接写出的首包前 64 字节（10 秒内）：TLS 首包含 32 字节随机数，命中一次即判回环；明文 HTTP 可能合法重复，同一前缀命中两次才判。另设速率兜底：同一目标 N=1000 毫秒内 accept 超过 K=100 次即拒绝。M0 实测：不熔断时一次请求 2 秒内嵌套 5826 层（约 2900 层/秒）；熔断后第 3 个 accept 即拒绝（原连接、回流的上游握手、透传重放各一次）。
 5. 上游先握手：经回流入口拨号，用客户端 SNI 与 ALPN 列表握手；成功后用叶子证书与客户端握手，`NextProtos` = 上游结果。
 6. 两侧 ALPN 一致后**原样双向拷贝明文**；副本送解析器，解析失败只影响记录不影响转发。
 
@@ -198,7 +199,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 项 | 做法 |
 | --- | --- |
 | 生成 | 首次启用时生成 ECDSA P-256，`CN=Lanflow Local CA (<主机名> <日期>)`，`O=Lanflow`，`CA:true, pathlen:0`，`certSign|cRLSign`，128 位随机序列号，**有效期 90 天** |
-| 名称约束 | `excludedSubtrees`：高价值域（银行、Apple ID、Microsoft 登录等）+ 全部 IP（`0.0.0.0/0`、`::/0`）。名单写进 CA 后只能靠重签更新，这是接受的取舍。**待验证**：macOS SecTrust 对用户安装的根是否执行名称约束——M0 用 Go 签违反约束的叶子，在 Safari / `SecTrustEvaluateWithError`、Chrome、curl 上测；不执行则约束在 macOS 只是纵深防御 |
+| 名称约束 | `excludedSubtrees`：高价值域（银行、Apple ID、Microsoft 登录等）+ 全部 IP（`0.0.0.0/0`、`::/0`）。名单写进 CA 后只能靠重签更新，这是接受的取舍。**已验证（M0）**：Go `x509`、macOS SecTrust（`security verify-cert -r` 临时锚点，不改钥匙串）、系统 curl（LibreSSL `--cacert`）三者都拒绝违反约束的叶子（子域、顶域、IP SAN 都拒）。**待验证（VM）**：根装进登录钥匙串并设为信任后，Safari / Chrome 是否同样执行（§14.2 V3） |
 | 私钥：Windows | **M1 起**用 CNG Software KSP 不可导出密钥（`NCRYPT_EXPORT_POLICY = 0`），不放凭据管理器（同用户进程可 `CredRead`，无弹窗） |
 | 私钥：macOS | M1 用 `main_secrets.go` 的 MyGo Secrets（登录钥匙串）。未签名应用每次升级会弹「允许访问」，见 §11；Secure Enclave 降为研究项（需 cgo+Swift 桥接或钥匙串访问组权限，未签名应用拿不到） |
 | 无凭据库 | 拒绝启用解密，不落盘明文私钥（`internal/app/backup.go` 的混淆文件回退不可用于此） |
@@ -217,10 +218,10 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 运行时 | 说明 |
 | --- | --- |
 | Electron 应用 | 渲染进程走 Chromium 用系统根；**主进程 Node `https` 用内置 CA 列表，不信任系统根**。VS Code 扩展宿主、Slack、Discord、Cursor 的 API 与自动更新多在主进程，会表现为固定/失败。选择 Electron 应用时提示需 `NODE_EXTRA_CA_CERTS`（多数应用无法注入） |
-| Node | `NODE_EXTRA_CA_CERTS`；`--use-system-ca`（v23.8 加入，回溯到 22.15）；`NODE_USE_SYSTEM_CA` 更晚（**待验证**版本） |
+| Node | `NODE_EXTRA_CA_CERTS`；`--use-system-ca`（v23.8 加入，回溯到 22.15）；`NODE_USE_SYSTEM_CA=1`：**已验证** Node 26.10 生效（默认 121 张内置根 → 136 张，含系统根 15 张），最早版本未查 |
 | Firefox | 120 起默认导入用户添加的根（`security.enterprise_roots.enabled`），可被用户或策略关闭；ESR 115 不导入。只读检测版本与 prefs |
 | Python / Java / Rust | certifi / 自带 cacerts / rustls+webpki-roots 不可注入；给出 `SSL_CERT_FILE`、`keytool` 等说明 |
-| curl | Homebrew curl 用 `CURL_CA_BUNDLE`；系统 curl 行为**待验证** |
+| curl | Homebrew curl 用 `CURL_CA_BUNDLE`。**已验证**：macOS 26 系统 curl 8.7.1 默认走 LibreSSL + `/etc/ssl/cert.pem`，**不读钥匙串**；`CURL_SSL_BACKEND=secure-transport` 时才用钥匙串信任 |
 | 系统服务 | macOS 用户域信任对 root 守护进程无效；Windows LocalSystem 服务不读 CurrentUser\Root，走 WinHTTP 的程序不用系统代理 |
 
 ## 7. 捕获存储与界面
@@ -231,7 +232,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | --- | --- | --- |
 | 记录环形缓冲 | 5000 条（每条约 2–4 KB） | 可调 1000–50000 |
 | 单个正文上限 | 请求/响应各 1 MiB，超出截断并标「原大小 N」 | 64 KiB–16 MiB |
-| 溢写 | 无，只在内存 | M2：`<DataDir>/capture/session-<id>.bin`，0600，AES-256-GCM 密钥只在内存，上限 512 MiB，退出即删；崩溃残留下次启动清理 |
+| 溢写 | **已实现（提前到 M1）**：正文内存上限 64 MiB，超出后把最早完成记录的正文封存到 `<DataDir>/capture/spill/session-<id>.bin`，0600，AES-256-GCM 密钥只在 agent 内存，上限 512 MiB（满了丢弃正文并标记），退出即删；崩溃残留下次启动清理 | — |
 | 持久化 | 无，退出即清空 | M3：加密会话文件（口令派生密钥） |
 
 `Flow{ID, Seq, Start, Timing, ConnID, UpstreamConnID, Process, ProcessPath, Attribution(certain|ambiguous|unknown), Selector, Method, Host, Path, Status, ReqHeader, RespHeader, ReqBody, RespBody, TLS, Proto, Error, Flags(pinned|ech|passthrough|ws|truncated)}`。透传连接也生成一条连接级记录，便于看到「哪些没能解密」。
@@ -281,9 +282,9 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 功能 | 交互与处理 |
 | --- | --- |
 | 系统代理 / TUN | 同一套规则。系统代理下 UDP/QUIC 不可见；TUN 下回环出站可达性待验证（§3.1） |
-| 订阅中的 `PROCESS-*` 规则 | 回流连接在 Mihomo 看来来自 agent 进程（**已验证**：回流 `process` 为解密层进程），按程序分流失效，出口可能改变。M2：每个程序选择项独立 `IN-USER`，compose 把针对该程序的规则改写，如 `PROCESS-NAME,Foo,X` → `OR,((PROCESS-NAME,Foo),(AND,((IN-NAME,lanflow-mitm-up),(IN-USER,sel-foo)))),X`，出口与原来一致。用户显式固定上游出口时可改用 listener 的 `proxy:` |
+| 订阅中的 `PROCESS-*` 规则 | 回流连接在 Mihomo 看来来自 agent 进程（**已验证**：回流 `process` 为解密层进程；回流连接的 `inboundName=lanflow-mitm-up`、`inboundUser=lanflow`），按程序分流失效，出口可能改变。M2：每个程序选择项独立 `IN-USER`，compose 把针对该程序的规则改写，如 `PROCESS-NAME,Foo,X` → `OR,((PROCESS-NAME,Foo),(AND,((IN-NAME,lanflow-mitm-up),(IN-USER,sel-foo)))),X`，出口与原来一致。用户显式固定上游出口时可改用 listener 的 `proxy:` |
 | `find-process-mode` | 有程序选择项时强制 `strict` 或阻止（§4.1） |
-| hosts 映射 | **已验证**：hosts 中的域名以 `CONNECT <IP>` 到达，回流 `host` 为空，订阅域名规则失效（`/etc/hosts` 经 `use-system-hosts` 同样）。处理：目标是 IP 且有 SNI 时，经 controller `/dns/query` 用 Mihomo DNS 解析 SNI，结果含该 IP 则以 SNI 回流，否则以 IP 回流并标「回流仅按 IP 分流」。不能无条件改用 SNI：redir-host / 客户端 DoH / 域前置下会改变实际目的地 |
+| hosts 映射 | **已验证**：hosts 中的域名以 `CONNECT <IP>` 到达，回流 `host` 为空，订阅域名规则失效（`/etc/hosts` 经 `use-system-hosts` 同样）。M0 进一步确认：只要目标在命中抓包规则前已被解析（hosts，或规则链里先求值的 IP 类规则），都会这样。处理（已实现）：agent 本来就要按 `/connections` 做来源校验，同一条记录的 `metadata.host` 就是客户端请求的名字，回流改用它；查不到时按 IP 回流。不用 SNI 代替：redir-host / 客户端 DoH / 域前置下会改变实际目的地 |
 | 嗅探器 | `override-destination` 开时 `host` 来自 SNI，与 agent 一致；嗅探关闭时 TUN redir-host 下按域名选择不生效（安全方向），UI 提示 |
 | fake-ip | 域名天然可用；QUIC 按域名拒绝依赖 fake-ip 或 QUIC 嗅探 |
 | aTrust 共存 | coexist 规则在最前，只保护已配置的 CorpDomains/CIDR；其余内网由内置旁路清单兜底；上游自签证书走重放透传 |
@@ -291,11 +292,11 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | IPv6 关闭 | 抓包规则在 `ipv6RejectRule` 之前，IPv6 字面地址会先被 agent 接收再在回流时被拒，客户端回落 IPv4 变慢。规则 ② 加 `NOT IP-CIDR6 ::/0` 或调整顺序（待决） |
 | 配置重载 | 关闭顺序：① agent 标志立即置为透传 → ② 重新 compose 并 reload（出站保留到第 ③ 步完成）→ ③ `DELETE /connections/{id}` 关闭 `chains` 含解密出站的连接（必需，见 §2）→ ④ agent 停止监听。**待验证**：TUN 下 reload 是否重建 TUN——VM 中开 TUN 连续开关 20 次观察断流 |
 | 连接页 / 统计 | 回流连接按 `inboundName=lanflow-mitm-up` 折叠到原始连接下（「已解密 · 回流经 X」）；`stats.go` 按 inbound 去重（M2） |
-| 进程归属（M2） | 上游段精确：agent 拨回流时的本地端口 = `/connections` 中 `inboundName=lanflow-mitm-up` 的 `sourcePort`，得到节点链路与命中规则。下游段启发式：`chains` 含解密出站、`host`/端口一致、`start` 相差 < 2 s、FIFO 认领；进程不一致标「归属不确定」。查询 50–100 ms 去抖批量 `GET /connections`，复用 `internal/app/streams.go` 连接流，抓包期间强制前台频率。`controller.go` `Metadata` 补 `InboundName`/`InboundPort`/`InboundUser`（实测字段名） |
+| 进程归属（M2） | **已验证**字段名：`metadata.inboundIP` / `inboundPort` / `inboundName` / `inboundUser`；mixed 入站的 CONNECT `type` 为 `HTTPS`。`find-process-mode: strict` 下只有规则里有进程类条件时才查进程，纯域名选择的记录没有进程名；macOS 上进程路径是规范路径（`/private/var/…` 而非 `/var/…`）。上游段精确：agent 拨回流时的本地端口 = `/connections` 中 `inboundName=lanflow-mitm-up` 的 `sourcePort`，得到节点链路与命中规则。下游段启发式：`chains` 含解密出站、`host`/端口一致、`start` 相差 < 2 s、FIFO 认领；进程不一致标「归属不确定」。查询 50–100 ms 去抖批量 `GET /connections`，复用 `internal/app/streams.go` 连接流，抓包期间强制前台频率。`controller.go` `Metadata` 补 `InboundName`/`InboundPort`/`InboundUser`（实测字段名） |
 
 ## 10. Agent / `lanflow ctl` / MCP 访问策略
 
-当前仓库尚无 ctl / MCP 接口，以下为接入时必须遵守的约束。
+已接入（`internal/rpc/levels.go`、`internal/rpc/redact.go`、`internal/rpc/guard.go`）：`CaptureStatus` 为读；`CaptureFlows`（L1 摘要，查询参数中的凭据打码，不含程序路径）与 `CaptureFlow`（L2：头打码为长度、正文只给结构）为敏感级，MCP 每个连接经窗口批准一次；开关、选择项、根证书操作为危险级（MCP 拒绝，ctl 每次确认），导出 CA 与 HAR 只在窗口。同一连接读过抓包数据后不能再写，写过后不能再读。返回值包在 `{"source":"lanflow-capture","note":…}` 里并标明是不可信数据。
 
 | 级别 | 内容 | 条件 |
 | --- | --- | --- |
@@ -347,10 +348,68 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | --- | --- | --- |
 | 关闭解密时的信任策略默认值 | A：关闭 7 天后自动移除（本文默认）；B：关闭即移除，提供「保留信任」选项 | 评审两者皆可，A 少弹窗，B 暴露面更小 |
 | agent 不可用时的兜底 | 把出站包进 `fallback` 组后备 DIRECT（应用不断网，但可能违背分流意图）/ 不兜底，靠 GUI 立即 reload | 默认不兜底，fallback 作为可选项是否提供待定 |
-| IPv6 关闭时的规则位置 | 规则 ② 加 `NOT IP-CIDR6` / 关闭 IPv6 时把抓包规则排到 `ipv6RejectRule` 之后 | 需写黄金测试后取其一 |
+| IPv6 关闭时的规则位置 | 规则 ② 加 `NOT IP-CIDR6` / 关闭 IPv6 时把抓包规则排到 `ipv6RejectRule` 之后 | **已定**：规则 ② 加 `(NOT,((IP-CIDR6,::/0,no-resolve)))`，`mihomo -t` 通过，抓包仍排在自定义规则前（`compose_capture_test.go`） |
 | 银行与支付域名 | 内置 Top 50 / 只在首次命中银行类域名时提示 | 待定 |
-| 名称约束在 macOS 不生效时 | 仍保留 excluded（对 Chrome 等可能有效）/ 改为默认「严格模式」 | 等 M0 结果 |
+| 名称约束在 macOS 不生效时 | 仍保留 excluded（对 Chrome 等可能有效）/ 改为默认「严格模式」 | M0：SecTrust 对临时锚点执行约束，默认保留 excluded；钥匙串信任根的行为待 VM（§14.2 V3） |
 | QUIC 拒绝方式 | `REJECT` / `REJECT-DROP` | 等 Chrome 回落耗时实测 |
 | TUN 共享/网关时的非本机来源 | 排除规则的具体写法 | 等 VM 复现 |
-| 回环熔断阈值 N、K | — | M0 定 |
+| 回环熔断阈值 N、K | — | **已定**：首包指纹为主（TLS 一次、明文两次），速率兜底 N=1000 ms、K=100（§5.2） |
 | 固定检测阈值 | 5 分钟 2 次是否合适 | 等预连接误判率实测 |
+
+## 14. M0 验证结论
+
+### 14.1 本机已完成（宿主机，全部 127.0.0.1 随机端口、临时 `-d` 目录、测试专用 CA，不碰 TUN / 系统代理 / DNS / 钥匙串信任）
+
+| 项 | 方法 | 结论 |
+| --- | --- | --- |
+| 名称约束 | Go 签带 `excludedSubtrees`（域名 + `0.0.0.0/0`、`::/0`）的根，再签违反约束的叶子（子域、顶域、IP SAN）；分别用 Go `Verify`、`security verify-cert -c leaf -r root -p ssl`（临时锚点）、`/usr/bin/curl --cacert` 校验 | 三者都拒绝；curl 报 `excluded subtree violation`。合规叶子三者都通过 |
+| 系统 curl | `curl -v` 连本地 TLS 服务 | 默认 LibreSSL + `/etc/ssl/cert.pem`，不读钥匙串；`CURL_SSL_BACKEND=secure-transport` 才用钥匙串 |
+| Node | `tls.getCACertificates()` | Node 26.10：`NODE_USE_SYSTEM_CA=1` 生效 |
+| `CONNECT <IP>` | e2e：hosts 映射的选中域名 | http 出站以 IP 发 CONNECT；`/connections` 的 `metadata.host` 仍是域名，agent 据此还原（已实现，e2e 覆盖） |
+| `/connections` 字段 | e2e 打印 | `inboundIP/inboundPort/inboundName/inboundUser` 存在；回流连接 `inboundName=lanflow-mitm-up`、`inboundUser=lanflow`；mixed CONNECT 的 `type=HTTPS` |
+| 进程查询 | e2e：`find-process-mode: strict` | 只有规则含进程条件时才查；`PROCESS-PATH-WILDCARD` 需写规范路径（`/private/var/…`） |
+| 回环 | e2e：把回流 listener 的 `proxy:` 指向解密出站 | 不熔断：2 秒 5826 层；首包指纹熔断：第 3 个 accept 拒绝，请求快速失败（`TestM0LoopRate`，`LANFLOW_M0=1`） |
+| ECH | e2e：Go 客户端 / 服务端真实 ECH（X25519 + AES-128-GCM，public name 与目标不同） | 外层 SNI ≠ 目标主机 → 透传，客户端 `ECHAccepted=true`、拿到原证书；GREASE 形态（有 0xfe0d、SNI = 目标）照常解密（`TestDecideGreaseECH`） |
+| 规则语法 | `mihomo -t` | `(NOT,((IP-CIDR6,::/0,no-resolve)))` 嵌在 `AND` 中可用；`RULE-SET` 放在 `AND` 第一项，未选中连接不会再求值后面的 IP 类条件 |
+| 上游证书无效 | e2e：自签上游 | 丢弃上游、重放 ClientHello 整体透传，客户端拿到原证书并完成握手 |
+
+### 14.2 需要在虚拟机里验证（留给主会话，Parallels「macOS」VM，`scripts/vm-e2e.sh` 框架）
+
+不在宿主机上做：宿主机开着 Clash Party，这些步骤要开 TUN 或改钥匙串信任。
+
+- **V1 TUN 下回流可达**：VM 中开 TUN（`auto-detect-interface: true`），抓包选中 `example.com`，`curl https://example.com` → 应解密（证书颁发者为 Lanflow Local CA，`/connections` 有 `inboundName=lanflow-mitm-up` 的回流连接且最终出口为订阅节点）；`tcpdump -i utun1700 host 127.0.0.1` 应无回环流量进入 TUN。
+- **V2 TUN 下 reload 20 次**：开 TUN 后连续开关解密 20 次（窗口里点，或 `lanflow ctl call SetCapture true/false`，危险级每次要在窗口确认），期间后台 `while curl -sf https://www.apple.com -o /dev/null; do :; done` 统计失败次数；记录每次 `PUT /configs` 是否重建 utun（`ifconfig` 设备序号是否变化）。
+- **V3 钥匙串信任根与名称约束**：在「抓包」页「安装根证书」→ 登录钥匙串出现「Lanflow Local CA」且信任为「始终信任（SSL）」；用该 CA（导出私钥只在测试 VM 中做）签 `www.paypal.com` 与 IP 叶子，起本地 TLS 服务，Safari / Chrome / `security verify-cert -c leaf -p ssl`（不带 `-r`）分别访问，记录是否拒绝。
+- **V4 QUIC 拒绝**（规则 ① 尚未实现，先手写一条规则）：TUN 下选中一个支持 HTTP/3 的站点，规则 ① `REJECT` 与 `REJECT-DROP` 各测一次，Chrome DevTools 看首次请求回落 TCP 的耗时。
+- **V5 Chrome 预连接 / 固定误判**：Chrome 打开 10 个常用站点（只选中其中 3 个），1 小时内统计「零数据关闭」与证书 alert 次数，确认 5 分钟 2 次的阈值不误判。
+- **V6 TUN + 共享 / 网关**：VM 开「互联网共享」，另一台虚拟机经它上网，访问选中域名应拿到原证书（agent 记录 `not-local`），据此确定规则 ② 的排除写法。
+- **V7 ECH 安全降级**：Chrome / Firefox 访问 `crypto.cloudflare.com/cdn-cgi/trace`（`sni=encrypted`）时为 public name 签证书，看客户端是否关闭 ECH 重试；结论决定是否做「降级后解密」。
+- **V8 整条链路（系统代理模式）**：VM 中装好 .app，「抓包」页阅读说明 → 安装根证书（应出现系统授权框，钥匙串「登录」中出现 Lanflow Local CA 且为「始终信任」）→ 连接页右键 `www.example.com`「解密此主机…」→ 开启。验证：Safari / Chrome 访问后「抓包」页出现记录，证书颁发者为 Lanflow；`curl https://www.apple.com` 证书仍为 Apple 原证书（内置跳过）；30 分钟后（或把自动关闭设为 1 分钟）自动关闭，侧栏与托盘指示消失，`lsof -iTCP -sTCP:LISTEN | grep lanflow` 中 agent 端口消失。再「移除根证书并删除私钥」，钥匙串中证书与「Lanflow Capture CA」密钥项都应消失。重新构建 .app（未签名）后再开启，记录钥匙串是否弹「允许访问」。
+
+## 15. 实现状态
+
+截至本节，M0、M1 完整，M2 的核心（按程序选择与精确归属）完成，M3 做了 HAR 导出与 WebSocket 帧。代码：
+
+| 位置 | 内容 |
+| --- | --- |
+| `internal/profile/capture.go` | 抓包层组装、`scrubCaptureRefs`、`exclude-filter` 追加、有程序选择时把 `find-process-mode: off` 改为 `strict`；黄金测试 `compose_capture_test.go`（经 `mihomo -t`） |
+| `internal/capture/ca` | 根证书（ECDSA P-256、90 天、`pathlen:0`、excluded 约束含全部 IP）、叶子 LRU 1024 + singleflight；`SecretKeys`（macOS 登录钥匙串，服务名 `Lanflow Capture CA`）、`keys_windows.go`（CNG 不可导出密钥） |
+| `internal/capture/agent` | `lanflow capture-agent`：CONNECT 口令（常量时间）、ClientHello 解析（含模糊测试）、选择集自检、本机来源与进程归属（内核 `/connections`）、域名还原、ECH / GREASE 判定、证书固定临时跳过、首包指纹回环熔断 + 速率兜底、上游证书无效 / 要求客户端证书 / 任何上游握手失败时重放透传、h1 / h2 / WebSocket 旁路解析、环形缓冲 + 加密溢写、控制接口（127.0.0.1 + 随机 token） |
+| `internal/capture/trust` | macOS `security add-trusted-cert -r trustRoot -p ssl -k login.keychain-db` / `remove-trusted-cert` / `delete-certificate`；Windows `CurrentUser\Root`；信任状态一律以叶子验证为准 |
+| `internal/capture/redact`、`har` | 显示、HAR 与 agent 共用的打码；HAR 1.2（默认不含正文，`_lanflow` 扩展） |
+| `internal/app/capture.go` | 选择项文件 `<DataDir>/capture/settings.json`（不进同步、不进备份）、agent 生命周期（崩溃按原端口重启，1 分钟内第 4 次退出则关闭解密并恢复分流）、开关顺序（agent 置透传 → reload → 关闭解密出站上的连接 → 停 agent）、30 分钟自动关闭（按墙钟，睡眠唤醒后立即关闭）、关闭 7 天或根证书过期后自动移除信任与私钥、GLOBAL 选中解密出站时重置为 DIRECT、代理页隐藏解密出站、诊断包隐藏选择项与内核日志中的解密行 |
+| `internal/view/capture`、`conns`、`tray.go`、`shell*.go` | 「抓包」页（首次说明与确认、根证书横幅、选择编辑、列表 + 详情页签、正文查看器、默认打码、HAR 导出）；连接页行菜单「解密此主机… / 解密此程序…」；侧栏「解密中」徽标与状态行、托盘「HTTPS 解密」开关与标题、窗口标题「· 解密中」 |
+
+测试：`internal/capture/agent/e2e_test.go` 用真实 `bin/mihomo`（127.0.0.1 随机端口、临时 `-d`）覆盖：未选中主机拿到原证书且不进 agent；选中主机 h1 / h2 解密与记录（正文、TLS、归属）且上游收到的字节与客户端逐字节相同；覆写引用解密出站被清除；回流 listener 指向解密出站时第 3 个 accept 即熔断；局域网来源被规则拦下，去掉规则的来源条件后由 agent 二次拒绝；关闭后在途解密请求被断开、新连接拿到原证书、内核中无残留解密连接；上游证书无效时原样透传；按程序选择时本进程与 `curl` 分别归属到各自的选择项；真实 ECH 透传、GREASE 照常解密。`internal/app/capture_test.go` 以测试二进制充当 agent 子进程（文件密钥库，不碰钥匙串）覆盖安装、开关、崩溃重启、关闭断连、自动关闭、7 天移除。
+
+未做 / 与设计的差异：
+
+- M2 未做：订阅中 `PROCESS-*` 规则对回流连接的改写（§9，解密连接的出口可能与未解密时不同）、连接页折叠回流连接与统计按 inbound 去重、选中目标 UDP 443 拒绝（规则 ①）、正文搜索与复制原值确认、multipart / 十六进制以外的更多查看器。
+- M3 未做：cURL（按 §10 永不提供给 agent，窗口内也暂不做）、mTLS PKCS#12 导入、「严格模式」、加密会话保存、uTLS。
+- 「证书固定」只按明确 alert 计数；「零数据关闭」未单独计数。
+- `pprof`：agent 不开 pprof；GUI 的 `LANFLOW_PPROF` 在抓包期间未禁止（§8 表中一项）。
+- 并发解密上限 256、agent `GOMEMLIMIT` 256 MiB 已设，性能项（1000 并发 h2 流、100 MB 下载）未测。
+
+Windows 上未验证（只做了 `GOOS=windows go vet` 与交叉编译）：CNG 密钥的创建 / 打开 / 签名 / 删除（`keys_windows.go`）、`CurrentUser\Root` 的安装确认框与删除（`trust_windows.go`）、agent 子进程经命名管道访问内核控制器、`ca-remove` 卸载钩子（未实现：卸载程序不调用，需用户先在应用内移除）、Defender / SmartScreen 对 agent 的判定。
+
+需要在虚拟机验证的步骤见 §14.2。
