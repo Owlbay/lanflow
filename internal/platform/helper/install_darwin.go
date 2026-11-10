@@ -4,8 +4,11 @@ package helper
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,8 +41,12 @@ func install(ctx context.Context, o InstallOptions) error {
 	if err := checkDowngrade(ctx, o.HelperBin); err != nil {
 		return err
 	}
-	args := []string{o.HelperBin, "install", "--core", o.CoreBin, "--data-dir", o.DataDir, "--uid", strconv.Itoa(currentUID())}
-	if err := runPrivileged(ctx, args, installPrompt); err != nil {
+	sum, err := helperDigest(o.HelperBin)
+	if err != nil {
+		return err
+	}
+	args := []string{"install", "--core", o.CoreBin, "--data-dir", o.DataDir, "--uid", strconv.Itoa(currentUID())}
+	if err := runPrivilegedShell(ctx, verifiedExec(o.HelperBin, sum, args), installPrompt); err != nil {
 		return err
 	}
 	return waitInstalled(ctx, 10*time.Second)
@@ -50,7 +57,16 @@ func uninstall(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := runPrivileged(ctx, []string{bin, "uninstall"}, uninstallPrompt); err != nil {
+	shell := shellCommand([]string{bin, "uninstall"})
+	if bin != installedHelperBin {
+		// Not the root-owned installed copy: verify it like install does.
+		sum, err := helperDigest(bin)
+		if err != nil {
+			return err
+		}
+		shell = verifiedExec(bin, sum, []string{"uninstall"})
+	}
+	if err := runPrivilegedShell(ctx, shell, uninstallPrompt); err != nil {
 		return err
 	}
 	return waitUninstalled(ctx, 5*time.Second)
@@ -77,9 +93,8 @@ func checkOptions(o InstallOptions) error {
 // helperBinary locates a helper executable for uninstall: the installed
 // copy if present, else the one shipped next to the app executable.
 func helperBinary() (string, error) {
-	const installedBin = "/Library/PrivilegedHelperTools/com.lanflow.helper"
-	if fi, err := os.Stat(installedBin); err == nil && fi.Mode().IsRegular() {
-		return installedBin, nil
+	if fi, err := os.Stat(installedHelperBin); err == nil && fi.Mode().IsRegular() {
+		return installedHelperBin, nil
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -97,10 +112,80 @@ func helperBinary() (string, error) {
 	return "", errors.New("找不到权限组件程序，无法移除")
 }
 
-// runPrivileged runs argv as root through osascript's
-// "do shell script … with administrator privileges".
-func runPrivileged(ctx context.Context, argv []string, prompt string) error {
-	out, err := execCommand(ctx, "/usr/bin/osascript", "-e", appleScript(shellCommand(argv), prompt))
+// installedHelperBin is the root-owned copy the LaunchDaemon runs.
+const installedHelperBin = "/Library/PrivilegedHelperTools/com.lanflow.helper"
+
+// ExpectedHelperSHA256 is the hex SHA-256 of the lanflow-helper binary
+// shipped with the app, set at build time:
+//
+//	-ldflags "-X lanflow/internal/platform/helper.ExpectedHelperSHA256=<hex>"
+//
+// When set, a helper binary with another digest is never run as root.
+// When empty (development builds) the digest is taken from the binary just
+// before the authorization prompt, which still guarantees that root runs
+// exactly the bytes the app saw.
+var ExpectedHelperSHA256 string
+
+// helperDigest returns the digest the privileged command must verify.
+func helperDigest(bin string) (string, error) {
+	sum, err := fileSHA256(bin)
+	if err != nil {
+		return "", fmt.Errorf("无法读取权限组件程序: %w", err)
+	}
+	if want := strings.ToLower(strings.TrimSpace(ExpectedHelperSHA256)); want != "" {
+		if sum != want {
+			return "", errors.New("权限组件程序校验失败，与应用构建时记录的不一致，请重新下载安装澜流")
+		}
+		return want, nil
+	}
+	return sum, nil
+}
+
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// verifyFailed is printed by verifiedExec when the copied helper does not
+// match; it becomes the error message.
+const verifyFailed = "权限组件程序校验失败，已拒绝以管理员身份运行"
+
+// verifiedExec returns a /bin/sh script, run as root, that copies src into
+// a fresh root-owned directory (mktemp -d, mode 0700, in the sticky
+// /private/var/tmp), checks the copy's SHA-256 against sum and only then
+// runs the copy with args. The user (or anything running as the user) can
+// rewrite src inside the app bundle at any time, but not the copy, so root
+// executes exactly the verified bytes.
+func verifiedExec(src, sum string, args []string) string {
+	run := append([]string{}, args...)
+	for i, a := range run {
+		run[i] = shellQuote(a)
+	}
+	return strings.Join([]string{
+		"set -e",
+		"umask 077",
+		`d=$(/usr/bin/mktemp -d /private/var/tmp/lanflow-helper.XXXXXX)`,
+		`trap '/bin/rm -rf "$d"' EXIT`,
+		`/bin/cp ` + shellQuote(src) + ` "$d/lanflow-helper"`,
+		`/bin/chmod 0700 "$d/lanflow-helper"`,
+		`s=$(/usr/bin/shasum -a 256 "$d/lanflow-helper" | /usr/bin/awk '{print $1}')`,
+		`if [ "$s" != ` + shellQuote(sum) + ` ]; then echo ` + shellQuote(verifyFailed) + ` >&2; exit 1; fi`,
+		`"$d/lanflow-helper" ` + strings.Join(run, " "),
+	}, "; ")
+}
+
+// runPrivilegedShell runs a /bin/sh command line as root through
+// osascript's "do shell script … with administrator privileges".
+func runPrivilegedShell(ctx context.Context, shell string, prompt string) error {
+	out, err := execCommand(ctx, "/usr/bin/osascript", "-e", appleScript(shell, prompt))
 	if err != nil {
 		msg := strings.TrimSpace(string(out))
 		if isUserCanceled(msg) {
