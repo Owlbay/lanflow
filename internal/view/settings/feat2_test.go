@@ -209,7 +209,7 @@ func TestMirrorSection(t *testing.T) {
 	f := fake.NewInstant()
 	e, r := testEnv(f)
 	p := New(e)
-	tt := ui.NewTester(p.View, 1000, 900)
+	tt := ui.NewTester(p.View, 1000, 1200)
 	if err := tt.Click("内核"); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,2 @@
+# Generated files compared byte for byte in tests: keep LF on Windows checkouts.
+docs/schema/*.json text eol=lf

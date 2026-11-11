@@ -555,7 +555,7 @@ func TestAppUpdateFlow(t *testing.T) {
 	p2 := New(e)
 	bad := &fakeUpdate{version: "0.3.0", installErr: errors.New("signature mismatch")}
 	p2.SetUpdater(&fakeUpdater{enabled: true, up: bad}, func() { t.Fatal("relaunched after a failed install") })
-	tt2 := ui.NewTester(p2.View, 1000, 900)
+	tt2 := ui.NewTester(p2.View, 1000, 1200)
 	if err := tt2.Click("检查更新"); err != nil {
 		t.Fatal(err)
 	}
@@ -593,7 +593,7 @@ func TestAppUpdateFlow(t *testing.T) {
 	// An idle page explains the choice.
 	p5 := New(e)
 	p5.SetUpdater(&fakeUpdater{enabled: true}, nil)
-	tt5 := ui.NewTester(p5.View, 1000, 900)
+	tt5 := ui.NewTester(p5.View, 1000, 1200)
 	if !tt5.HasText("不会自动检查，可随时手动检查") {
 		t.Fatalf("auto check off: %q", tt5.Texts())
 	}

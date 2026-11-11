@@ -111,6 +111,10 @@ func Remaining(until time.Time) string {
 	if d < 0 {
 		d = 0
 	}
+	// Count whole seconds up, so a fresh 30-minute window reads 30:00
+	// whether or not the clock has ticked since it was set (Windows' clock
+	// is coarse).
+	d = (d + time.Second - 1).Truncate(time.Second)
 	return fmt.Sprintf("%02d:%02d", int(d.Minutes()), int(d.Seconds())%60)
 }
 
