@@ -478,6 +478,10 @@ func (p *Page) rows() []model.CaptureFlow {
 		case "dur":
 			return a.DurationMs < b.DurationMs
 		}
+		// time: records and connections (negative IDs) interleave by start
+		if !a.Start.Equal(b.Start) {
+			return a.Start.Before(b.Start)
+		}
 		return a.ID < b.ID
 	}
 	sort.SliceStable(out, func(i, j int) bool {
@@ -602,7 +606,7 @@ func (p *Page) cell(c *ui.Context, t *ui.Theme, f model.CaptureFlow, col string)
 			ui.Spinner(c).Size(10, 10).Label(i18n.T("进行中"))
 			return
 		}
-		ui.Text(c, fmt.Sprintf("%d ms", f.DurationMs)).FontFeatures("tnum").TextColor(muted).SingleLine()
+		ui.Text(c, fmtDur(f.DurationMs)).FontFeatures("tnum").TextColor(muted).SingleLine()
 	case "flags":
 		ui.Row(c).Gap(4).Children(func() {
 			for _, fl := range f.Flags {
@@ -910,4 +914,15 @@ func hexdump(b []byte, max int) string {
 		fmt.Fprintf(&sb, "%04x  % x\n", i, b[i:end])
 	}
 	return sb.String()
+}
+
+// fmtDur fits the 耗时 column: "850 ms", "2.0 s", "75 s".
+func fmtDur(ms int64) string {
+	switch {
+	case ms < 1000:
+		return fmt.Sprintf("%d ms", ms)
+	case ms < 10000:
+		return fmt.Sprintf("%.1f s", float64(ms)/1000)
+	}
+	return fmt.Sprintf("%d s", ms/1000)
 }

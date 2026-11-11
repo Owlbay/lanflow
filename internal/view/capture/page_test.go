@@ -202,3 +202,21 @@ func TestConnectionsListedAndDecryptFromRow(t *testing.T) {
 		t.Fatal("connection shown with 只看已解密")
 	}
 }
+
+// Sorted by time, connections and decrypted records interleave by start
+// (connections have negative IDs and once all sank to the bottom).
+func TestTimeSortInterleavesConnections(t *testing.T) {
+	api := fake.NewInstant()
+	arg := ""
+	e, _ := testEnv(api, &arg)
+	p := New(e)
+	rows := p.rows()
+	for i := 1; i < len(rows); i++ {
+		if rows[i].Start.After(rows[i-1].Start) {
+			t.Fatalf("row %d (%s %s) newer than row %d (%s %s)", i, rows[i].Host, rows[i].Start, i-1, rows[i-1].Host, rows[i-1].Start)
+		}
+	}
+	if fmtDur(850) != "850 ms" || fmtDur(2049) != "2.0 s" || fmtDur(75000) != "75 s" {
+		t.Fatal("fmtDur")
+	}
+}
