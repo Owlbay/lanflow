@@ -54,6 +54,12 @@ var ExcludedDomains = []string{
 // ErrNoKey is returned by a KeyStore that holds no key under the name.
 var ErrNoKey = errors.New("capture ca: key not found")
 
+// ErrKeyMismatch: the stored key is not the certificate's.
+var ErrKeyMismatch = errors.New("capture ca: stored key does not match the certificate")
+
+// ErrBadCert: the certificate handed to Load does not parse.
+var ErrBadCert = errors.New("capture ca: bad root certificate")
+
 // KeyStore keeps the root's private key.
 type KeyStore interface {
 	// Create makes a new P-256 key under name and returns a signer for
@@ -147,14 +153,14 @@ func Generate(ks KeyStore, host string, now time.Time) (*Root, []byte, error) {
 func Load(ks KeyStore, certPEM []byte) (*Root, error) {
 	cert, err := ParsePEM(certPEM)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: %v", ErrBadCert, err)
 	}
 	signer, err := ks.Open(KeyName(cert))
 	if err != nil {
 		return nil, err
 	}
 	if !samePublic(signer.Public(), cert.PublicKey) {
-		return nil, errors.New("capture ca: stored key does not match the certificate")
+		return nil, ErrKeyMismatch
 	}
 	return newRoot(cert, signer)
 }

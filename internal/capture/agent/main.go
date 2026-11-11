@@ -44,6 +44,11 @@ type Ready struct {
 	CAPEM     string `json:"caPEM,omitempty"`
 	TrustLeaf string `json:"trustLeaf,omitempty"` // base64 DER of the trust-check leaf
 	Created   bool   `json:"created,omitempty"`
+	// KeyLocked: the root's key is there but could not be read (access
+	// refused or not granted yet: a new build of an app without a
+	// Developer ID is a different program to the Keychain). The root is
+	// kept; the user authorizes and turns decryption on again.
+	KeyLocked bool `json:"keyLocked,omitempty"`
 }
 
 // Main runs the agent subcommand: one Start line on stdin, one Ready
@@ -92,7 +97,7 @@ func Main(stdin io.Reader, stdout io.Writer, keys ca.KeyStore) int {
 	}
 	root, pemb, created, err := loadRoot(keys, st, false)
 	if err != nil {
-		writeReady(stdout, Ready{Error: err.Error()})
+		writeReady(stdout, Ready{Error: err.Error(), KeyLocked: errors.Is(err, errKeyLocked)})
 		return 1
 	}
 	CleanSpill(st.Config.SpillDir)
@@ -132,13 +137,22 @@ func rootReady(root *ca.Root, pemb []byte, created bool) Ready {
 	return r
 }
 
+// errKeyLocked marks a root whose key exists but could not be read.
+var errKeyLocked = errors.New("根证书私钥暂时无法读取")
+
 // loadRoot opens the root of st.CAPEM, creating a new one when there is
-// none, it cannot be opened, it expires within 7 days, or regen.
+// none, its key is gone or does not match, it expires within 7 days, or
+// regen. A key that is there but cannot be read (the Keychain refused, or
+// the user has not allowed this build yet) is not replaced: a new root
+// would need to be trusted again, while allowing access keeps the old one.
 func loadRoot(keys ca.KeyStore, st Start, regen bool) (*ca.Root, []byte, bool, error) {
 	if !regen && st.CAPEM != "" {
 		r, err := ca.Load(keys, []byte(st.CAPEM))
 		if err == nil && time.Until(r.Cert.NotAfter) > 7*24*time.Hour {
 			return r, []byte(st.CAPEM), false, nil
+		}
+		if err != nil && !errors.Is(err, ca.ErrNoKey) && !errors.Is(err, ca.ErrKeyMismatch) && !errors.Is(err, ca.ErrBadCert) {
+			return nil, nil, false, fmt.Errorf("%w：%v", errKeyLocked, err)
 		}
 	}
 	host := st.Host

@@ -6,7 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -45,11 +45,11 @@ func (k SecretKeys) Open(name string) (crypto.Signer, error) {
 	}
 	key, err := x509.ParsePKCS8PrivateKey(der)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("%w: unreadable key data: %v", ErrKeyMismatch, err) // corrupt: replace it
 	}
 	s, ok := key.(crypto.Signer)
 	if !ok {
-		return nil, errors.New("capture ca: stored key is not a signer")
+		return nil, fmt.Errorf("%w: stored key is not a signer", ErrKeyMismatch)
 	}
 	return s, nil
 }

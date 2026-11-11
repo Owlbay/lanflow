@@ -231,6 +231,11 @@ func selectorsFor(set model.CaptureSettings, outbound string) []agent.Selector {
 
 // agentStart runs the agent with op and the start line; for "serve" the
 // process keeps running (stdin open), otherwise it exits after Ready.
+// errCaptureKeyLocked: the root's key is in the Keychain but this build
+// may not read it yet (each build of an app without a Developer ID is a new
+// program to the Keychain). The root is kept, so it stays trusted.
+var errCaptureKeyLocked = i18n.Error("需要授权读取根证书私钥：澜流更新后，系统会弹出对话框询问是否允许访问钥匙串，请输入登录密码并点「始终允许」，然后再开启一次。如果没有出现对话框，可以在「更多 › 重新生成根证书」换一个新的根证书（需要重新信任）。")
+
 func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 	cmd, err := CaptureAgentCommand()
 	if err != nil {
@@ -272,6 +277,9 @@ func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 	case <-time.After(60 * time.Second): // the keychain may ask the user first
 		rd.err = errors.New("timeout")
 	}
+	if rd.err == nil && rd.r.KeyLocked {
+		rd.err = errCaptureKeyLocked
+	}
 	if rd.err == nil && rd.r.Error != "" {
 		rd.err = errors.New(rd.r.Error)
 	}
@@ -284,6 +292,10 @@ func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 		case <-time.After(5 * time.Second):
 			cmd.Process.Kill()
 			<-waited
+		}
+		if errors.Is(rd.err, errCaptureKeyLocked) {
+			s.alog.Warnf("capture root key not readable: %s", rd.r.Error)
+			return nil, rd.r, errCaptureKeyLocked
 		}
 		if rd.err != nil {
 			msg := strings.TrimSpace(stderr.String())

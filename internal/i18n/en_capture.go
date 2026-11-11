@@ -169,6 +169,7 @@ func init() {
 		"解密此程序":    "Decrypt This Program",
 		"还没有解密的请求": "No decrypted requests yet",
 		"这是一条 UDP 连接，只能看到目标和流量。": "This is a UDP connection: only its destination and traffic are visible.",
+		"需要授权读取根证书私钥：澜流更新后，系统会弹出对话框询问是否允许访问钥匙串，请输入登录密码并点「始终允许」，然后再开启一次。如果没有出现对话框，可以在「更多 › 重新生成根证书」换一个新的根证书（需要重新信任）。": "Lanflow needs permission to read the root certificate's key: after an update, macOS asks whether to allow access to the Keychain — enter your login password and click Always Allow, then turn decryption on again. If no dialog appears, use More › Regenerate Root Certificate to make a new root (it has to be trusted again).",
 	} {
 		en[k] = v
 	}
