@@ -66,7 +66,7 @@ gh attestation verify lanflow-<版本>-arm64.dmg --repo Owlbay/lanflow
 
 ## 本地开发
 
-需要 Go 1.27.3+。先下载官方 Mihomo（固定 v1.19.33）与地理数据库到 `bin/`：
+需要 Go 1.27.4+。先下载官方 Mihomo（固定 v1.19.33）与地理数据库到 `bin/`：
 
 ```sh
 scripts/fetch-core.sh                 # 宿主平台；也可 scripts/fetch-core.sh windows amd64
