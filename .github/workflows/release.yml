@@ -20,6 +20,26 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the previous release tag, for the helper check
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # Installed helpers are replaced only when their version differs, so
+      # a release whose helper changed must bump cmd/lanflow-helper/VERSION.
+      - name: Require a helper version bump when the helper changed
+        run: scripts/check-helper-version.sh "${GITHUB_REF_NAME}"
+
+      - name: Require the update signing key
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+        run: |
+          if [ -z "${MYGO_UPDATER_PRIVATE_KEY}" ]; then
+            echo "secret MYGO_UPDATER_PRIVATE_KEY is not set: installed apps could not update to this release" >&2
+            exit 1
+          fi
 
       - name: Require tag to match mygo.json version
         run: |
@@ -70,7 +90,13 @@ jobs:
       # No Developer ID: mygo signs ad hoc ("-"), which Apple Silicon requires to run at all.
       # One platform per build: build-app.sh links in that platform's
       # helper version and SHA-256 (bin/<plat>/app-ldflags from prepare-resources.sh).
+      # MYGO_UPDATER_PRIVATE_KEY signs the update archives and manifests
+      # (docs/updates.md of mygo); GH_TOKEN lets mygo read the published
+      # releases for delta updates.
       - name: Build app and disk images
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           scripts/build-app.sh darwin arm64
           scripts/build-app.sh darwin amd64
@@ -90,6 +116,11 @@ jobs:
         run: |
           mkdir -p dist
           cp build/darwin-arm64/*.dmg build/darwin-amd64/*.dmg dist/
+          mkdir -p dist/updates
+          for d in build/darwin-arm64 build/darwin-amd64; do
+            cp "$d"/*.tar.gz "$d"/update-*.json dist/updates/
+            cp "$d"/*.delta dist/updates/ 2>/dev/null || true
+          done
           go version -m build resources > dist/lanflow-macos-buildinfo.txt
           ls -la dist
 
@@ -141,12 +172,18 @@ jobs:
           else echo "no NSIS on the runner; mygo downloads its pinned NSIS"; fi
 
       - name: Build app and installer
+        env:
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: scripts/build-app.sh windows amd64
 
       - name: Collect artifacts
         run: |
           mkdir -p dist
           find build -maxdepth 2 -name '*-setup-*.exe' -exec cp {} dist/ \;
+          mkdir -p dist/updates
+          find build -maxdepth 2 \( -name '*.tar.gz' -o -name '*.delta' -o -name 'update-*.json' \) -exec cp {} dist/updates/ \;
+          ls dist/updates/update-windows-*.json >/dev/null
           ls dist/*-setup-*.exe >/dev/null
           go version -m build resources > dist/lanflow-windows-buildinfo.txt
           ls -la dist
@@ -186,6 +223,15 @@ jobs:
           upload-artifact: false
           upload-release-assets: false
 
+      # The update manifests go up last (below): an app that reads one finds
+      # every file it names already there.
+      - name: Separate update manifests
+        run: |
+          mv artifacts/updates/update-*.json .
+          mv artifacts/updates/* artifacts/
+          rmdir artifacts/updates
+          ls update-darwin-arm64.json update-darwin-amd64.json update-windows-amd64.json
+
       - name: Generate SHA-256 checksums
         working-directory: artifacts
         run: |
@@ -205,3 +251,11 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+      # Installed apps read update-<platform>.json of the latest release
+      # (mygo.json "updates"); publishing them makes the update live.
+      - name: Publish update manifests
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: update-*.json
+          fail_on_unmatched_files: true

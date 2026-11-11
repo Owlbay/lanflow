@@ -24,7 +24,12 @@ CORE="bin/${GOOS_T}-${GOARCH_T}/mihomo$EXT"
 mkdir -p "$PLAT" resources/geo
 cp "$CORE" "$PLAT/mihomo$EXT"
 cp bin/geo/geoip.metadb bin/geo/geosite.dat bin/geo/GeoLite2-ASN.mmdb resources/geo/
-VERSION="$(sed -n 's/.*"version": *"\([^"]*\)".*/\1/p' mygo.json)"
+# The helper has a version of its own (cmd/lanflow-helper/VERSION), not
+# the app's: an installed helper of another version must be reinstalled
+# (administrator password) before TUN works, so it changes only when the
+# helper does, and app updates leave TUN working.
+# scripts/check-helper-version.sh makes a release bump it when its code changed.
+VERSION="$(tr -d ' \n' < cmd/lanflow-helper/VERSION)"
 GOOS="$GOOS_T" GOARCH="$GOARCH_T" CGO_ENABLED=0 go build -trimpath \
   -ldflags "-s -w -X main.version=${VERSION}" -o "$PLAT/lanflow-helper$EXT" ./cmd/lanflow-helper
 chmod +x "$PLAT/mihomo$EXT" "$PLAT/lanflow-helper$EXT" 2>/dev/null || true

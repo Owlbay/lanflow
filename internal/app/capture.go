@@ -276,6 +276,11 @@ func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 	case rd = <-ch:
 	case <-time.After(60 * time.Second): // the keychain may ask the user first
 		rd.err = errors.New("timeout")
+	case <-s.rootCtx.Done():
+		// Lanflow is quitting: an agent waiting on a keychain prompt
+		// must not hold up Shutdown.
+		rd.err = s.rootCtx.Err()
+		cmd.Process.Kill()
 	}
 	if rd.err == nil && rd.r.KeyLocked {
 		rd.err = errCaptureKeyLocked

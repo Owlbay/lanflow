@@ -10,6 +10,7 @@ import (
 
 	"lanflow/internal/app/remote"
 	"lanflow/internal/i18n"
+	"lanflow/internal/platform/helper/protocol"
 	"lanflow/internal/rpc"
 )
 
@@ -70,6 +71,8 @@ type ConnectOptions struct {
 	OnUI    func(rpc.UICommand)
 	OnState func(up bool, err error)
 	Hold    func() bool
+
+	replaced bool // an older service was replaced already (Connect)
 }
 
 // ErrNotSplit: the serving process is a single-process Lanflow (an older
@@ -127,6 +130,17 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 	if err != nil {
 		return nil, rpc.AttachResult{}, err
 	}
+	if pid, ok := olderService(c, o); ok {
+		// The app was updated while the service ran: the window is the
+		// new version, the service still the old one. End it and start
+		// the new one, once.
+		c.Close()
+		if err := replace(pid, o.Wait); err != nil {
+			return nil, rpc.AttachResult{}, err
+		}
+		o.replaced = true
+		return Connect(ctx, o)
+	}
 	res, err := c.AttachUI(nil, o.Attach)
 	if err != nil {
 		c.Close()
@@ -152,6 +166,27 @@ var ErrOldService = errors.New("另一个旧版本的澜流正在运行：请先
 // OldServiceText is ErrOldService for the user, translated.
 func OldServiceText() string {
 	return i18n.T("另一个旧版本的澜流正在运行：请先退出它，再打开澜流")
+}
+
+// olderService reports the pid of a service older than this window (an
+// update replaced the app while it ran), which Connect replaces: only with
+// a Start to bring up the new one, and once per Connect.
+func olderService(c *remote.Client, o ConnectOptions) (int, bool) {
+	if o.Start == nil || o.replaced {
+		return 0, false
+	}
+	conn := c.Conn()
+	if conn == nil {
+		return 0, false
+	}
+	w := conn.Welcome()
+	if w.PID <= 0 || w.PID == os.Getpid() {
+		return 0, false
+	}
+	if cmp, ok := protocol.CompareVersions(w.Version, o.Version); ok && cmp < 0 {
+		return w.PID, true
+	}
+	return 0, false
 }
 
 // protocolMismatch reports a handshake refused for the protocol version,

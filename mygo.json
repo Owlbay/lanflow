@@ -4,6 +4,10 @@
   "version": "0.1.1",
   "urlSchemes": ["lanflow", "clash"],
   "out": "build",
+  "updates": {
+    "publicKey": "UKej6Hn9Mhc/rYMULlUmhe1cfJH06cqewjsbRK0739Y=",
+    "github": "Owlbay/lanflow"
+  },
   "macos": {
     "infoPlist": {
       "NSLocalNetworkUsageDescription": "澜流需要连接局域网中的代理服务器（如路由器或 NAS 上的节点）和设备。Lanflow connects to proxy servers and devices on your local network."

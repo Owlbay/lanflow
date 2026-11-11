@@ -359,3 +359,44 @@ func TestEventsAfterServiceRestart(t *testing.T) {
 		}
 	}
 }
+
+// A window of a newer version (the app was updated while the service
+// ran) ends the older service and starts its own; a window of the same or
+// an older version keeps the running one.
+func TestNewerWindowReplacesOlderService(t *testing.T) {
+	if testing.Short() {
+		t.Skip("starts processes")
+	}
+	h := newHarness(t)
+	t.Setenv("LANFLOW_SPLIT_TEST_VERSION", "1.0.0")
+	first, _, err := Connect(context.Background(), ConnectOptions{DataDir: h.dir, Version: "1.0.0", Start: h.start, Wait: 15 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := first.Conn().Welcome().PID
+	first.Close()
+
+	t.Setenv("LANFLOW_SPLIT_TEST_VERSION", "1.1.0")
+	c, _, err := Connect(context.Background(), ConnectOptions{DataDir: h.dir, Version: "1.1.0", Start: h.start, Wait: 15 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := c.Conn().Welcome()
+	c.Close()
+	if w.PID == old || Alive(old) {
+		t.Fatalf("the 1.0.0 service (pid %d) still serves: %+v", old, w)
+	}
+	if w.Version != "1.1.0" {
+		t.Fatalf("service version %q, want 1.1.0", w.Version)
+	}
+
+	// An older window keeps the newer service.
+	c, _, err = Connect(context.Background(), ConnectOptions{DataDir: h.dir, Version: "1.0.0", Start: h.start, Wait: 15 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	if got := c.Conn().Welcome().PID; got != w.PID {
+		t.Fatalf("an older window replaced the service: pid %d, want %d", got, w.PID)
+	}
+}

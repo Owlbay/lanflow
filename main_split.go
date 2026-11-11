@@ -139,7 +139,16 @@ func runService(args split.Args) {
 		// proxy and go anyway.
 		time.Sleep(quitWatchdog)
 		log.Printf("lanflow: service: quit did not finish in %s; exiting", quitWatchdog)
-		finish()
+		// finish runs once: when the quit got stuck inside it, this call
+		// waits on that one, so it is bounded too. Restoring the proxy
+		// and stopping the core take well under finishWatchdog.
+		done := make(chan struct{})
+		go func() { finish(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(finishWatchdog):
+			log.Printf("lanflow: service: cleanup did not finish in %s; exiting without it", finishWatchdog)
+		}
 		os.Exit(0)
 	}()
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
@@ -487,6 +496,10 @@ func runWindow(args split.Args) {
 // quitWatchdog is how long a signalled process waits for the normal quit
 // before it exits on its own.
 const quitWatchdog = 5 * time.Second
+
+// finishWatchdog bounds the service's cleanup after quitWatchdog: Shutdown
+// gives the core 10 s to stop.
+const finishWatchdog = 15 * time.Second
 
 // showError tells the user why the window cannot open, without a window.
 func showError(msg string) {

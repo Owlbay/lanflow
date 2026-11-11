@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"runtime"
 	"time"
 
 	"lanflow/internal/capture/agent"
@@ -284,5 +285,39 @@ func TestCaptureDiagRedaction(t *testing.T) {
 	log := []byte("a\n[TCP] 127.0.0.1:1 --> bank.example:443 match AND using LANFLOW-MITM-1234\nb\n")
 	if got := string(dropCaptureLines(log)); got != "a\nb\n" {
 		t.Fatalf("%q", got)
+	}
+}
+
+// An agent that has not answered yet (waiting on a keychain prompt) is
+// ended when Lanflow quits, instead of holding up Shutdown for a minute.
+func TestAgentStartEndsOnShutdown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses sleep")
+	}
+	oldCmd := CaptureAgentCommand
+	CaptureAgentCommand = func() (*exec.Cmd, error) { return exec.Command("sleep", "60"), nil }
+	defer func() { CaptureAgentCommand = oldCmd }()
+
+	h := newHarness(t, nil)
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := h.s.agentStart(agent.Start{Op: "serve"})
+		done <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	shut := make(chan struct{})
+	go func() { h.s.Shutdown(); close(shut) }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("agentStart succeeded without an agent")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("agentStart still waits after Shutdown")
+	}
+	select {
+	case <-shut:
+	case <-time.After(15 * time.Second):
+		t.Fatal("Shutdown did not finish")
 	}
 }
