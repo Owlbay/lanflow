@@ -161,18 +161,25 @@ func TestIntegrationPortConflictReportsLog(t *testing.T) {
 	if err != nil {
 		// Acceptable too: some versions exit on bind failure. Then the
 		// error must carry the log tail.
-		if !strings.Contains(err.Error(), "address already in use") && !strings.Contains(log, "address already in use") {
+		if !bindError(err.Error()) && !bindError(log) {
 			t.Fatalf("start failed without a bind diagnosis: %v\nlog:\n%s", err, log)
 		}
 		return
 	}
 	// The controller comes up before the listeners are bound: the bind
 	// error reaches the log a moment after Start returns.
-	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(log, "address already in use") && time.Now().Before(deadline); {
+	for deadline := time.Now().Add(5 * time.Second); !bindError(log) && time.Now().Before(deadline); {
 		time.Sleep(50 * time.Millisecond)
 		log = tailLines(spec.LogFile, 30)
 	}
-	if !strings.Contains(log, "address already in use") {
+	if !bindError(log) {
 		t.Fatalf("bind error not visible in log:\n%s", log)
 	}
+}
+
+// bindError reports whether s holds an "address in use" error, in the
+// wording of either platform (Windows: WSAEADDRINUSE's message).
+func bindError(s string) bool {
+	return strings.Contains(s, "address already in use") ||
+		strings.Contains(s, "Only one usage of each socket address")
 }

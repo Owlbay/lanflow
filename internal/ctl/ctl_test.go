@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -131,7 +132,7 @@ func TestConfigSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, _, _ = run(t, s, "config", "sync", "status", "--format", "table")
-	if !strings.Contains(out, "/Users/demo/Sync/lanflow.yaml") {
+	if !strings.Contains(out, filepath.Join("/Users/demo/Sync", "lanflow.yaml")) {
 		t.Fatalf("table:\n%s", out)
 	}
 	out, errs, code = run(t, s, "config", "sync", "apply", "lanflow.yaml", "--dry-run")

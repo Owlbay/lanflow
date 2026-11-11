@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -164,7 +165,7 @@ func TestWebDAVPasswordFileFallback(t *testing.T) {
 	if err != nil {
 		t.Fatalf("secret file: %v", err)
 	}
-	if st.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 { // Windows has no Unix modes
 		t.Fatalf("secret file mode = %v", st.Mode().Perm())
 	}
 	raw, _ := os.ReadFile(p)

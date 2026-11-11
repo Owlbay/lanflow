@@ -4,11 +4,14 @@
 package fsx
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
+	"time"
 )
 
 // WriteFile atomically replaces path with data: the data goes to a uniquely
@@ -82,7 +85,7 @@ func Commit(f *os.File, path string) error {
 // Rename renames oldpath over newpath (replacing it) and syncs the
 // directory of newpath so the rename survives a crash.
 func Rename(oldpath, newpath string) error {
-	if err := os.Rename(oldpath, newpath); err != nil {
+	if err := retryBusy(func() error { return os.Rename(oldpath, newpath) }); err != nil {
 		return err
 	}
 	SyncDir(filepath.Dir(newpath))
@@ -102,4 +105,22 @@ func SyncDir(dir string) {
 	}
 	_ = d.Sync()
 	d.Close()
+}
+
+// retryBusy runs op again for a short while when Windows reports the file
+// busy: a rename over a file fails while a reader has it open, and opening
+// fails while it is being replaced. Elsewhere op runs once.
+func retryBusy(op func() error) error {
+	err := op()
+	for d := time.Millisecond; err != nil && busy(err) && d <= 256*time.Millisecond; d *= 2 {
+		time.Sleep(d)
+		err = op()
+	}
+	return err
+}
+
+// busy: ERROR_ACCESS_DENIED (5) or ERROR_SHARING_VIOLATION (32) on Windows.
+func busy(err error) bool {
+	var e syscall.Errno
+	return runtime.GOOS == "windows" && errors.As(err, &e) && (e == 5 || e == 32)
 }

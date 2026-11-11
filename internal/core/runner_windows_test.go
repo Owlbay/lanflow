@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 // A pipe served by a process this app did not start as a core (here the
@@ -46,4 +47,16 @@ func TestDialChecksControllerServer(t *testing.T) {
 		t.Fatalf("dial to a tracked core: %v", err)
 	}
 	c.Close()
+}
+
+// ownsConsole reports whether this process is attached to a console:
+// AttachConsole then fails with ERROR_ACCESS_DENIED. If it succeeds the
+// process had none and is detached again.
+func ownsConsole() bool {
+	r, _, err := procAttachConsole.Call(uintptr(^uint32(0))) // ATTACH_PARENT_PROCESS
+	if r != 0 {
+		procFreeConsole.Call()
+		return false
+	}
+	return err == windows.ERROR_ACCESS_DENIED
 }

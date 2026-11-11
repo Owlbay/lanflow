@@ -49,7 +49,8 @@ func TestWriteFileConcurrent(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				got, err := os.ReadFile(p)
+				var got []byte
+				err := retryBusy(func() (err error) { got, err = os.ReadFile(p); return err })
 				if err != nil {
 					t.Error(err)
 					return

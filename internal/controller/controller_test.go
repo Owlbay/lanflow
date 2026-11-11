@@ -181,10 +181,12 @@ func TestPatchReloadGeo(t *testing.T) {
 		t.Fatalf("PATCH recorded %+v", got)
 	}
 
-	if err := c.ReloadConfig(ctxT(t), "/tmp/x/config.yaml"); err != nil {
+	cfg := filepath.Join(t.TempDir(), "config.yaml") // absolute on every platform
+	if err := c.ReloadConfig(ctxT(t), cfg); err != nil {
 		t.Fatal(err)
 	}
-	if got := f.last(); got.Method != "PUT" || got.Query != "force=true" || got.Body != `{"path":"/tmp/x/config.yaml"}` {
+	wantBody, _ := json.Marshal(map[string]string{"path": cfg})
+	if got := f.last(); got.Method != "PUT" || got.Query != "force=true" || got.Body != string(wantBody) {
 		t.Fatalf("PUT recorded %+v", got)
 	}
 	err := c.ReloadConfig(ctxT(t), "relative.yaml")

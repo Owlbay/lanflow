@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -139,7 +140,7 @@ func TestStoreSpill(t *testing.T) {
 	if len(files) != 1 {
 		t.Fatalf("spill files %v", files)
 	}
-	if st, _ := os.Stat(files[0]); st.Mode().Perm() != 0o600 {
+	if st, _ := os.Stat(files[0]); runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 { // Windows has no Unix modes
 		t.Fatalf("spill mode %v", st.Mode())
 	}
 	if raw, _ := os.ReadFile(files[0]); bytes.Contains(raw, bytes.Repeat([]byte{'q'}, 50)) {

@@ -89,6 +89,9 @@ func TestRotatingFileRotatesAtLimit(t *testing.T) {
 // A failing disk must not fail Write: the error would end exec.Cmd's copy
 // goroutine and get the child killed by SIGPIPE. The error is kept once.
 func TestRotatingFileWriteNeverFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows cannot remove a directory while a file in it is open")
+	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "core.log")
 	rf, err := openRotatingFile(path, 10)
@@ -358,7 +361,12 @@ func TestExecRunnerGracefulStop(t *testing.T) {
 		t.Fatalf("Exited fired after an explicit Stop: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	if !strings.Contains(tailLines(spec.LogFile, 5), "fake core shutting down") {
+	if ownsConsole() {
+		// CTRL_BREAK needs attaching to the core's console, which a
+		// process with a console of its own (go test in a terminal) cannot
+		// do; Lanflow is a GUI app without one. Stop fell back to Kill.
+		t.Log("test process has a console: graceful stop not checked")
+	} else if !strings.Contains(tailLines(spec.LogFile, 5), "fake core shutting down") {
 		t.Fatalf("expected graceful shutdown line in log, got:\n%s", tailLines(spec.LogFile, 5))
 	}
 	if !strings.Contains(tailLines(spec.LogFile, 5), "-d "+spec.WorkDir) {
