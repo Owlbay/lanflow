@@ -283,6 +283,9 @@ func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, agent.Ready{}, fmt.Errorf(i18n.T("无法启动解密进程：%v"), err)
 	}
+	// Recorded while it runs: one left by a run that did not exit cleanly
+	// is ended at the next start (stopAgentLeftovers).
+	forget := recordAgent(s.opt.DataDir, cmd.Process.Pid)
 	line, _ := json.Marshal(st)
 	stdin.Write(append(line, '\n'))
 	type res struct {
@@ -320,7 +323,7 @@ func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 	if rd.err != nil || st.Op != "serve" {
 		stdin.Close()
 		waited := make(chan struct{})
-		go func() { cmd.Wait(); close(waited) }()
+		go func() { cmd.Wait(); forget(); close(waited) }()
 		select {
 		case <-waited:
 		case <-time.After(5 * time.Second):
@@ -345,7 +348,7 @@ func (s *Service) agentStart(st agent.Start) (*captureRun, agent.Ready, error) {
 	if _, p, err := net.SplitHostPort(rd.r.Listen); err == nil {
 		fmt.Sscan(p, &r.agentPort)
 	}
-	go func() { cmd.Wait(); close(r.done) }()
+	go func() { cmd.Wait(); forget(); close(r.done) }()
 	return r, rd.r, nil
 }
 

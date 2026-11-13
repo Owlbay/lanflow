@@ -31,6 +31,15 @@ func (s *Shell) CheckUpdatesAtLaunch() {
 	})
 }
 
+// SetRelaunch replaces how the settings page restarts the app into an
+// installed update (default mygo.App.Relaunch). The window process of the
+// split ends the service, its core and decryption process first.
+func (s *Shell) SetRelaunch(fn func()) {
+	if page, ok := s.pages[env.Settings].(*settings.Page); ok {
+		page.SetRelaunch(fn)
+	}
+}
+
 // updateCheckInterval is how often the launch-time update check runs.
 const updateCheckInterval = 24 * time.Hour
 

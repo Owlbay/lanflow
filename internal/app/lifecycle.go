@@ -268,7 +268,7 @@ func (s *Service) startLocked() (err error) {
 	if prev != model.CoreRunning && s.d.portInUse(set.MixedPort, set.AllowLAN) {
 		// A core of ours the previous run left may hold it (takeover.go).
 		if !s.stopStray() || s.d.portInUse(set.MixedPort, set.AllowLAN) {
-			return fail(portTakenError(set.MixedPort), model.CoreError)
+			return fail(s.portTaken(set.MixedPort), model.CoreError)
 		}
 	}
 	s.detectCoexist() // compose with aTrust's routes when it is already running
@@ -436,6 +436,17 @@ func (s *Service) RestartCore() error {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
 	return s.restartLocked()
+}
+
+// portTaken explains a mixed port held by another program, naming it
+// when it can be learned.
+func (s *Service) portTaken(port int) error {
+	if s.d.portOwner != nil {
+		if owner := portOwnerText(s.d.portOwner(port)); owner != "" {
+			return fmt.Errorf(i18n.T("代理端口 %d 已被其他程序 %s 占用。请在「设置 › 代理」中换一个端口，或先退出占用它的程序"), port, owner)
+		}
+	}
+	return portTakenError(port)
 }
 
 // portTakenError explains a mixed port held by another program.

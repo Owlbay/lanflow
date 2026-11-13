@@ -208,6 +208,7 @@ func init() {
 		"停止内核失败：%v":                         "Failed to stop the core: %v",
 		"内核已停止，但关闭系统代理失败：%v。请在系统设置中手动关闭代理。": "The core stopped, but turning off the system proxy failed: %v. Turn the proxy off in System Settings.",
 		"代理端口 %d 已被其他程序占用（可能是另一款代理软件）。请在「设置 › 代理」中换一个端口，或先退出占用它的程序": "Proxy port %d is in use by another program (maybe another proxy client). Choose another port in Settings › Proxy, or quit the program that holds it",
+		"代理端口 %d 已被其他程序 %s 占用。请在「设置 › 代理」中换一个端口，或先退出占用它的程序":         "Proxy port %d is in use by another program %s. Choose another port in Settings › Proxy, or quit the program that holds it",
 		"内核重新加载配置失败：%v。仍在使用之前的配置。":                                  "The core failed to reload the config: %v. The previous config stays in use.",
 		"内核意外退出":             "The core quit unexpectedly",
 		"内核意外退出：%v":          "The core quit unexpectedly: %v",

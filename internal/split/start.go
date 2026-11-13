@@ -66,6 +66,13 @@ type ConnectOptions struct {
 	Start func() error
 	// Wait is how long to wait for a service started here (default 20 s).
 	Wait time.Duration
+	// Cleanup runs after an older service was ended (and before the new
+	// one starts): what the old one left behind, e.g. a core it could not
+	// stop (app.StopLeftovers). nil = nothing.
+	Cleanup func()
+	// Stop bounds ending an older service (StopService); zero takes the
+	// defaults.
+	Stop StopOptions
 	// OnUI, OnState and Hold go to the client (remote.Options.OnUI,
 	// remote.Reconnect).
 	OnUI    func(rpc.UICommand)
@@ -122,7 +129,7 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 	if pid, ok := protocolMismatch(err); ok && o.Start != nil {
 		// A service of another protocol version (an update replaced the
 		// app while it ran): end it and start ours.
-		if err := replace(pid, o.Wait); err != nil {
+		if err := o.replace(pid, nil); err != nil {
 			return nil, rpc.AttachResult{}, err
 		}
 		return Connect(ctx, o)
@@ -134,8 +141,13 @@ func Connect(ctx context.Context, o ConnectOptions) (*remote.Client, rpc.AttachR
 		// The app was updated while the service ran: the window is the
 		// new version, the service still the old one. End it and start
 		// the new one, once.
+		// It is asked to quit as 退出澜流 does first: it then restores the
+		// system proxy and stops the core (on Windows, Terminate could not
+		// let it).
+		quit := func() error { return c.QuitService() }
+		err := o.replace(pid, quit)
 		c.Close()
-		if err := replace(pid, o.Wait); err != nil {
+		if err != nil {
 			return nil, rpc.AttachResult{}, err
 		}
 		o.replaced = true
@@ -199,17 +211,16 @@ func protocolMismatch(err error) (int, bool) {
 	return 0, false
 }
 
-// replace ends the service pid and waits for it to go.
-func replace(pid int, wait time.Duration) error {
-	if err := Terminate(pid); err != nil && Alive(pid) {
+// replace ends the older service pid (StopService, asking it with quit
+// first when there is a way to) and cleans up after it.
+func (o ConnectOptions) replace(pid int, quit func() error) error {
+	so := o.Stop
+	so.Quit = quit
+	if err := StopService(pid, so); err != nil {
 		return fmt.Errorf("无法结束旧的澜流后台服务: %w", err)
 	}
-	deadline := time.Now().Add(wait)
-	for Alive(pid) {
-		if time.Now().After(deadline) {
-			return errors.New("旧的澜流后台服务没有退出")
-		}
-		time.Sleep(100 * time.Millisecond)
+	if o.Cleanup != nil {
+		o.Cleanup()
 	}
 	return nil
 }

@@ -2,11 +2,14 @@ package split
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,6 +28,10 @@ import (
 
 const serviceEnv = "LANFLOW_SPLIT_TEST_SERVICE"
 
+// stubbornEnv makes the test service ignore QuitService and SIGTERM (a
+// service stuck in its cleanup): only Kill ends it.
+const stubbornEnv = "LANFLOW_SPLIT_TEST_STUBBORN"
+
 func TestMain(m *testing.M) {
 	if os.Getenv(serviceEnv) == "1" {
 		runTestService()
@@ -34,21 +41,32 @@ func TestMain(m *testing.M) {
 }
 
 type testHost struct {
-	once sync.Once
-	quit chan struct{}
-	bg   atomic.Bool
+	once     sync.Once
+	quit     chan struct{}
+	bg       atomic.Bool
+	stubborn bool
 }
 
-func (*testHost) Split() bool                      { return true }
-func (*testHost) ShowWindow(string)                {}
-func (h *testHost) SetBackground(hidden bool)      { h.bg.Store(hidden) }
-func (h *testHost) Quit()                          { h.once.Do(func() { close(h.quit) }) }
+func (*testHost) Split() bool                 { return true }
+func (*testHost) ShowWindow(string)           {}
+func (h *testHost) SetBackground(hidden bool) { h.bg.Store(hidden) }
+func (h *testHost) Quit() {
+	if h.stubborn {
+		return
+	}
+	// Leaves a mark: the service was asked to quit (not only signalled).
+	_ = os.WriteFile(filepath.Join(os.Getenv("LANFLOW_SPLIT_TEST_DIR"), fmt.Sprintf("quit-%d", os.Getpid())), nil, 0o600)
+	h.once.Do(func() { close(h.quit) })
+}
 func (*testHost) SetShortcut(string, string) error { return nil }
 
 func runTestService() {
 	f := fake.NewInstant()
 	box := NewNotices(f)
-	h := &testHost{quit: make(chan struct{})}
+	h := &testHost{quit: make(chan struct{}), stubborn: os.Getenv(stubbornEnv) == "1"}
+	if h.stubborn {
+		signal.Ignore(syscall.SIGTERM)
+	}
 	srv, err := rpc.Start(os.Getenv("LANFLOW_SPLIT_TEST_DIR"), rpc.Options{API: box, Version: os.Getenv("LANFLOW_SPLIT_TEST_VERSION"), Host: h})
 	if err != nil {
 		os.Exit(3)

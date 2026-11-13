@@ -170,7 +170,10 @@ type deps struct {
 	httpVia    func(port int, timeout time.Duration) *http.Client
 	freePort   func() (int, error)
 	portInUse  func(port int, lan bool) bool
-	otherTUN   func(ctx context.Context) (string, bool)
+	// portOwner names the program that listens on a port, for the user
+	// ("" = unknown; nil = never known).
+	portOwner func(port int) string
+	otherTUN  func(ctx context.Context) (string, bool)
 	// stray finds cores a previous run left (nil = none ever).
 	stray strayCores
 	// v6Route reads where the IPv6 default route points (the IPv6 leak
@@ -327,6 +330,7 @@ func realDeps(ctrl *controller.Client, mgr *core.Manager, store *profile.Store, 
 		portInUse:  tcpPortInUse,
 		otherTUN:   netinfo.OtherTUN,
 		stray:      realStray{},
+		portOwner:  portOwner,
 		v6Route:    netinfo.IPv6Route,
 		vpnDetect:  atrust.Detect,
 		now:        time.Now,
