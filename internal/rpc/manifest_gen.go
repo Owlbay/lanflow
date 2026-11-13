@@ -147,6 +147,7 @@ var apiMethods = []Method{
 	{Name: "AddCaptureDomain", Params: []Param{{Name: "host", Type: "string"}, {Name: "enable", Type: "bool"}}, Error: true, Level: LevelDanger, Doc: "AddCaptureDomain adds a host to the selection (and turns on)."},
 	{Name: "AddCaptureApp", Params: []Param{{Name: "processPath", Type: "string"}, {Name: "process", Type: "string"}, {Name: "enable", Type: "bool"}}, Error: true, Level: LevelDanger, Doc: "AddCaptureApp adds the program behind a connection (and turns on)."},
 	{Name: "ClearCaptureFlows", Error: true, Level: LevelWrite},
+	{Name: "CheckCaptureTarget", Params: []Param{{Name: "target", Type: "string"}}, Results: []string{"model.CaptureCheck"}, Level: LevelSensitive, Doc: "CheckCaptureTarget explains stage by stage whether a host, host:port or URL would be captured, with a stable reason code (model.Capture*)."},
 	{Name: "InstallCACert", Error: true, Level: LevelDanger, Doc: "InstallCACert creates the root if needed and asks the system to trust it (the system shows its own prompt)."},
 	{Name: "RegenerateCA", Error: true, Level: LevelDanger, Doc: "RegenerateCA replaces the root: new root trusted, old one removed."},
 	{Name: "RemoveCACert", Error: true, Level: LevelDanger, Doc: "RemoveCACert turns decryption off and removes the root's trust, key and certificate."},

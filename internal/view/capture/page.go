@@ -74,6 +74,15 @@ type Page struct {
 	apps    []model.CaptureApp
 	off     []string // built-in entries turned off
 	ack     bool
+	lanOK   string // AllowPrivate, one per line
+
+	// the target check
+	chk struct {
+		sync.Mutex
+		target  string
+		running bool
+		res     *model.CaptureCheck
+	}
 }
 
 // New returns the page.
@@ -274,6 +283,7 @@ func (p *Page) intro(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 func (p *Page) loadEditor(set model.CaptureSettings) {
 	p.domains = strings.Join(set.Domains, "\n")
 	p.bypass = strings.Join(set.Bypass, "\n")
+	p.lanOK = strings.Join(set.AllowPrivate, "\n")
 	p.apps = append([]model.CaptureApp(nil), set.Apps...)
 	p.off = append([]string(nil), set.DisabledBuiltin...)
 	p.ports = set.Ports
@@ -310,6 +320,12 @@ func (p *Page) editor(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 			ui.TextArea(c.Key("domains"), &p.domains).Font("monospace").FontSize(12).Lines(3, 10).Label(i18n.T("要解密的域名"))
 		})
 	})
+	e.Kit.Section(c, i18n.T("允许内网地址"), i18n.T("每行一个，写法与上面的域名相同且必须已在上面选中：这些目标解析到内网地址（10.x、172.16-31.x、192.168.x 等）或是 .local/.lan/.corp 时仍然抓包，回流后照常按企业直连出站"), func() {
+		ui.Column(c).Padding(10).Children(func() {
+			ui.TextArea(c.Key("lanok"), &p.lanOK).Font("monospace").FontSize(12).Lines(2, 6).Label(i18n.T("允许内网地址"))
+		})
+	})
+	p.checker(c, t)
 	e.Kit.Section(c, i18n.T("要解密的程序"), i18n.T("在「连接」页右键一行选择「解密此程序…」添加；macOS 上会匹配整个 .app，包括其辅助进程"), func() {
 		ui.Column(c).Padding(10).Gap(6).Children(func() {
 			if len(p.apps) == 0 {
@@ -370,11 +386,68 @@ func (p *Page) editor(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 	})
 }
 
+// checker runs CheckCaptureTarget and lists its stages.
+func (p *Page) checker(c *ui.Context, t *ui.Theme) {
+	e := p.e
+	e.Kit.Section(c, i18n.T("检查目标"), i18n.T("输入域名、域名:端口或网址，逐项说明为什么能或不能抓包（检查的是已保存的选择）"), func() {
+		ui.Column(c).Padding(10).Gap(6).Children(func() {
+			p.chk.Lock()
+			running, res := p.chk.running, p.chk.res
+			p.chk.Unlock()
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				ui.TextInput(c.Key("chktarget"), &p.chk.target).Placeholder("https://example.com").Label(i18n.T("检查目标")).Grow(1)
+				ui.Button(c, i18n.T("检查")).Disabled(running || strings.TrimSpace(p.chk.target) == "").OnClick(func() {
+					target, api, redraw := p.chk.target, e.API, e.Redraw
+					p.chk.Lock()
+					p.chk.running = true
+					p.chk.Unlock()
+					go func() {
+						r := api.CheckCaptureTarget(target)
+						p.chk.Lock()
+						p.chk.running, p.chk.res = false, &r
+						p.chk.Unlock()
+						redraw()
+					}()
+				})
+			})
+			if running {
+				ui.Text(c, i18n.T("检查中…")).FontSize(12).TextColor(t.TextMuted)
+			}
+			if res == nil {
+				return
+			}
+			col := t.Text
+			if res.Reason != model.CaptureOK {
+				col = t.Danger
+			}
+			ui.Text(c, fmt.Sprintf("%s:%d · %s (%s)", res.Host, res.Port, res.Summary, res.Reason)).Bold().FontSize(12).TextColor(col)
+			if res.Advice != "" {
+				ui.Text(c, res.Advice).FontSize(12).TextColor(t.Text)
+			}
+			for i, st := range res.Steps {
+				mark, mc := "✓", t.Text
+				switch {
+				case st.Skip:
+					mark, mc = "–", t.TextMuted
+				case !st.OK:
+					mark, mc = "✗", t.Danger
+				}
+				ui.Row(c.Key(fmt.Sprintf("chk%d", i))).Gap(8).Children(func() {
+					ui.Text(c, mark).FontSize(12).TextColor(mc).Shrink(0)
+					ui.Text(c, st.Stage).FontSize(12).Bold().Shrink(0)
+					ui.Text(c, st.Detail).FontSize(12).TextColor(t.TextMuted).Shrink(1)
+				})
+			}
+		})
+	})
+}
+
 func (p *Page) save(prev model.CaptureSettings) {
 	e := p.e
 	set := prev
 	set.Domains = lines(p.domains)
 	set.Bypass = lines(p.bypass)
+	set.AllowPrivate = lines(p.lanOK)
 	set.Apps = append([]model.CaptureApp(nil), p.apps...)
 	set.DisabledBuiltin = append([]string(nil), p.off...)
 	set.Ports = strings.TrimSpace(p.ports)

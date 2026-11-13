@@ -713,6 +713,11 @@ func (cl *Client) ClearCaptureFlows() (err error) {
 	return
 }
 
+func (cl *Client) CheckCaptureTarget(target string) (res0 model.CaptureCheck) {
+	_ = cl.call("CheckCaptureTarget", []any{target}, &res0)
+	return
+}
+
 func (cl *Client) InstallCACert() (err error) {
 	err = cl.call("InstallCACert", nil)
 	return

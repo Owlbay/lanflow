@@ -17,6 +17,11 @@ type CaptureSettings struct {
 	// Bypass is the user's skip list, in the same syntax as Domains or an
 	// IP-CIDR; it comes on top of the built-in list (CaptureBuiltinBypass).
 	Bypass []string `json:",omitempty"`
+	// AllowPrivate lists selections (patterns as in Domains) that may be
+	// decrypted although their destination is an intranet address or name:
+	// the built-in private-network entries (CapturePrivateBypass) do not
+	// apply to them. The user's own Bypass still does.
+	AllowPrivate []string `json:",omitempty"`
 	// DisabledBuiltin lists built-in bypass entries the user turned off.
 	DisabledBuiltin []string `json:",omitempty"`
 	// Ports are the destination ports decrypted, "/"-separated; "" = 80/443/8443.
@@ -58,9 +63,70 @@ var CaptureBuiltinBypass = []string{
 	"login.microsoftonline.com", "+.okta.com", "+.1password.com", "+.bitwarden.com", "+.lastpass.com",
 	// banks and payment
 	"+.alipay.com", "+.95516.com", "+.paypal.com", "+.stripe.com",
-	// private networks
+	// private networks (CapturePrivateBypass)
 	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "fc00::/7", "fe80::/10",
 	"+.local", "+.lan", "+.corp",
+}
+
+// CapturePrivateBypass is the private-network part of the built-in list:
+// a selection listed in CaptureSettings.AllowPrivate is exempt from it.
+var CapturePrivateBypass = []string{
+	"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "fc00::/7", "fe80::/10",
+	"+.local", "+.lan", "+.corp",
+}
+
+// IsCapturePrivate reports whether a built-in bypass entry is a
+// private-network one.
+func IsCapturePrivate(entry string) bool {
+	for _, p := range CapturePrivateBypass {
+		if p == entry {
+			return true
+		}
+	}
+	return false
+}
+
+// Reasons of a target check (CaptureCheck.Reason), stable for scripts.
+const (
+	CaptureOK                  = "OK"
+	CaptureReasonDisabled      = "CAPTURE_DISABLED"
+	CaptureReasonPaused        = "CAPTURE_PAUSED"
+	CaptureReasonNotMatched    = "TARGET_NOT_MATCHED"
+	CaptureReasonPortNotIn     = "PORT_NOT_SELECTED"
+	CaptureReasonUserBypass    = "USER_BYPASS"
+	CaptureReasonBuiltinBypass = "BUILTIN_BYPASS"
+	CaptureReasonPrivate       = "PRIVATE_DESTINATION_EXCLUDED"
+	CaptureReasonNotEntering   = "TRAFFIC_NOT_ENTERING_CAPTURE"
+	CaptureReasonDNS           = "DNS_FAILED"
+	CaptureReasonUpConnect     = "UPSTREAM_CONNECT_FAILED"
+	CaptureReasonUpTLS         = "UPSTREAM_TLS_FAILED"
+	CaptureReasonClientTLS     = "CLIENT_TLS_REJECTED"
+	CaptureReasonNoTraffic     = "NO_TRAFFIC_YET"
+	CaptureReasonCA            = "CA_NOT_TRUSTED"
+)
+
+// CaptureCheckStep is one stage of a target check.
+type CaptureCheckStep struct {
+	Stage  string // 配置 / 运行状态 / 匹配 / 跳过列表 / DNS / 流量入口 / 上游连接 / 记录
+	OK     bool
+	Skip   bool // not run (an earlier stage decided)
+	Detail string
+}
+
+// CaptureCheck explains whether a target would be captured and, if not,
+// why (CheckCaptureTarget).
+type CaptureCheck struct {
+	Host   string
+	Port   int
+	Scheme string
+	// Reason is the first blocking reason (Capture* constants), CaptureOK
+	// when nothing blocks; Advice says what to do about it.
+	Reason  string
+	Summary string
+	Advice  string
+	Steps   []CaptureCheckStep
+	// Addrs are the addresses the name resolved to (system resolver).
+	Addrs []string `json:",omitempty"`
 }
 
 // CAState is the state of the local root certificate.

@@ -402,6 +402,9 @@ type API interface {
 	// AddCaptureApp adds the program behind a connection (and turns on).
 	AddCaptureApp(processPath, process string, enable bool) error
 	ClearCaptureFlows() error
+	// CheckCaptureTarget explains stage by stage whether a host, host:port
+	// or URL would be captured, with a stable reason code (model.Capture*).
+	CheckCaptureTarget(target string) model.CaptureCheck
 	// InstallCACert creates the root if needed and asks the system to
 	// trust it (the system shows its own prompt).
 	InstallCACert() error

@@ -160,13 +160,40 @@ func autoOff(set model.CaptureSettings) time.Duration {
 // CaptureBypass is the effective skip list: the built-in entries not
 // turned off, then the user's.
 func CaptureBypass(set model.CaptureSettings) []string {
-	var out []string
+	always, private := CaptureBypassSplit(set)
+	return append(private, always...)
+}
+
+// CaptureBypassSplit separates the effective skip list into the entries
+// that apply to every selection (built-in non-private ones and the user's)
+// and the built-in private-network ones, which the selections in
+// AllowPrivate are exempt from.
+func CaptureBypassSplit(set model.CaptureSettings) (always, private []string) {
 	for _, b := range model.CaptureBuiltinBypass {
-		if !slices.Contains(set.DisabledBuiltin, b) {
-			out = append(out, b)
+		if slices.Contains(set.DisabledBuiltin, b) {
+			continue
+		}
+		if model.IsCapturePrivate(b) {
+			private = append(private, b)
+		} else {
+			always = append(always, b)
 		}
 	}
-	return append(out, set.Bypass...)
+	return append(always, set.Bypass...), private
+}
+
+// captureAllowPrivate keeps the AllowPrivate entries that are selected.
+func captureAllowPrivate(set model.CaptureSettings) []string {
+	lan := []string{}
+	for _, a := range set.AllowPrivate {
+		for _, d := range set.Domains {
+			if strings.EqualFold(strings.TrimSuffix(strings.TrimSpace(a), "."), strings.TrimSuffix(strings.TrimSpace(d), ".")) {
+				lan = append(lan, d)
+				break
+			}
+		}
+	}
+	return lan
 }
 
 // CaptureAppRule is the classical rule line of a program selection.
@@ -186,8 +213,10 @@ func (s *Service) captureInput(set model.Settings) profile.Capture {
 	if !c.enabled || r == nil {
 		return profile.Capture{}
 	}
+	always, private := CaptureBypassSplit(c.set)
 	in := profile.Capture{AgentPort: r.agentPort, UpPort: r.upPort, UpUser: "lanflow", UpPass: r.upPass,
-		Bypass: CaptureBypass(c.set), Ports: c.set.Ports, IPv6: set.Advanced.IPv6, Domains: c.set.Domains}
+		Bypass: always, Private: private, AllowPrivate: captureAllowPrivate(c.set),
+		Ports: c.set.Ports, IPv6: set.Advanced.IPv6, Domains: c.set.Domains}
 	for _, sel := range r.sels {
 		cs := profile.CaptureSelector{Outbound: sel.Outbound, User: sel.User, Pass: sel.Pass}
 		if sel.Kind == "domain" {
@@ -409,6 +438,7 @@ func cloneCaptureSettings(in model.CaptureSettings) model.CaptureSettings {
 	out.Apps = slices.Clone(in.Apps)
 	out.Bypass = slices.Clone(in.Bypass)
 	out.DisabledBuiltin = slices.Clone(in.DisabledBuiltin)
+	out.AllowPrivate = slices.Clone(in.AllowPrivate)
 	return out
 }
 
@@ -520,9 +550,10 @@ func (s *Service) startAgentLocked(set model.CaptureSettings, caPEM []byte, port
 		listen = fmt.Sprintf("127.0.0.1:%d", port)
 	}
 	ctrlAddr := s.ctrlAddr
+	always, private := CaptureBypassSplit(set)
 	st := agent.Start{Op: "serve", CAPEM: string(caPEM), Config: agent.Config{
 		Listen: listen, Selectors: sels, UpAddr: fmt.Sprintf("127.0.0.1:%d", upPort), UpUser: "lanflow", UpPass: upPass,
-		Domains: set.Domains, Bypass: CaptureBypass(set), Enabled: true, Controller: ctrlAddr,
+		Domains: set.Domains, Bypass: always, Private: private, AllowPrivate: captureAllowPrivate(set), Enabled: true, Controller: ctrlAddr,
 		SpillDir: filepath.Join(s.capDir(), "spill"), MaxFlows: captureMaxFlows,
 	}}
 	r, ready, err := s.agentStart(st)
@@ -633,9 +664,16 @@ func (s *Service) ExtendCapture() error {
 // SaveCaptureSettings stores the selection; a running capture follows it.
 func (s *Service) SaveCaptureSettings(set model.CaptureSettings) error {
 	s.capLoad()
+	set.Domains = normCapturePatterns(set.Domains)
+	set.AllowPrivate = normCapturePatterns(set.AllowPrivate)
 	for _, d := range set.Domains {
 		if err := checkCapturePattern(d); err != nil {
 			return err
+		}
+	}
+	for _, a := range set.AllowPrivate {
+		if !slices.Contains(set.Domains, a) {
+			return fmt.Errorf(i18n.T("「%s」不在要解密的域名中：允许内网地址的目标必须先被选中"), a)
 		}
 	}
 	for _, a := range set.Apps {
@@ -670,8 +708,10 @@ func (s *Service) SaveCaptureSettings(set model.CaptureSettings) error {
 				return err
 			}
 		} else {
-			doms, byp := set.Domains, CaptureBypass(set)
-			r.call("POST", "/config", agent.Update{Domains: &doms, Bypass: &byp}, nil)
+			doms := set.Domains
+			byp, priv := CaptureBypassSplit(set)
+			allow := captureAllowPrivate(set)
+			r.call("POST", "/config", agent.Update{Domains: &doms, Bypass: &byp, Private: &priv, AllowPrivate: &allow}, nil)
 		}
 		if err := s.captureReload(); err != nil {
 			return err
@@ -685,6 +725,26 @@ func appNames(as []model.CaptureApp) []string {
 	var out []string
 	for _, a := range as {
 		out = append(out, a.Name+"\x00"+a.Kind+"\x00"+a.Match)
+	}
+	return out
+}
+
+// normCapturePatterns lowercases the patterns, drops a final dot and
+// duplicates, and turns a pasted URL into its host (the path cannot be
+// decided before the TLS handshake).
+func normCapturePatterns(in []string) []string {
+	var out []string
+	for _, p := range in {
+		p = strings.TrimSpace(p)
+		if strings.Contains(p, "://") {
+			if h, _, _, err := parseCaptureTarget(p); err == nil {
+				p = h
+			}
+		}
+		p = strings.ToLower(strings.TrimSuffix(p, "."))
+		if p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
 	}
 	return out
 }
