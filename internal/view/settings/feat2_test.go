@@ -261,7 +261,7 @@ func TestBackupSection(t *testing.T) {
 	f := fake.NewInstant()
 	e, r := testEnv(f)
 	p := New(e)
-	tt := ui.NewTester(p.View, 1000, 900)
+	tt := ui.NewTester(p.View, 1000, 1300)
 	if !tt.HasText("备份与同步") || !tt.HasText("未配置") || !tt.HasText("还没有备份过") {
 		t.Fatalf("section missing: %q", tt.Texts())
 	}
