@@ -221,9 +221,9 @@ func (p *Page) replayModal(c *ui.Context, t *ui.Theme) {
 				return
 			}
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-				ui.Select(c.Key("rp-method"), &r.method, replayMethods).Label(i18n.T("方法")).Width(110).Shrink(0)
-				ui.TextInput(c.Key("rp-url"), &r.url).Font("monospace").FontSize(12).Label(i18n.T("网址")).Grow(1).Shrink(1)
-				if ui.PrimaryButton(c, i18n.T("发送")).Shrink(0).Disabled(r.busy || strings.TrimSpace(r.url) == "").Clicked() {
+				ui.Select(c.Key("rp-method"), &r.method, replayMethods).Label(i18n.T("方法")).Width(110)
+				ui.TextInput(c.Key("rp-url"), &r.url).Font("monospace").FontSize(12).Label(i18n.T("网址")).Grow(1)
+				if ui.PrimaryButton(c, i18n.T("发送")).Disabled(r.busy || strings.TrimSpace(r.url) == "").Clicked() {
 					go p.sendReplay()
 				}
 			})
