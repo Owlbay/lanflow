@@ -18,6 +18,7 @@ func waitFor(t *testing.T, tt *ui.Tester, cond func() bool) {
 	for i := 0; i < 200; i++ {
 		tt.Frame()
 		if cond() {
+			tt.Frame() // draw what the condition waited for
 			return
 		}
 		time.Sleep(5 * time.Millisecond)
