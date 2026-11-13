@@ -65,6 +65,11 @@ type updateState struct {
 	err        string // last failure, shown under the row
 }
 
+// SetRelaunch replaces how 重新启动 starts the installed version: the
+// window process of the split ends the service and what it runs first
+// (split.RestartForUpdate).
+func (p *Page) SetRelaunch(relaunch func()) { p.relaunch = relaunch }
+
 // SetUpdater replaces the app updater and the relaunch call (tests).
 func (p *Page) SetUpdater(u Updater, relaunch func()) {
 	p.upd, p.relaunch = u, relaunch

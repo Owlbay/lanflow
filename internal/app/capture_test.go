@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,13 @@ import (
 // LANFLOW_TEST_CAPTURE_KEYS set it runs agent.Main with a file key store
 // in that directory (never the Keychain).
 func TestMain(m *testing.M) {
+	if os.Getenv(leftoverSleepEnv) == "1" {
+		// A process left behind (leftover_test.go): runs until its stdin
+		// closes, or a minute at most.
+		go func() { _, _ = io.Copy(io.Discard, os.Stdin); os.Exit(0) }()
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	if dir := os.Getenv("LANFLOW_TEST_CAPTURE_KEYS"); dir != "" {
 		os.Exit(agent.Main(os.Stdin, os.Stdout, ca.SecretKeys{S: fileSecrets(dir)}))
 	}

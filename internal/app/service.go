@@ -308,6 +308,9 @@ func newServiceWith(o Options, d deps) (*Service, error) {
 	// it over (takeover.go) and the system proxy and DNS stay as they
 	// are; otherwise the leftover system proxy is offered for recovery and
 	// the system DNS put back.
+	// Decryption processes of a run that did not exit cleanly: nothing
+	// adopts them, end them (leftover.go).
+	stopAgentLeftovers(o.DataDir, s.alog.Warnf)
 	if !s.findStray() {
 		s.detectRecovery()
 		s.releaseDNS() // a previous run that died with TUN on; set again if TUN starts
@@ -947,19 +950,32 @@ func (s *Service) Shutdown() {
 		}
 		s.recheckMu.Unlock()
 
+		// In order: no new work (rootCancel above), the system proxy and
+		// DNS put back, the decryption process, then the core, and the
+		// core's port checked released (docs/service-split.md S3).
 		s.opMu.Lock()
 		s.stopStreams()
 		s.mu.Lock()
 		ours := s.state.weSetProxy
+		hadCore := s.state.st.Core == model.CoreRunning || s.state.st.Core == model.CoreStarting
+		port, lan := s.state.st.MixedPort, s.state.st.AllowLAN
 		s.mu.Unlock()
 		if ours {
-			_ = s.releaseProxy()
+			if err := s.releaseProxy(); err != nil {
+				s.alog.Errorf("quit: restore the system proxy: %v", err)
+			}
 		}
 		s.stopPAC()
 		s.releaseDNS()
+		s.captureShutdown()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = s.d.mgr.Stop(ctx)
+		if err := s.d.mgr.Stop(ctx); err != nil {
+			s.alog.Errorf("quit: stop the core: %v", err)
+		}
 		cancel()
+		if hadCore {
+			s.ensureCoreGone(port, lan)
+		}
 		s.mu.Lock()
 		s.state.weSetProxy = false
 		s.state.st.SystemProxy = false

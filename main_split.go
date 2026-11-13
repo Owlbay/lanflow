@@ -237,6 +237,7 @@ func runWindow(args split.Args) {
 		pendingOpen     []string // asked for before the window existed
 		serviceQuitting atomic.Bool
 		restarting      atomic.Int64 // pid of a service being replaced, 0 = none
+		updating        atomic.Bool  // restarting into an installed update
 		closingWindow   atomic.Bool
 		quitting        atomic.Bool
 		signaled        atomic.Bool
@@ -323,8 +324,8 @@ func runWindow(args split.Args) {
 		case rpc.UIAskQuit:
 			askQuitAll()
 		case rpc.UIQuit:
-			if restarting.Load() != 0 {
-				return // the old service of a restart
+			if restarting.Load() != 0 || updating.Load() {
+				return // the old service of a restart; this window quits itself
 			}
 			serviceQuitting.Store(true)
 			quitting.Store(true)
@@ -335,6 +336,9 @@ func runWindow(args split.Args) {
 	cl, res, err := split.Connect(context.Background(), split.ConnectOptions{
 		DataDir: o.DataDir, Version: version, Attach: firstOf(args.Open, args.Link),
 		Start: startService, OnUI: onUI,
+		// An older service was ended (an update while it ran): clear what
+		// it left before the new one starts.
+		Cleanup: func() { app.StopLeftovers(app.LeftoverOptions{DataDir: o.DataDir}) },
 		Hold: func() bool {
 			if serviceQuitting.Load() {
 				return true
@@ -382,6 +386,38 @@ func runWindow(args split.Args) {
 	view.ApplyLanguage(cl.Settings().Language)
 	view.ApplyAppearance(cl.Settings().Appearance)
 	sh := view.New(cl, view.Options{Mac: runtime.GOOS == "darwin", Remote: true, SetShortcut: cl.SetShortcut})
+	// 重新启动 after an update: the old service quits (restoring the
+	// system proxy and DNS, stopping the decryption process and the core),
+	// is terminated or killed when it does not, what it left is cleared
+	// and the mixed port waited for; only then does this window quit and
+	// the new version start (split.RestartForUpdate).
+	sh.SetRelaunch(func() {
+		if !updating.CompareAndSwap(false, true) {
+			return
+		}
+		serviceQuitting.Store(true) // no reconnect, no 已断开 meanwhile
+		set := cl.Settings()
+		pid := 0
+		if c := cl.Conn(); c != nil {
+			pid = c.Welcome().PID
+		}
+		if pid == os.Getpid() {
+			pid = 0
+		}
+		log.Printf("lanflow: update restart: ending the service %d first", pid)
+		go split.RestartForUpdate(split.UpdateRestart{
+			PID:  pid,
+			Stop: split.StopOptions{Quit: cl.QuitService},
+			Cleanup: func() {
+				r := app.StopLeftovers(app.LeftoverOptions{DataDir: o.DataDir, MixedPort: set.MixedPort, AllowLAN: set.AllowLAN})
+				log.Printf("lanflow: update restart: leftovers %+v", r)
+			},
+			Relaunch: func() {
+				quitting.Store(true)
+				mygo.App.Relaunch()
+			},
+		})
+	})
 	if p := os.Getenv("LANFLOW_PAGE"); p != "" && os.Getenv("LANFLOW_FAKE") == "1" {
 		page, arg, _ := strings.Cut(p, ":")
 		sh.Env().Navigate(env.Page(page), arg)
