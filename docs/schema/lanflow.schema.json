@@ -914,6 +914,21 @@
             "null"
           ]
         },
+        "trayGraph": {
+          "type": "boolean"
+        },
+        "trayMode": {
+          "type": "boolean"
+        },
+        "trayNode": {
+          "type": "boolean"
+        },
+        "traySpeed": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "tunSetDNS": {
           "type": "boolean"
         },

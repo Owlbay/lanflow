@@ -1,32 +1,19 @@
 package view
 
 import (
-	"bytes"
 	"fmt"
-	"image/color"
-	"image/png"
 	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/transfer"
-	"github.com/egoist/mygo/ui"
 
 	"lanflow/internal/app"
 	"lanflow/internal/i18n"
 	"lanflow/internal/model"
 	"lanflow/internal/view/env"
-)
-
-// trayState is one of the four icon states (docs/design.md §7).
-type trayState int
-
-const (
-	trayOff      trayState = iota // core stopped: faint
-	trayOn                        // running, system proxy on: solid
-	trayHalf                      // running, system proxy off: translucent
-	trayErrState                  // error: with a red badge
+	"lanflow/internal/view/trayart"
 )
 
 // tray is the menu bar / notification area icon and its menu. It acts
@@ -38,10 +25,10 @@ type tray struct {
 	mu    sync.Mutex
 	menu  *mygo.Menu
 	sig   string
-	icon  trayState
-	set   bool
-	pngs  map[trayState][]byte
-	title string                    // text beside the icon (macOS live speed)
+	look  trayart.Look              // what the icon shows
+	drawn string                    // look.key() + ink of the icon set last
+	node  string                    // the main group's current node, for the title
+	title string                    // text beside the icon (macOS)
 	icons map[string]*mygo.MenuIcon // group icons by reference (traycmd.go)
 }
 
@@ -56,13 +43,13 @@ func (s *Shell) StartTray() error {
 }
 
 func startTray(h host) (*tray, error) {
-	tr := &tray{h: h, pngs: map[trayState][]byte{}}
+	tr := &tray{h: h}
 	t, err := mygo.NewTray(mygo.TrayOptions{ID: "lanflow", ToolTip: i18n.T("澜流 Lanflow")})
 	if err != nil {
 		return nil, err
 	}
 	tr.t = t
-	t.OnAppearanceChange(func() { tr.setIcon(tr.icon, true) })
+	t.OnAppearanceChange(func() { tr.drawIcon(true) })
 	if runtime.GOOS == "windows" {
 		// Left click opens the window, right click the menu.
 		t.OnClick(func() { h.showWindow("") })
@@ -92,8 +79,11 @@ func (tr *tray) destroy() {
 func (tr *tray) changed(t app.Topic) {
 	switch t {
 	case app.TopicTraffic:
-		// Every second: only the speed beside the icon can have changed.
-		tr.setTitle(tr.h.hostAPI().Status())
+		// Every second: only the speed beside the icon and the graph can
+		// have changed.
+		st := tr.h.hostAPI().Status()
+		tr.setTitle(st)
+		tr.updateGraph()
 	case app.TopicStatus, app.TopicProxies, app.TopicSubs, app.TopicSettings, app.TopicCapture:
 		tr.refresh(false)
 	}
@@ -107,26 +97,25 @@ func (tr *tray) refresh(force bool) {
 	px := api.Proxies()
 	subs := api.Subscriptions()
 	acc := api.Settings().GlobalShortcut
-	state := trayOff
-	switch {
-	case st.Core == model.CoreError || st.Core == model.CoreMissing:
-		state = trayErrState
-	case st.Core == model.CoreRunning && st.SystemProxy:
-		state = trayOn
-	case st.Core == model.CoreRunning || st.Core == model.CoreStarting:
-		state = trayHalf
+	capOn := api.CaptureStatus().Enabled
+	g, ok := mainGroup(px, st)
+	tr.mu.Lock()
+	tr.look.State, tr.look.Capture = trayart.StateOf(st), capOn
+	if ok {
+		tr.node = g.Now
+	} else {
+		tr.node = ""
 	}
-	tr.setIcon(state, false)
+	tr.mu.Unlock()
+	tr.updateGraph() // draws the icon
 	tr.setTitle(st)
 
 	extra := tr.h.extraItems()
 	var sig strings.Builder
-	capOn := api.CaptureStatus().Enabled
 	fmt.Fprintf(&sig, "%s|%v|%s|%s|%s|%s|%v|%d|", st.Core, st.SystemProxy, st.Mode, st.CurrentSubscription, acc, i18n.Lang(), capOn, len(extra))
 	for _, it := range extra {
 		sig.WriteString(it.Label + ";")
 	}
-	g, ok := mainGroup(px, st)
 	if ok {
 		fmt.Fprintf(&sig, "%s=%s;%v;", g.Name, g.Now, tr.menuIcon(g.Icon) != nil)
 		for _, n := range g.All {
@@ -340,154 +329,64 @@ func (tr *tray) subItems(subs []model.Subscription) []*mygo.MenuItem {
 
 // ---- title ----
 
-// setTitle shows the live speed beside the menu bar icon (macOS only,
-// docs/design.md §7) while the core runs, unless turned off in settings.
+// setTitle shows the text chosen in settings beside the menu bar icon
+// (macOS only, docs/design.md §7) while the core runs. Decryption shows as
+// a dot on the icon (docs/capture.md §7.2 指示).
 func (tr *tray) setTitle(st model.Status) {
 	if tr.t == nil || !tr.h.mac() {
 		return
 	}
-	title := ""
-	if st.Core == model.CoreRunning && !tr.h.hostAPI().Settings().HideTraySpeed {
-		title = traySpeed(st.Up, st.Down)
-	}
-	if tr.h.hostAPI().CaptureStatus().Enabled {
-		title = strings.TrimSpace(i18n.T("解密中") + " " + title) // docs/capture.md §7.2 指示
-	}
-	if title == tr.title {
-		return
-	}
+	tr.mu.Lock()
+	node := tr.node
+	tr.mu.Unlock()
+	title := trayart.Title(st, node, tr.h.hostAPI().Settings())
+	tr.mu.Lock()
+	same := title == tr.title
 	tr.title = title
-	tr.t.SetTitle(title)
+	tr.mu.Unlock()
+	if !same {
+		tr.t.SetTitle(title)
+	}
 }
 
-// traySpeed formats both directions compactly for the menu bar: "↓1.2M ↑ 12K".
-// Values are padded with figure spaces so the title keeps its width.
-func traySpeed(up, down int64) string {
-	return "↓" + trayRate(down) + " ↑" + trayRate(up)
+// updateGraph refreshes the traffic graph in the icon (macOS, when turned
+// on in settings) and redraws the icon if anything it shows changed.
+func (tr *tray) updateGraph() {
+	api := tr.h.hostAPI()
+	var graph []float64
+	if tr.h.mac() && api.Settings().TrayGraph {
+		up, down := api.TrafficHistory()
+		graph = trayart.Graph(up, down)
+	}
+	tr.mu.Lock()
+	tr.look.Graph = graph
+	tr.mu.Unlock()
+	tr.drawIcon(false)
 }
 
-// trayRate is a 4-character rate: "  0B", "512B", "1.5K", " 12K", "999K", "1.2M", " 45M", "1.0G".
-func trayRate(b int64) string {
-	if b < 0 {
-		b = 0
-	}
-	var s string
-	switch {
-	case b < 1000:
-		s = fmt.Sprintf("%dB", b)
-	case b < 1<<20:
-		s = trayUnit(float64(b)/1024, "K")
-	case b < 1<<30:
-		s = trayUnit(float64(b)/(1<<20), "M")
-	default:
-		s = trayUnit(float64(b)/(1<<30), "G")
-	}
-	for n := len([]rune(s)); n < 4; n++ {
-		s = " " + s
-	}
-	return s
-}
-
-func trayUnit(v float64, unit string) string {
-	if v < 9.95 {
-		return fmt.Sprintf("%.1f%s", v, unit)
-	}
-	if v > 999 {
-		v = 999
-	}
-	return fmt.Sprintf("%.0f%s", v, unit)
-}
-
-// ---- icon ----
-
-// waves is the Lanflow mark: three waves.
-const waves = `<path d="M2 5.5c2.3-2 4.7-2 7 0s4.7 2 7 0"/><path d="M2 9.5c2.3-2 4.7-2 7 0s4.7 2 7 0"/><path d="M2 13.5c2.3-2 4.7-2 7 0s4.7 2 7 0"/>`
-
-// trayInk is the icon's colour scheme (docs/design.md §3.7, §7): macOS
-// uses template icons (black with alpha, the bar tints them); Windows
-// draws in colour: the system accent when on, half-transparent accent
-// when the system proxy is off, grey when stopped, grey with a red badge
-// on error.
-type trayInk struct {
-	windows bool
-	dark    bool        // the bar is dark (error icon on macOS, grey on Windows)
-	accent  color.NRGBA // Windows accent; zero = default blue
-}
-
-// setIcon draws the icon for a state.
-func (tr *tray) setIcon(state trayState, force bool) {
+// drawIcon sets the icon for tr.look; force redraws after an appearance
+// change.
+func (tr *tray) drawIcon(force bool) {
 	if tr.t == nil {
 		return
 	}
-	if !force && tr.set && state == tr.icon {
+	tr.mu.Lock()
+	look := tr.look
+	tr.mu.Unlock()
+	windows := runtime.GOOS == "windows"
+	ink := trayart.Ink{Windows: windows, Dark: tr.t.Dark()}
+	if windows {
+		ink.Accent = mygo.Theme.Preferences().Accent
+	}
+	key := fmt.Sprintf("%s|%v|%v", look.Key(), ink.Dark, ink.Accent)
+	tr.mu.Lock()
+	if !force && key == tr.drawn {
+		tr.mu.Unlock()
 		return
 	}
-	tr.icon, tr.set = state, true
-	windows := runtime.GOOS == "windows"
-	template := !windows && state != trayErrState
-	ink := trayInk{windows: windows, dark: tr.t.Dark()}
-	if windows {
-		ink.accent = mygo.Theme.Preferences().Accent
-	}
-	// Template icons never change with the bar; the others do, so they
-	// are cached separately for a light and a dark bar.
-	key := state
-	if !template && ink.dark {
-		key = state + trayErrState + 1
-	}
-	data, ok := tr.pngs[key]
-	if !ok || windows { // the accent may change; icons are cheap to draw
-		data = trayPNG(state, ink)
-		tr.pngs[key] = data
-	}
-	_ = tr.t.SetIcon(data, template)
-}
-
-// trayPNG renders the tray icon of a state as a 36×36 PNG (18 pt at 2×).
-func trayPNG(state trayState, ink trayInk) []byte {
-	width := "1.4"
-	if state == trayOn {
-		width = "2"
-	}
-	var col color.NRGBA
-	if ink.windows {
-		accent := ink.accent
-		if accent.A == 0 {
-			accent = color.NRGBA{0, 120, 212, 255} // Windows default blue
-		}
-		grey := color.NRGBA{110, 110, 110, 255}
-		if ink.dark {
-			grey = color.NRGBA{160, 160, 160, 255}
-		}
-		switch state {
-		case trayOn:
-			col = accent
-		case trayHalf:
-			col = accent
-			col.A = 128
-		default: // off, error
-			col = grey
-		}
-	} else {
-		alpha := uint8(255)
-		switch state {
-		case trayOff:
-			alpha = 110
-		case trayHalf:
-			alpha = 150
-		}
-		col = color.NRGBA{0, 0, 0, alpha}
-		if ink.dark {
-			col = color.NRGBA{255, 255, 255, alpha}
-		}
-	}
-	badge := ""
-	if state == trayErrState {
-		badge = `<circle cx="15" cy="3.5" r="2.6" fill="#FF3B30" stroke="none"/>`
-	}
-	s := ui.MustParseSVG([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="` + width + `" stroke-linecap="round">` + waves + badge + `</svg>`))
-	img := s.Image(36, 36, col)
-	var buf bytes.Buffer
-	_ = png.Encode(&buf, img)
-	return buf.Bytes()
+	tr.drawn = key
+	tr.mu.Unlock()
+	// macOS: template icons (the bar tints them), except the red badge
+	template := !windows && look.State != trayart.Error
+	_ = tr.t.SetIcon(trayart.PNG(look, ink), template)
 }

@@ -38,6 +38,7 @@ func defaultSettings() model.Settings {
 		Mode:         model.ModeRule,
 
 		GlobalShortcut: "CmdOrCtrl+Shift+S",
+		TraySpeed:      model.TraySpeedBoth,
 
 		LogLevel:      "info",
 		CoreChannel:   model.CoreChannelStable,
@@ -114,6 +115,15 @@ func normalizeSettings(s model.Settings) model.Settings {
 	default:
 		s.LogLevel = d.LogLevel
 	}
+	switch s.TraySpeed {
+	case model.TraySpeedBoth, model.TraySpeedDown, model.TraySpeedOff:
+	default: // settings from before TraySpeed
+		s.TraySpeed = model.TraySpeedBoth
+		if s.HideTraySpeed {
+			s.TraySpeed = model.TraySpeedOff
+		}
+	}
+	s.HideTraySpeed = s.TraySpeed == model.TraySpeedOff
 	switch s.TUNStack {
 	case "mixed", "system", "gvisor":
 	default:

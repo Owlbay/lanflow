@@ -52,8 +52,9 @@ type Page struct {
 	bypass   dialogText
 	atrust   atrustDialog // aTrust 兼容 › 配置… (atrust.go)
 	checking bool
-	saving   bool       // a SaveSettings job is running; switches wait for it
-	caches   cacheState // 缓存 row of 数据 (caches.go)
+	saving   bool           // a SaveSettings job is running; switches wait for it
+	caches   cacheState     // 缓存 row of 数据 (caches.go)
+	menuBar  menuBarPreview // 菜单栏 preview (menubar.go)
 
 	// DNS (dns.go)
 	dns        dnsForm
@@ -310,9 +311,6 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				where = i18n.T("菜单栏")
 			}
 			p.switchRow(c, i18n.T("启动时不显示窗口"), i18n.Tf("仅在%s显示图标", where), s.SilentStart, func(on bool) { s.SilentStart = on; p.save(s, "", nil) })
-			if e.Mac {
-				p.switchRow(c, i18n.T("在菜单栏显示实时速度"), i18n.T("图标旁显示当前上下行速度"), !s.HideTraySpeed, func(on bool) { s.HideTraySpeed = !on; p.save(s, "", nil) })
-			}
 			closeOpts := []string{tray, i18n.T("退出澜流")}
 			closeVal := closeOpts[1]
 			if s.CloseToTray {
@@ -332,6 +330,9 @@ func (p *Page) general(c *ui.Context, t *ui.Theme, s model.Settings) {
 				p.save(s, "", nil)
 			})
 		})
+		if e.Mac {
+			p.menuBarSection(c, t, s)
+		}
 		e.Kit.Section(c, i18n.T("全局快捷键"), i18n.T("在任何应用中按下即可触发；留空即关闭"), func() { p.shortcutRows(c, t, s) })
 	}, func() {
 		e.Kit.Section(c, i18n.T("数据"), "", func() {

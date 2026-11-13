@@ -469,6 +469,13 @@ type LeakResult struct {
 // Site is a connectivity-check target.
 type Site struct{ Name, URL string }
 
+// Menu bar speed display (Settings.TraySpeed).
+const (
+	TraySpeedBoth = "both"
+	TraySpeedDown = "down"
+	TraySpeedOff  = "off"
+)
+
 // Settings is everything the user can set. Persisted as JSON by the service.
 type Settings struct {
 	// general
@@ -493,8 +500,18 @@ type Settings struct {
 	ProbeExits   bool         // allow Cloudflare trace probes
 	Mode         Mode
 	// HideTraySpeed turns off the live up/down speed shown beside the
-	// menu bar icon (macOS, docs/design.md §7); shown by default.
+	// menu bar icon (macOS, docs/design.md §7); shown by default. Kept in
+	// step with TraySpeed ("off") for older versions.
 	HideTraySpeed bool
+	// What the menu bar shows beside the icon (macOS, docs/design.md §7):
+	// TraySpeed is TraySpeedBoth (default), TraySpeedDown or TraySpeedOff;
+	// TrayGraph draws the last 20 seconds of traffic into the icon;
+	// TrayNode shows the main group's current node; TrayMode shows 全局 /
+	// 直连 when not in rule mode.
+	TraySpeed string
+	TrayGraph bool
+	TrayNode  bool
+	TrayMode  bool
 	// GlobalShortcut is the system-wide shortcut that toggles the system
 	// proxy, as a MyGo accelerator ("CmdOrCtrl+Shift+S", the default,
 	// docs/design.md §9); "" turns it off.
