@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -401,8 +402,21 @@ func (s *Shell) onChange(t app.Topic) {
 func (s *Shell) wants(t app.Topic) bool {
 	page, _ := s.shown.Load().(env.Page)
 	set, ok := s.topics[page]
-	return !ok || set[t]
+	if !ok {
+		return true
+	}
+	if !set[t] {
+		return false
+	}
+	if g, ok := s.pages[page].(topicGate); ok && !slices.Contains(shellTopics, t) {
+		return g.Wants(t)
+	}
+	return true
 }
+
+// topicGate lets a page drop, for now, a topic it lists (the 抓包 page
+// while recording is paused). Wants is called from any goroutine.
+type topicGate interface{ Wants(app.Topic) bool }
 
 // post runs fn on the UI thread before the next build and redraws.
 func (s *Shell) post(fn func()) {

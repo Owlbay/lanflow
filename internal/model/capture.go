@@ -29,6 +29,9 @@ type CaptureSettings struct {
 	// AutoOffMin turns decryption off after that many minutes; 0 = never
 	// (the UI asks first), negative = the default (30).
 	AutoOffMin int
+	// NoRecord pauses the request list: the 抓包 page stops following
+	// connections and the agent relays without decrypting or storing.
+	NoRecord bool `json:",omitempty"`
 	// Acknowledged is set once the first-run explanation was read.
 	Acknowledged bool `json:",omitempty"`
 	// LastDisabled is when decryption was last turned off; seven days
@@ -256,4 +259,35 @@ type CaptureWSFrame struct {
 	Opcode   int
 	Size     int64
 	Text     string `json:",omitempty"`
+}
+
+// ReplayRequest is a request to send again, edited or not (抓包 · 重新发送).
+type ReplayRequest struct {
+	Method string
+	URL    string
+	Header []KV
+	Body   []byte
+	// Direct skips the core (by default the request goes through its
+	// mixed port, the route the original took).
+	Direct bool
+	// FollowRedirects follows 3xx responses (off: the 3xx is the answer).
+	FollowRedirects bool
+	TimeoutMs       int // 0 = 30 s
+}
+
+// ReplayResult is the answer to a ReplayRequest.
+type ReplayResult struct {
+	Status     int
+	StatusText string
+	Proto      string
+	Header     []KV
+	// Body is the response body, decoded (gzip / br / deflate / zstd) when
+	// possible, cut at 4 MiB; BodySize is the size received.
+	Body       []byte
+	BodySize   int64
+	Truncated  bool
+	DurationMs int64
+	TTFBMs     int64
+	Via        string // "core" (mixed port) or "direct"
+	Error      string `json:",omitempty"`
 }

@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -65,6 +66,11 @@ type Page struct {
 		imgFor  int64
 	}
 
+	rp replayState // 重新发送 (replay.go)
+
+	// paused mirrors CaptureSettings.NoRecord for Wants (any goroutine)
+	paused atomic.Bool
+
 	// the selection editor
 	editing bool
 	domains string
@@ -97,6 +103,12 @@ func New(e *env.Env) *Page {
 // Topics are the service topics the view reads.
 func (p *Page) Topics() []app.Topic {
 	return []app.Topic{app.TopicStatus, app.TopicCapture, app.TopicConns, app.TopicProcIcons}
+}
+
+// Wants drops the connection stream while recording is paused, so the
+// page does not redraw for it (the shell's topic gate).
+func (p *Page) Wants(t app.Topic) bool {
+	return t != app.TopicConns || !p.paused.Load()
 }
 
 var columns = []ui.TableColumn{
@@ -171,11 +183,20 @@ func (p *Page) View(c *ui.Context) {
 		}
 		p.body(c, t, st)
 	})
+	p.replayModal(c, t)
 }
 
 func (p *Page) tools(c *ui.Context, st model.CaptureStatus) {
 	e := p.e
 	ui.SearchField(c.Key("search"), &p.query).Placeholder(i18n.T("搜索")).Label(i18n.T("搜索请求")).Width(150)
+	rec := !st.Settings.NoRecord
+	recLabel, recTip := i18n.T("暂停记录"), i18n.T("暂停后不再跟踪连接、不再解密和保存请求，节省资源")
+	if !rec {
+		recLabel, recTip = i18n.T("继续记录"), i18n.T("恢复记录请求")
+	}
+	ui.Button(c, recLabel).Tooltip(recTip).OnClick(func() {
+		e.Run(func() error { return e.API.SetCaptureRecording(!rec) }, "")
+	})
 	if st.Enabled {
 		if !st.Until.IsZero() {
 			ui.Button(c, i18n.T("延长 30 分钟")).OnClick(func() { e.Run(e.API.ExtendCapture, "") })
@@ -247,7 +268,11 @@ func (p *Page) banners(c *ui.Context, st model.CaptureStatus) {
 		e.Kit.Banner(c, "info", i18n.Tf("解密已暂停：%s。切回规则模式并运行内核后自动恢复。", st.PauseReason), nil)
 	}
 	if !st.FindProcess {
-		e.Kit.Banner(c, "info", i18n.T("按程序解密需要识别进程：高级设置中 find-process-mode 为 off，抓包期间已临时改为 strict。"), nil)
+		msg := i18n.T("高级设置中 find-process-mode 为 off，请求不显示所属程序。")
+		if st.Apps > 0 {
+			msg = i18n.T("按程序解密需要识别进程：高级设置中 find-process-mode 为 off，抓包期间已临时改为 strict。")
+		}
+		e.Kit.Banner(c, "info", msg, nil)
 	}
 	if st.Error != "" {
 		e.Kit.Banner(c, "error", st.Error, nil)
@@ -522,11 +547,11 @@ func (p *Page) exportCA() {
 
 // ---- list ----
 
-func (p *Page) rows() []model.CaptureFlow {
+func (p *Page) rows(paused bool) []model.CaptureFlow {
 	all := p.e.API.CaptureFlows()
 	q := strings.ToLower(strings.TrimSpace(p.query))
 	out := make([]model.CaptureFlow, 0, len(all))
-	if !p.onlyDec {
+	if !p.onlyDec && !paused {
 		all = append(all, p.connRows()...)
 	}
 	for _, f := range all {
@@ -572,9 +597,12 @@ func (p *Page) rows() []model.CaptureFlow {
 
 func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 	e := p.e
-	rows := p.rows()
+	p.paused.Store(st.Settings.NoRecord)
+	rows := p.rows(st.Settings.NoRecord)
 	if len(rows) == 0 {
 		switch {
+		case st.Settings.NoRecord:
+			e.Kit.Empty(c, "conns", i18n.T("记录已暂停"), i18n.T("不跟踪连接，解密进程原样转发、不保存请求。点「继续记录」恢复。"), nil)
 		case strings.TrimSpace(p.query) != "":
 			e.Kit.Empty(c, "search", i18n.Tf("没有匹配“%s”的请求", strings.TrimSpace(p.query)), "", nil)
 		case p.onlyDec:
@@ -615,6 +643,15 @@ func (p *Page) body(c *ui.Context, t *ui.Theme, st model.CaptureStatus) {
 func (p *Page) rowMenu(c *ui.Context, m *ui.Menu, f model.CaptureFlow, st model.CaptureStatus) {
 	if f.ID < 0 {
 		p.decryptItems(m, f, st)
+		m.Separator()
+	}
+	if f.ID > 0 && f.Method != "" {
+		if m.Item(i18n.T("重新发送")).Chosen() {
+			p.openReplay(f.ID, true)
+		}
+		if m.Item(i18n.T("编辑并重新发送…")).Chosen() {
+			p.openReplay(f.ID, false)
+		}
 		m.Separator()
 	}
 	if m.Item(i18n.T("复制 URL")).Disabled(f.Method == "").Chosen() {
@@ -779,6 +816,9 @@ func (p *Page) detail(c *ui.Context, t *ui.Theme, f model.CaptureFlow) {
 				}
 				ui.Text(c, meta).FontSize(11).TextColor(t.TextMuted)
 			})
+			if f.Method != "" {
+				ui.Button(c, i18n.T("重新发送…")).Tooltip(i18n.T("编辑后重新发送这个请求")).OnClick(func() { p.openReplay(f.ID, false) })
+			}
 			p.closeButton(c)
 		})
 		tabs := []string{i18n.T("概要"), i18n.T("请求头"), i18n.T("请求体"), i18n.T("响应头"), i18n.T("响应体")}

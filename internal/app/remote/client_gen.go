@@ -713,6 +713,16 @@ func (cl *Client) ClearCaptureFlows() (err error) {
 	return
 }
 
+func (cl *Client) SetCaptureRecording(on bool) (err error) {
+	err = cl.call("SetCaptureRecording", []any{on})
+	return
+}
+
+func (cl *Client) ReplayRequest(req model.ReplayRequest) (res0 model.ReplayResult, err error) {
+	err = cl.call("ReplayRequest", []any{req}, &res0)
+	return
+}
+
 func (cl *Client) CheckCaptureTarget(target string) (res0 model.CaptureCheck) {
 	_ = cl.call("CheckCaptureTarget", []any{target}, &res0)
 	return

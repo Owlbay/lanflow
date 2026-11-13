@@ -407,18 +407,35 @@ func scrubCaptureRefs(c *composer) []string {
 	return warns
 }
 
-// captureFindProcess keeps the kernel able to tell programs apart while a
-// program selection is active (docs/capture.md §4.1): find-process-mode
-// "off" (from 高级 or an override) becomes "strict", with a warning.
+// captureFindProcess keeps the kernel able to tell programs apart while
+// decryption runs (docs/capture.md §4.1, §9 进程归属): the agent names
+// the program of a record from the core's connection metadata, which in
+// Mihomo's default "strict" mode is only filled when a rule needs the
+// process, so a domain selection would show none. Unset or strict becomes
+// "always" for as long as decryption is on. An explicit "off" stays off
+// (the 抓包 page says so), except that program selections need at least
+// "strict", with a warning.
 func captureFindProcess(c *composer, cp Capture) []string {
-	if !cp.active() || len(cp.Apps) == 0 {
+	if !cp.active() {
 		return nil
 	}
-	if v := deref(mapGet(c.root, "find-process-mode")); v != nil && strings.EqualFold(v.Value, "off") {
+	v := ""
+	if n := deref(mapGet(c.root, "find-process-mode")); n != nil {
+		v = strings.ToLower(n.Value)
+	}
+	switch v {
+	case "always":
+		return nil
+	case "off":
+		if len(cp.Apps) == 0 {
+			return nil
+		}
 		c.layer = layerCapture
 		c.set("find-process-mode", strNode("strict"))
 		return []string{layerCapture + "：按程序解密需要识别进程，find-process-mode 已由 off 临时改为 strict"}
 	}
+	c.layer = layerCapture
+	c.set("find-process-mode", strNode("always"))
 	return nil
 }
 

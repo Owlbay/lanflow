@@ -175,7 +175,7 @@ func TestConnectionsListedAndDecryptFromRow(t *testing.T) {
 		t.Fatalf("connections not listed: %q", tt.Texts())
 	}
 	var slack model.CaptureFlow
-	for _, f := range p.rows() {
+	for _, f := range p.rows(false) {
 		if f.Host == "slack.com" {
 			slack = f
 		}
@@ -210,7 +210,7 @@ func TestTimeSortInterleavesConnections(t *testing.T) {
 	arg := ""
 	e, _ := testEnv(api, &arg)
 	p := New(e)
-	rows := p.rows()
+	rows := p.rows(false)
 	for i := 1; i < len(rows); i++ {
 		if rows[i].Start.After(rows[i-1].Start) {
 			t.Fatalf("row %d (%s %s) newer than row %d (%s %s)", i, rows[i].Host, rows[i].Start, i-1, rows[i-1].Host, rows[i-1].Start)
