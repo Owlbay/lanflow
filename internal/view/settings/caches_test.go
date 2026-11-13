@@ -16,7 +16,7 @@ func TestCacheRowShowsSizesAndCleans(t *testing.T) {
 	f := fake.NewInstant()
 	e, r := testEnv(f)
 	p := New(e)
-	tt := ui.NewTester(p.View, 1000, 800)
+	tt := ui.NewTester(p.View, 1000, 1200) // 数据 is below 菜单栏显示 on the left
 	tt.Frame()
 	if !tt.HasText("图标 1.2 MB · 内核版本列表 18.0 KB · 内核缓存 128.0 KB · 旧日志 5.0 MB · 共 6.3 MB") {
 		t.Fatalf("cache sizes missing: %q", tt.Texts())
