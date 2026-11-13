@@ -499,7 +499,7 @@ func TestAppUpdateFlow(t *testing.T) {
 	fu := &fakeUpdater{enabled: true}
 	relaunched := 0
 	p.SetUpdater(fu, func() { relaunched++ })
-	tt := ui.NewTester(p.View, 1000, 1200) // tall enough for 关于 below 配置同步 and 备份与同步
+	tt := ui.NewTester(p.View, 1000, 1600) // tall enough for 关于 below 菜单栏显示, 配置同步 and 备份与同步
 	if !tt.HasText("每天启动时自动检查一次") || !tt.HasText("自动检查更新") {
 		t.Fatalf("enabled state missing: %q", tt.Texts())
 	}
