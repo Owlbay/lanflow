@@ -32,6 +32,9 @@
 #   GEO_TAG          meta-rules-dat release tag (default latest)
 #   GITHUB_MIRROR    URL prefix inserted before https://github.com/... (e.g.
 #                    https://ghproxy.example.com/) for restricted networks
+#   GEO_ATTEMPTS     tries per geo file when the rolling release changes
+#                    under the download (default 4; GEO_RETRY_DELAY seconds
+#                    times the attempt between tries, default 15)
 #   GITHUB_TOKEN     sent to api.github.com only (raises the rate limit in CI)
 #   SKIP_GEO=1       do not download geodata
 set -euo pipefail
@@ -145,24 +148,31 @@ print(next((a.get("digest") or "" for a in r.get("assets",[]) if a.get("name")==
 
 is_sha256() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
 
-# fetch_verified URL DEST EXPECTED: download URL to DEST unless DEST already
-# has EXPECTED; die when the download does not match.
-fetch_verified() {
+# fetch_try URL DEST EXPECTED: download URL to DEST unless DEST already has
+# EXPECTED; returns 1 (DEST untouched) when the download does not match.
+fetch_try() {
 	if [ -f "$2" ] && [ "$(sha256 "$2")" = "$3" ]; then
 		log "cached: $2"
-		return
+		return 0
 	fi
 	download "$1" "$TMP/dl"
 	local got
 	got="$(sha256 "$TMP/dl")"
 	if [ "$got" != "$3" ]; then
-		die "SHA-256 mismatch for $1
+		log "SHA-256 mismatch for $1
   expected $3
-  got      $got
-nothing was installed"
+  got      $got"
+		rm -f "$TMP/dl"
+		return 1
 	fi
 	mkdir -p "$(dirname "$2")"
 	mv -f "$TMP/dl" "$2"
+}
+
+# fetch_verified URL DEST EXPECTED: as fetch_try, but a mismatch stops the
+# script.
+fetch_verified() {
+	fetch_try "$@" || die "SHA-256 mismatch for $1; nothing was installed"
 }
 
 # --- core ---------------------------------------------------------------
@@ -230,16 +240,29 @@ if [ "$SKIP_GEO" != "1" ]; then
 		if [ -n "$want" ]; then
 			is_sha256 "$want" || die "invalid SHA-256 override for $f: $want"
 			log "expected sha256 of $f (override): $want"
+			fetch_verified "$GEO_BASE/$f" "$GEO_DIR/$f" "$want"
 		else
-			if [ -z "$geo_json" ]; then
-				geo_json="$TMP/geo-release.json"
-				api_release_json MetaCubeX/meta-rules-dat "$GEO_TAG" "$geo_json"
-			fi
-			want="$(asset_digest "$geo_json" "$f")"
-			is_sha256 "$want" || die "the GitHub API reports no sha256 digest for $f in MetaCubeX/meta-rules-dat $GEO_TAG"
-			log "expected sha256 of $f (GitHub API): $want"
+			# The rolling release is republished in place: when it changes
+			# between the API answer and the download, the two disagree. Ask
+			# the API again and retry; only a file matching the digest the API
+			# reports at that moment is accepted.
+			attempt=1
+			while :; do
+				if [ -z "$geo_json" ]; then
+					geo_json="$TMP/geo-release.json"
+					api_release_json MetaCubeX/meta-rules-dat "$GEO_TAG" "$geo_json"
+				fi
+				want="$(asset_digest "$geo_json" "$f")"
+				is_sha256 "$want" || die "the GitHub API reports no sha256 digest for $f in MetaCubeX/meta-rules-dat $GEO_TAG"
+				log "expected sha256 of $f (GitHub API): $want"
+				fetch_try "$GEO_BASE/$f" "$GEO_DIR/$f" "$want" && break
+				[ "$attempt" -lt "${GEO_ATTEMPTS:-4}" ] || die "SHA-256 mismatch for $f after $attempt attempts; nothing was installed"
+				log "$f changed upstream while downloading? asking the GitHub API again (attempt $((attempt + 1)))"
+				sleep "$((attempt * ${GEO_RETRY_DELAY:-15}))"
+				attempt=$((attempt + 1))
+				geo_json=""
+			done
 		fi
-		fetch_verified "$GEO_BASE/$f" "$GEO_DIR/$f" "$want"
 		printf '%s  %s\n' "$want" "bin/geo/$f"
 	done
 fi

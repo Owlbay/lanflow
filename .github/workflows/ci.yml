@@ -13,6 +13,26 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The release workflow refuses a tag whose helper changed without a
+  # cmd/lanflow-helper/VERSION bump (scripts/check-helper-version.sh); the
+  # same check here catches it on the pull request (e.g. a dependency
+  # update the helper imports) instead of at release time.
+  helper-version:
+    name: Helper version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the previous release tag
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Require a helper version bump when the helper changed
+        run: scripts/check-helper-version.sh HEAD
+
   test:
     name: Test (${{ matrix.os }})
     strategy:
