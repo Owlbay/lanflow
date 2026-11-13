@@ -58,6 +58,9 @@ type Config struct {
 	Private      []string `json:"private,omitempty"`
 	AllowPrivate []string `json:"allowPrivate,omitempty"`
 	Enabled      bool     `json:"enabled"`
+	// NoRecord pauses recording: connections are relayed unchanged,
+	// without decrypting, attributing or storing them.
+	NoRecord bool `json:"noRecord,omitempty"`
 	// Controller is the core's controller address (socket / pipe) for the
 	// source check and attribution; "" skips both.
 	Controller string `json:"controller"`
@@ -79,6 +82,7 @@ type Update struct {
 	Bypass       *[]string   `json:"bypass,omitempty"`
 	Private      *[]string   `json:"private,omitempty"`
 	AllowPrivate *[]string   `json:"allowPrivate,omitempty"`
+	NoRecord     *bool       `json:"noRecord,omitempty"`
 	Selectors    *[]Selector `json:"selectors,omitempty"`
 	UpAddr       *string     `json:"upAddr,omitempty"`
 	UpPass       *string     `json:"upPass,omitempty"`
@@ -91,6 +95,7 @@ type compiled struct {
 	bypass  *matcher
 	private *matcher
 	lanOK   *matcher
+	noRec   bool
 	upAddr  string
 	upUser  string
 	upPass  string
@@ -147,7 +152,7 @@ func New(cfg Config, root *ca.Root) (*Agent, error) {
 
 func compile(c Config) *compiled {
 	return &compiled{enabled: c.Enabled, sel: append([]Selector(nil), c.Selectors...), domains: newMatcher(c.Domains),
-		bypass: newMatcher(c.Bypass), private: newMatcher(c.Private), lanOK: newMatcher(c.AllowPrivate), upAddr: c.UpAddr, upUser: c.UpUser, upPass: c.UpPass}
+		bypass: newMatcher(c.Bypass), private: newMatcher(c.Private), lanOK: newMatcher(c.AllowPrivate), noRec: c.NoRecord, upAddr: c.UpAddr, upUser: c.UpUser, upPass: c.UpPass}
 }
 
 // SetRoots replaces the upstream trust roots (tests; nil = system).
@@ -182,6 +187,9 @@ func (a *Agent) Apply(u Update) {
 	}
 	if u.AllowPrivate != nil {
 		c.lanOK = newMatcher(*u.AllowPrivate)
+	}
+	if u.NoRecord != nil {
+		c.noRec = *u.NoRecord
 	}
 	if u.Selectors != nil {
 		c.sel = append([]Selector(nil), (*u.Selectors)...)
@@ -359,6 +367,10 @@ func (a *Agent) handle(c net.Conn) {
 	c.SetDeadline(time.Time{})
 	if a.loop != nil && (a.loop.isOwn(br, isTLS && ch != nil) || a.loop.tooFast(target)) {
 		a.refuseLoop(base)
+		return
+	}
+	if cfg.noRec {
+		a.relayQuiet(c, br, cfg, req)
 		return
 	}
 	// The kernel's view of the connection: source, process and the name
@@ -590,6 +602,22 @@ func (a *Agent) passthrough(c net.Conn, br *bufio.Reader, cfg *compiled, req con
 		d.Flow.Done = true
 		d.Flow.DurationMs = time.Since(d.Flow.Start).Milliseconds()
 	})
+}
+
+// relayQuiet forwards a connection unchanged and records nothing (recording
+// paused).
+func (a *Agent) relayQuiet(c net.Conn, br *bufio.Reader, cfg *compiled, req connectReq) {
+	up, err := a.dialUp(context.Background(), cfg, req.host, req.port)
+	if err != nil {
+		return
+	}
+	defer up.Close()
+	if a.loop != nil {
+		if b, _ := br.Peek(min(br.Buffered(), loopPrefix)); len(b) > 0 {
+			a.loop.markOwn(b)
+		}
+	}
+	splice(c, br, up, up)
 }
 
 // splice copies both ways until both directions end (or one fails) and

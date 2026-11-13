@@ -402,6 +402,12 @@ type API interface {
 	// AddCaptureApp adds the program behind a connection (and turns on).
 	AddCaptureApp(processPath, process string, enable bool) error
 	ClearCaptureFlows() error
+	// SetCaptureRecording pauses (false) or resumes the request list; paused,
+	// decryption relays without decrypting or storing anything.
+	SetCaptureRecording(on bool) error
+	// ReplayRequest sends a recorded request again, edited or not, through
+	// the core's mixed port (or directly) and returns the response.
+	ReplayRequest(req model.ReplayRequest) (model.ReplayResult, error)
 	// CheckCaptureTarget explains stage by stage whether a host, host:port
 	// or URL would be captured, with a stable reason code (model.Capture*).
 	CheckCaptureTarget(target string) model.CaptureCheck

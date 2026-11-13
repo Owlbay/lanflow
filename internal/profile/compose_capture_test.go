@@ -291,3 +291,41 @@ func TestComposeCapturePrivate(t *testing.T) {
 		t.Fatalf("private set: %v", got)
 	}
 }
+
+// While decryption runs the core looks up every connection's process
+// (unless the user turned it off), so records name their program.
+func TestComposeCaptureFindProcess(t *testing.T) {
+	mode := func(in Input) string {
+		out, err := compose(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]any
+		yaml.Unmarshal(out.YAML, &doc)
+		v, _ := doc["find-process-mode"].(string)
+		return v
+	}
+	in := captureInput()
+	in.Capture.Apps = nil
+	if got := mode(in); got != "always" {
+		t.Errorf("unset: %q", got)
+	}
+	in.Advanced.FindProcessMode = "strict"
+	if got := mode(in); got != "always" {
+		t.Errorf("strict: %q", got)
+	}
+	in.Advanced.FindProcessMode = "off"
+	if got := mode(in); got != "off" {
+		t.Errorf("off kept: %q", got)
+	}
+	in = captureInput() // with a program selection
+	in.Advanced.FindProcessMode = "off"
+	if got := mode(in); got != "strict" {
+		t.Errorf("off with apps: %q", got)
+	}
+	in = captureInput()
+	in.Capture = Capture{}
+	if got := mode(in); got != "" {
+		t.Errorf("no capture: %q", got)
+	}
+}

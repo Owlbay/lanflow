@@ -197,3 +197,20 @@ func (f *Fake) CheckCaptureTarget(target string) model.CaptureCheck {
 	return model.CaptureCheck{Host: target, Port: 443, Scheme: "https", Reason: model.CaptureOK, Summary: "可以抓包",
 		Steps: []model.CaptureCheckStep{{Stage: "运行状态", OK: true, Detail: "演示数据"}}}
 }
+
+// SetCaptureRecording pauses or resumes the demo list.
+func (f *Fake) SetCaptureRecording(on bool) error {
+	c := f.capInit()
+	c.mu.Lock()
+	c.set.NoRecord = !on
+	c.mu.Unlock()
+	f.emit(app.TopicCapture)
+	return nil
+}
+
+// ReplayRequest answers with a fixed JSON response.
+func (f *Fake) ReplayRequest(req model.ReplayRequest) (model.ReplayResult, error) {
+	body := []byte(`{"ok":true,"echo":"` + req.Method + ` ` + req.URL + `"}`)
+	return model.ReplayResult{Status: 200, StatusText: "OK", Proto: "HTTP/2.0", Via: "core",
+		Header: []model.KV{{Key: "Content-Type", Value: "application/json"}}, Body: body, BodySize: int64(len(body)), DurationMs: 42, TTFBMs: 40}, nil
+}

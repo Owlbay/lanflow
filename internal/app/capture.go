@@ -405,7 +405,7 @@ func (s *Service) CaptureStatus() model.CaptureStatus {
 	defer c.mu.Unlock()
 	st := model.CaptureStatus{Enabled: c.enabled, Domains: len(c.set.Domains), Apps: len(c.set.Apps), Until: c.until,
 		AgentUp: c.run != nil, Flows: len(c.flows), Error: c.err, Settings: cloneCaptureSettings(c.set), FindProcess: true}
-	if len(c.set.Apps) > 0 && strings.EqualFold(fpm, "off") {
+	if strings.EqualFold(fpm, "off") {
 		st.FindProcess = false
 	}
 	switch {
@@ -553,7 +553,7 @@ func (s *Service) startAgentLocked(set model.CaptureSettings, caPEM []byte, port
 	always, private := CaptureBypassSplit(set)
 	st := agent.Start{Op: "serve", CAPEM: string(caPEM), Config: agent.Config{
 		Listen: listen, Selectors: sels, UpAddr: fmt.Sprintf("127.0.0.1:%d", upPort), UpUser: "lanflow", UpPass: upPass,
-		Domains: set.Domains, Bypass: always, Private: private, AllowPrivate: captureAllowPrivate(set), Enabled: true, Controller: ctrlAddr,
+		Domains: set.Domains, Bypass: always, Private: private, AllowPrivate: captureAllowPrivate(set), NoRecord: set.NoRecord, Enabled: true, Controller: ctrlAddr,
 		SpillDir: filepath.Join(s.capDir(), "spill"), MaxFlows: captureMaxFlows,
 	}}
 	r, ready, err := s.agentStart(st)
@@ -714,6 +714,31 @@ func (s *Service) SaveCaptureSettings(set model.CaptureSettings) error {
 			r.call("POST", "/config", agent.Update{Domains: &doms, Bypass: &byp, Private: &priv, AllowPrivate: &allow}, nil)
 		}
 		if err := s.captureReload(); err != nil {
+			return err
+		}
+	}
+	s.em.emit(TopicCapture)
+	return nil
+}
+
+// SetCaptureRecording pauses or resumes the request list (抓包 page ⏺):
+// paused, the page stops following connections, the agent relays without
+// decrypting and nothing is polled.
+func (s *Service) SetCaptureRecording(on bool) (err error) {
+	defer func() { s.logOp(fmt.Sprintf("capture record=%v", on), err) }()
+	s.capLoad()
+	c := &s.capst
+	c.mu.Lock()
+	c.set.NoRecord = !on
+	set := cloneCaptureSettings(c.set)
+	r := c.run
+	c.mu.Unlock()
+	if err := s.capSave(set); err != nil {
+		return err
+	}
+	if r != nil {
+		off := !on
+		if err := r.call("POST", "/config", agent.Update{NoRecord: &off}, nil); err != nil {
 			return err
 		}
 	}
@@ -1040,13 +1065,14 @@ func (s *Service) captureTick() {
 	c.mu.Lock()
 	due := c.enabled && !c.until.IsZero() && time.Now().After(c.until)
 	r := c.run
+	paused := c.set.NoRecord
 	c.mu.Unlock()
 	if due {
 		s.SetCapture(false)
 		s.notify(Notice{Kind: "toast", Title: i18n.T("HTTPS 解密已自动关闭")})
 		return
 	}
-	if r != nil {
+	if r != nil && !paused {
 		s.capturePoll(r)
 	}
 	c.mu.Lock()

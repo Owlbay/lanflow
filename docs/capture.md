@@ -15,7 +15,7 @@
 非目标：
 
 - 不解密局域网其他设备的流量（即使开了 allow-lan）。
-- 不改写请求或响应（没有 rewrite / 脚本 / 重放）。
+- 不改写在途的请求或响应（没有 rewrite / 脚本）。用户在窗口中主动「重新发送」一条记录是一个新请求（§7.5），不改动原连接。
 - 不提供「全部解密」，不提供导入外部 CA 或导出私钥。
 - 不修改 Firefox、Java、Node 等第三方信任库，只给出说明。
 - 不分叉或修改 Mihomo 内核，不采用第三方分叉（如 `IamAbler/mitmhomo`，仅 HTTP/1.1，且会脱离 `scripts/fetch-core.sh` / `internal/app/coresums.go` 的固定版本校验链）。
@@ -259,6 +259,9 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 - **筛选**：程序、主机（通配）、状态段、方法、内容类型、仅解密 / 含透传、URL+头全文搜索；正文搜索为显式操作，后台执行。
 - **指示**：状态条「解密中 · N 个主机 · M 个程序 · 剩余 mm:ss」，可「延长 30 分钟」；托盘图标角标与「HTTPS 解密：开/关」；窗口标题加「· 解密中」；非规则模式显示「暂停」。睡眠唤醒后已超时立即关闭。首次开启须阅读说明页并勾选确认。
 
+- **暂停记录**：工具栏「暂停记录 / 继续记录」（`CaptureSettings.NoRecord`，`SetCaptureRecording`，写级）。暂停时抓包页不再订阅连接流（页面实现 `Wants` 门控，见 `internal/view/shell.go` `topicGate`），服务不再轮询 agent，agent 对新连接只做回环检查后原样转发（不终止 TLS、不查进程、不存记录）；解密开关与规则不变，继续后立即恢复。
+- **程序列**：记录的程序名来自内核 `/connections` 元数据。Mihomo 默认 `find-process-mode: strict` 只在规则需要时才查进程，纯域名选择的记录因此没有程序名；解密开启期间 compose 把未设置或 `strict` 改为 `always`（`captureFindProcess`），用户显式设为 `off` 时保持并在页面提示。
+
 ### 7.3 脱敏
 
 - 显示默认打码：`Authorization`、`Proxy-Authorization`、`Cookie`、`Set-Cookie`、`X-Api-Key`、`X-Auth-Token`、名称含 `token|secret|session|password|signature` 的头；同名查询参数与 JSON 键（`access_token`、`refresh_token`、`id_token`、`password`、`client_secret`）；form 与 multipart 字段。格式 `abcd…(32 字节)`，可逐项点按显示原值（不持久）。
@@ -271,6 +274,16 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | HAR、复制为 cURL | **M1 不做** | M3 加入：HAR 默认不含正文，正文为单独选项；`_lanflow` 扩展放进程、选择项、链路 |
 | 复制 URL / 头 / 正文、保存正文到文件 | M2 | 含未打码凭据时二次确认并提示剪贴板历史、通用剪贴板同步风险；保存文件为明文，提示 |
 | Agent / ctl | — | 见 §10，永不提供 cURL |
+
+### 7.5 重新发送
+
+记录详情标题栏「重新发送…」与行菜单「重新发送 / 编辑并重新发送…」打开编辑器：方法、网址、请求头（每行「名称: 值」）、请求体，选项「直接连接（不经内核）」「跟随重定向」，下方显示响应（状态、协议、耗时、大小、经内核/直连、响应体与响应头），可「复制为 cURL」。
+
+- 请求由服务进程用 Go `net/http` 发出：默认经内核 mixed 端口（与原请求同路由；主机在选择中时会再被解密并出现在列表里），内核未运行或勾选直连时直接发出。
+- 按所写发送：不补 `User-Agent` / `Accept-Encoding`，不自动解压（`DisableCompression`），默认不跟随重定向；丢弃 HTTP/2 伪头与逐跳头（`Connection`、`Content-Length`、`Transfer-Encoding` 等，由传输层重算），`Host` 作为请求主机名。头名按规范大小写发送。
+- 原请求体被压缩时解压后编辑并去掉 `Content-Encoding`；二进制请求体只能原样发送或清空；记录被截断时提示发送的是截断后的内容。
+- 响应体最多读 4 MiB，按 `Content-Encoding` 解压后展示。
+- 实现：`internal/app/capture_replay.go`（`ReplayRequest`），`internal/view/capture/replay.go`。
 
 ## 8. 安全与隐私
 
@@ -317,7 +330,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | L1 摘要 | 时间、程序、方法、主机、路径、状态、大小；无头无正文 | 设置中显式开启「允许 Agent 读取抓包摘要」 |
 | L2 头与正文 | **已脱敏**，正文只给结构（键名、类型、长度），不给值 | 每个会话在 GUI 中逐次批准，带有效期 |
 
-- 不提供原值级别，永不提供「复制为 cURL」（等于可重放的带 Cookie 请求）。
+- Agent 不提供原值级别。窗口内的「重新发送」与「复制为 cURL」（§7.5）带原值，只在窗口中由用户操作；`ReplayRequest` 为危险级（MCP 拒绝，ctl 每次确认）。
 - Agent 不能开启解密、修改选择项、安装或导出 CA，这些只在 GUI 中操作。
 - 读取抓包数据的通道与能执行动作的工具隔离，同一会话不能同时开启。
 - 返回内容包裹为数据块并标明来源（正文是提示词注入的理想载体，这只是缓解）。
