@@ -125,3 +125,12 @@ func isIP(host string) bool {
 	_, err := netip.ParseAddr(strings.Trim(host, "[]"))
 	return err == nil
 }
+
+// MatchPattern returns the pattern (as written) of patterns that host
+// matches, "" if none, with the agent's own semantics (target checks).
+func MatchPattern(patterns []string, host string) string {
+	return newMatcher(patterns).match(host)
+}
+
+// SingleLabel reports a bare intranet name such as "nas".
+func SingleLabel(host string) bool { return singleLabel(host) }

@@ -23,7 +23,9 @@ const (
 	// CaptureUpListener is the return listener's name.
 	CaptureUpListener = "lanflow-mitm-up"
 	captureSelSet     = "lanflow-mitm-sel"
+	captureSelLANSet  = "lanflow-mitm-sel-lan"
 	captureBypassSet  = "lanflow-mitm-bypass"
+	capturePrivSet    = "lanflow-mitm-private"
 	captureAppSet     = "lanflow-mitm-app-"
 	captureNamePrefix = "lanflow-mitm-"
 )
@@ -41,9 +43,13 @@ type Capture struct {
 	Domain  CaptureSelector
 	// Apps are the program selections (M2), each with its own outbound.
 	Apps   []CaptureApp
-	Bypass []string // effective bypass list (built-in minus disabled, plus the user's)
-	Ports  string   // "80/443/8443"
-	IPv6   bool     // Lanflow's IPv6 setting: off excludes IPv6 literals
+	Bypass []string // effective bypass list (built-in minus disabled, plus the user's), private entries excluded
+	// Private are the built-in private-network entries in force; they skip
+	// every selection except the domain patterns in AllowPrivate.
+	Private      []string
+	AllowPrivate []string
+	Ports        string // "80/443/8443"
+	IPv6         bool   // Lanflow's IPv6 setting: off excludes IPv6 literals
 }
 
 // CaptureSelector is one decrypting outbound and its credentials.
@@ -172,6 +178,13 @@ func applyCapture(c *composer, cp Capture) {
 	if len(bypass) > 0 {
 		common += ",(NOT,((RULE-SET," + captureBypassSet + ")))"
 	}
+	// the private-network entries apply to every selection except the
+	// domain patterns allowed onto intranet destinations
+	lanCommon := common
+	if priv := captureRuleLines(cp.Private); len(priv) > 0 {
+		mapSet(rp, capturePrivSet, c.mark(inlineProvider(priv)))
+		common += ",(NOT,((RULE-SET," + capturePrivSet + ")))"
+	}
 	var rules []*yaml.Node
 	for i, a := range cp.Apps {
 		if len(a.Rules) == 0 {
@@ -182,11 +195,71 @@ func applyCapture(c *composer, cp Capture) {
 		rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+set+"),"+common+"),"+a.Outbound)))
 	}
 	if len(cp.Domains) > 0 && cp.Domain.Outbound != "" {
-		mapSet(rp, captureSelSet, c.mark(inlineProvider(captureRuleLines(cp.Domains))))
-		rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+captureSelSet+"),"+common+"),"+cp.Domain.Outbound)))
+		lan, rest := splitAllowPrivate(cp.Domains, cp.AllowPrivate)
+		// the intranet-allowed selection first: a host matching both keeps
+		// the exemption the user asked for
+		if l := captureRuleLines(lan); len(l) > 0 {
+			mapSet(rp, captureSelLANSet, c.mark(inlineProvider(l)))
+			rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+captureSelLANSet+"),"+lanCommon+"),"+cp.Domain.Outbound)))
+		}
+		if r := captureRuleLines(rest); len(r) > 0 {
+			mapSet(rp, captureSelSet, c.mark(inlineProvider(r)))
+			rules = append(rules, c.mark(strNode("AND,((RULE-SET,"+captureSelSet+"),"+common+"),"+cp.Domain.Outbound)))
+		}
 	}
 	rs := c.seq("rules")
 	rs.Content = append(rules, rs.Content...)
+}
+
+// splitAllowPrivate separates the selections allowed onto intranet
+// destinations from the others (comparison ignores case and a final dot).
+func splitAllowPrivate(domains, allow []string) (lan, rest []string) {
+	norm := func(s string) string { return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(s), ".")) }
+	ok := map[string]bool{}
+	for _, a := range allow {
+		ok[norm(a)] = true
+	}
+	for _, d := range domains {
+		if ok[norm(d)] {
+			lan = append(lan, d)
+		} else {
+			rest = append(rest, d)
+		}
+	}
+	return lan, rest
+}
+
+// hoistCaptureRules moves the capture rules in front of the coexistence
+// layer's domain and address DIRECT rules, which applyCoexist put first:
+// a host the user chose to decrypt is captured, then its return leg
+// (lanflow-mitm-up, excluded from the capture rules) meets those DIRECT
+// rules and leaves exactly as before. The VPN's own processes stay first:
+// their traffic is never decrypted.
+func hoistCaptureRules(c *composer) {
+	rs := deref(mapGet(c.root, "rules"))
+	if rs == nil || rs.Kind != yaml.SequenceNode {
+		return
+	}
+	var capt, rest []*yaml.Node
+	for _, n := range rs.Content {
+		if c.nodeSrc[n] == layerCapture {
+			capt = append(capt, n)
+		} else {
+			rest = append(rest, n)
+		}
+	}
+	if len(capt) == 0 {
+		return
+	}
+	at := 0
+	for at < len(rest) && c.nodeSrc[rest[at]] == layerCoexist && strings.HasPrefix(rest[at].Value, "PROCESS-NAME,") {
+		at++
+	}
+	out := make([]*yaml.Node, 0, len(rs.Content))
+	out = append(out, rest[:at]...)
+	out = append(out, capt...)
+	out = append(out, rest[at:]...)
+	rs.Content = out
 }
 
 // scrubCaptureRefs removes every reference to a decrypting outbound, the

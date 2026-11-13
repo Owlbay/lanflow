@@ -45,7 +45,7 @@
 ```text
               ┌──────────────────── Mihomo（规则模式）─────────────────────┐
 应用 ─系统代理/TUN─▶ mixed-port / tun                                       │
-              │  rules：coexist(aTrust) → ①② 抓包 → 自定义 → IPv6 拒绝 → 订阅 │
+              │  rules：VPN 进程 → ①② 抓包 → coexist → 自定义 → IPv6 拒绝 → 订阅 │
               │  ① 选中 ∧ UDP 443 → REJECT（M2）                              │
               │  ② ¬回流 ∧ TCP ∧ 端口 ∧ 本机来源 ∧ ¬旁路 ∧ 选中 → LANFLOW-MITM-<r> │
               └────┬───────────────────────────────────────▲──────────────┘
@@ -102,7 +102,7 @@ rules:
 
 1. 订阅 → 各覆写层 → 澜流设置（DNS / 嗅探 / IPv6 拒绝）→ `addCustomRules` → 托管字段 → 探测 listener（现状）。
 2. `applyCapture(c, in.Capture)`：先 `removeNamed` 删除同名 proxy / listener / rule-provider，再写入 §3.2 各项。
-3. `applyAdvanced`、`applyCoexist`（现状）。最终规则顺序：coexist → 抓包 → 自定义 → `ipv6RejectRule` → 订阅。
+3. `applyAdvanced`、`applyCoexist`，然后 `hoistCaptureRules` 把抓包规则移到 coexist 的域名 / 网段 DIRECT 规则之前（VPN 自身进程的规则仍在最前）。最终规则顺序：VPN 进程 → 抓包 → coexist 域名/网段 → 自定义 → `ipv6RejectRule` → 订阅。选中的企业域名先进入解密层，回流连接（`lanflow-mitm-up`，抓包规则不匹配）再命中 coexist DIRECT，出站方式不变。
 4. **引用清理** `scrubCaptureRefs`：扫描全部非澜流层节点（`c.nodeSrc` 判来源），删除 `rules`、`sub-rules`、`proxy-groups[].proxies`、`listeners[].proxy`、`tunnels[].proxy` 中引用 `LANFLOW-MITM*` / `lanflow-mitm-*` 的项，每删一项记一条告警。
 5. 所有带 `include-all`、`include-all-proxies` 或 `filter` 的组（含 `LANFLOW-PROBE`）**追加** `exclude-filter`：Mihomo 用反引号分隔多个正则，不能覆盖原值。**已验证** `exclude-filter: "^LANFLOW-MITM$"` 能把出站从 `include-all` 组中排除。
 6. `strippedKeys` 清理 → `applyAdvancedPorts` → `resolveDanglingAliases`（现状）。
@@ -140,7 +140,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | 身份与密码管理 | `login.microsoftonline.com`、`+.okta.com`、`+.1password.com`、`+.bitwarden.com`、`+.lastpass.com` |
 | 银行与支付 | 只内置一小批（如 `+.alipay.com`、`+.95516.com`、`+.paypal.com`、`+.stripe.com`），其余由用户补充 |
 | 内网 | RFC1918、CGNAT `100.64.0.0/10`、`.local`、`.lan`、`.corp`、单标签名（以 `IP-CIDR` 类条目写入 classical 清单；单标签名由解密进程判定） |
-| aTrust 兼容层 | `Coexist.CorpDomains` / 进程 / CIDR 的规则排在最前，天然不解密 |
+| aTrust 兼容层 | VPN 进程规则排在最前，从不解密；CorpDomains / CIDR 的 DIRECT 规则排在抓包规则之后：未选中的企业域名不受影响，选中的先解密，回流后仍按企业直连出站 |
 
 澜流自身的订阅更新、内核下载不经 Mihomo，不受影响。
 
@@ -148,6 +148,18 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 
 - 规则 ② 带 `(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN)))`，即使开了 allow-lan 也只解密本机流量；解密进程在 accept 时再按 Mihomo 连接元数据校验一次来源。
 - **待验证**：本机开了网关/共享时 TUN 会收到非本机来源，需要再排除——在 VM 中开 TUN + 共享复现后确定规则。
+
+### 4.4 内网目标豁免（`AllowPrivate`）
+
+内置旁路清单分两类：一般条目（系统更新、身份、支付）对所有选择生效；内网条目（`model.CapturePrivateBypass`：RFC1918、CGNAT、链路本地、ULA、`.local/.lan/.corp`，另加单标签名）对 `CaptureSettings.AllowPrivate` 中列出的域名选择不生效。`AllowPrivate` 的每一项必须同时在 `Domains` 中。程序选择从不豁免；用户自定义跳过对所有选择生效。
+
+规则层面：内网条目单独放在 `lanflow-mitm-private`，豁免的域名放在 `lanflow-mitm-sel-lan`，其规则不带 `NOT RULE-SET,lanflow-mitm-private`，并排在普通域名规则之前。解密进程同样拿到 `private` / `allowPrivate` 两张表再判一次，被排除时记录「内网地址被排除」。
+
+### 4.5 目标检查（`CheckCaptureTarget`）
+
+抓包页「选择…」中可输入域名、域名:端口或网址，逐项列出：运行状态 → 匹配（精确域名不含子域名时给出提示）→ 端口 → 跳过列表 → DNS → 内网地址 → 流量入口（TUN 排除网段）→ 企业规则 → 上游连接（经回流入口按原路由 CONNECT，HTTPS 再做一次系统根校验的握手）→ 请求记录。第一处阻断给出稳定原因码与处理办法：`CAPTURE_DISABLED`、`CAPTURE_PAUSED`、`CA_NOT_TRUSTED`、`TARGET_NOT_MATCHED`、`PORT_NOT_SELECTED`、`USER_BYPASS`、`BUILTIN_BYPASS`、`DNS_FAILED`、`PRIVATE_DESTINATION_EXCLUDED`、`TRAFFIC_NOT_ENTERING_CAPTURE`、`UPSTREAM_CONNECT_FAILED`、`UPSTREAM_TLS_FAILED`、`CLIENT_TLS_REJECTED`、`NO_TRAFFIC_YET`。内核对 CONNECT 先回 200 再拨号，所以 200 之后连接被关闭也算 `UPSTREAM_CONNECT_FAILED`，不会误报成证书问题。
+
+保存选择时，粘贴的网址只保留主机名（路径无法在 TLS 握手前判断），统一小写并去掉末尾的点。
 
 ## 5. 解密层
 
@@ -288,7 +300,7 @@ GLOBAL 组无法排除（**已验证**：`all` 总含解密出站，`exclude-fil
 | hosts 映射 | **已验证**：hosts 中的域名以 `CONNECT <IP>` 到达，回流 `host` 为空，订阅域名规则失效（`/etc/hosts` 经 `use-system-hosts` 同样）。M0 进一步确认：只要目标在命中抓包规则前已被解析（hosts，或规则链里先求值的 IP 类规则），都会这样。处理（已实现）：agent 本来就要按 `/connections` 做来源校验，同一条记录的 `metadata.host` 就是客户端请求的名字，回流改用它；查不到时按 IP 回流。不用 SNI 代替：redir-host / 客户端 DoH / 域前置下会改变实际目的地 |
 | 嗅探器 | `override-destination` 开时 `host` 来自 SNI，与 agent 一致；嗅探关闭时 TUN redir-host 下按域名选择不生效（安全方向），UI 提示 |
 | fake-ip | 域名天然可用；QUIC 按域名拒绝依赖 fake-ip 或 QUIC 嗅探 |
-| aTrust 共存 | coexist 规则在最前，只保护已配置的 CorpDomains/CIDR；其余内网由内置旁路清单兜底；上游自签证书走重放透传 |
+| aTrust 共存 | VPN 进程规则在最前；企业域名/网段的 DIRECT 规则在抓包之后，只对选中的目标让位；内网目的地由内置旁路清单的「内网」类兜底，可按目标用 `AllowPrivate` 豁免；TUN 排除网段（route-exclude-address）的流量不进入内核，无法抓包，由目标检查提示；上游自签证书走重放透传 |
 | 全局 / 直连模式 | 不走规则，显示暂停；规则仍在配置中，切回规则模式立即生效，与自动关闭计时联动。GLOBAL 风险见 §3.3 |
 | IPv6 关闭 | 抓包规则在 `ipv6RejectRule` 之前，IPv6 字面地址会先被 agent 接收再在回流时被拒，客户端回落 IPv4 变慢。规则 ② 加 `NOT IP-CIDR6 ::/0` 或调整顺序（待决） |
 | 配置重载 | 关闭顺序：① agent 标志立即置为透传 → ② 重新 compose 并 reload（出站保留到第 ③ 步完成）→ ③ `DELETE /connections/{id}` 关闭 `chains` 含解密出站的连接（必需，见 §2）→ ④ agent 停止监听。**待验证**：TUN 下 reload 是否重建 TUN——VM 中开 TUN 连续开关 20 次观察断流 |

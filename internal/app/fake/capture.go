@@ -191,3 +191,9 @@ func (f *Fake) RemoveCACert() error {
 
 func (f *Fake) ExportCACert(string) error    { return nil }
 func (f *Fake) ExportHAR(string, bool) error { return nil }
+
+// CheckCaptureTarget reports a fixed result for the demo data.
+func (f *Fake) CheckCaptureTarget(target string) model.CaptureCheck {
+	return model.CaptureCheck{Host: target, Port: 443, Scheme: "https", Reason: model.CaptureOK, Summary: "可以抓包",
+		Steps: []model.CaptureCheckStep{{Stage: "运行状态", OK: true, Detail: "演示数据"}}}
+}

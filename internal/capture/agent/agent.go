@@ -53,7 +53,11 @@ type Config struct {
 	UpPass    string     `json:"upPass"`
 	Domains   []string   `json:"domains"`
 	Bypass    []string   `json:"bypass"`
-	Enabled   bool       `json:"enabled"`
+	// Private are the private-network skip entries; selections matching
+	// AllowPrivate are exempt from them (model.CaptureSettings.AllowPrivate).
+	Private      []string `json:"private,omitempty"`
+	AllowPrivate []string `json:"allowPrivate,omitempty"`
+	Enabled      bool     `json:"enabled"`
 	// Controller is the core's controller address (socket / pipe) for the
 	// source check and attribution; "" skips both.
 	Controller string `json:"controller"`
@@ -70,12 +74,14 @@ type Config struct {
 
 // Update changes a running agent's selection (POST /config).
 type Update struct {
-	Enabled   *bool       `json:"enabled,omitempty"`
-	Domains   *[]string   `json:"domains,omitempty"`
-	Bypass    *[]string   `json:"bypass,omitempty"`
-	Selectors *[]Selector `json:"selectors,omitempty"`
-	UpAddr    *string     `json:"upAddr,omitempty"`
-	UpPass    *string     `json:"upPass,omitempty"`
+	Enabled      *bool       `json:"enabled,omitempty"`
+	Domains      *[]string   `json:"domains,omitempty"`
+	Bypass       *[]string   `json:"bypass,omitempty"`
+	Private      *[]string   `json:"private,omitempty"`
+	AllowPrivate *[]string   `json:"allowPrivate,omitempty"`
+	Selectors    *[]Selector `json:"selectors,omitempty"`
+	UpAddr       *string     `json:"upAddr,omitempty"`
+	UpPass       *string     `json:"upPass,omitempty"`
 }
 
 type compiled struct {
@@ -83,6 +89,8 @@ type compiled struct {
 	sel     []Selector
 	domains *matcher
 	bypass  *matcher
+	private *matcher
+	lanOK   *matcher
 	upAddr  string
 	upUser  string
 	upPass  string
@@ -139,7 +147,7 @@ func New(cfg Config, root *ca.Root) (*Agent, error) {
 
 func compile(c Config) *compiled {
 	return &compiled{enabled: c.Enabled, sel: append([]Selector(nil), c.Selectors...), domains: newMatcher(c.Domains),
-		bypass: newMatcher(c.Bypass), upAddr: c.UpAddr, upUser: c.UpUser, upPass: c.UpPass}
+		bypass: newMatcher(c.Bypass), private: newMatcher(c.Private), lanOK: newMatcher(c.AllowPrivate), upAddr: c.UpAddr, upUser: c.UpUser, upPass: c.UpPass}
 }
 
 // SetRoots replaces the upstream trust roots (tests; nil = system).
@@ -168,6 +176,12 @@ func (a *Agent) Apply(u Update) {
 	}
 	if u.Bypass != nil {
 		c.bypass = newMatcher(*u.Bypass)
+	}
+	if u.Private != nil {
+		c.private = newMatcher(*u.Private)
+	}
+	if u.AllowPrivate != nil {
+		c.lanOK = newMatcher(*u.AllowPrivate)
 	}
 	if u.Selectors != nil {
 		c.sel = append([]Selector(nil), (*u.Selectors)...)
@@ -453,8 +467,11 @@ func (a *Agent) decide(cfg *compiled, sel Selector, req connectReq, ch *clientHe
 			return "不在选择范围内", []string{pass}
 		}
 	}
-	if singleLabel(sni) || cfg.bypass.match(sni) != "" || (!hostIsName && cfg.bypass.match(req.host) != "") {
+	if cfg.bypass.match(sni) != "" || (!hostIsName && cfg.bypass.match(req.host) != "") {
 		return "在跳过列表中", []string{pass}
+	}
+	if cfg.privateSkip(sel, sni, req.host) {
+		return "内网地址被排除（可在选择中为该目标允许内网抓包）", []string{pass}
 	}
 	if a.pins.skipped(sel.User + "|" + sni) {
 		return "证书固定，暂时跳过", []string{pass, model.FlowPinned}
@@ -470,10 +487,27 @@ func (a *Agent) decidePlain(cfg *compiled, sel Selector, req connectReq) (string
 	if sel.Kind != "app" && cfg.domains.match(req.host) == "" {
 		return "不在选择范围内", []string{pass}
 	}
-	if singleLabel(req.host) || cfg.bypass.match(req.host) != "" {
+	if cfg.bypass.match(req.host) != "" {
 		return "在跳过列表中", []string{pass}
 	}
+	if cfg.privateSkip(sel, req.host, req.host) {
+		return "内网地址被排除（可在选择中为该目标允许内网抓包）", []string{pass}
+	}
 	return "", nil
+}
+
+// ClientRejected starts the error of a flow whose client refused the
+// leaf certificate (target checks look for it).
+const ClientRejected = "客户端未接受证书"
+
+// privateSkip reports an intranet destination (a single-label name or a
+// private-network entry) not exempted by AllowPrivate. Program selections
+// are never exempt.
+func (c *compiled) privateSkip(sel Selector, name, host string) bool {
+	if !singleLabel(name) && c.private.match(name) == "" && (!isIP(host) || c.private.match(host) == "") {
+		return false
+	}
+	return sel.Kind == "app" || c.lanOK == nil || c.lanOK.match(name) == ""
 }
 
 func (a *Agent) refuseLoop(base model.CaptureFlow) {
@@ -705,7 +739,7 @@ func (a *Agent) mitm(c net.Conn, br *bufio.Reader, cfg *compiled, sel Selector, 
 		up.Close()
 		msg := err.Error()
 		base.Flags = append(base.Flags, model.FlowPassthrough)
-		base.Error = "客户端未接受证书：" + msg
+		base.Error = ClientRejected + "：" + msg
 		if isCertAlert(msg) {
 			if a.pins.fail(sel.User + "|" + strings.ToLower(ch.sni)) {
 				base.Flags = append(base.Flags, model.FlowPinned)

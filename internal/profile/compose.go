@@ -253,6 +253,7 @@ func compose(in Input) (Output, error) {
 	applyCapture(c, in.Capture)
 	applyAdvanced(c, in.Advanced)
 	applyCoexist(c, in.Coexist, m.TUN)
+	hoistCaptureRules(c)
 	warns := append(scrubCaptureRefs(c), captureFindProcess(c, in.Capture)...)
 	c.layer = layerLanflow
 

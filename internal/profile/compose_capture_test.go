@@ -67,15 +67,17 @@ func TestComposeCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := toStrings(doc["rules"])
-	// order: coexist → capture (apps, then domains) → custom → IPv6 reject → subscription
-	if !strings.HasPrefix(rules[0], "DOMAIN-SUFFIX,corp.example,DIRECT") {
-		t.Fatalf("coexist not first: %v", rules[:3])
+	// order: capture (apps, then domains) → coexist domains/ranges → custom
+	// → IPv6 reject → subscription: a selected corp host is captured and its
+	// return leg then meets the coexist DIRECT rule
+	if !strings.HasPrefix(rules[2], "DOMAIN-SUFFIX,corp.example,DIRECT") {
+		t.Fatalf("coexist not after capture: %v", rules[:3])
 	}
-	if !strings.HasPrefix(rules[1], "AND,((RULE-SET,lanflow-mitm-app-0),") || !strings.HasSuffix(rules[1], ",LANFLOW-MITM-abcd-A0") {
-		t.Fatalf("app rule: %s", rules[1])
+	if !strings.HasPrefix(rules[0], "AND,((RULE-SET,lanflow-mitm-app-0),") || !strings.HasSuffix(rules[0], ",LANFLOW-MITM-abcd-A0") {
+		t.Fatalf("app rule: %s", rules[0])
 	}
-	if !strings.HasPrefix(rules[2], "AND,((RULE-SET,lanflow-mitm-sel),(NOT,((IN-NAME,lanflow-mitm-up))),(NETWORK,TCP),(DST-PORT,80/443/8443),(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN))),(NOT,((IP-CIDR6,::/0,no-resolve))),(NOT,((RULE-SET,lanflow-mitm-bypass)))),LANFLOW-MITM-abcd") {
-		t.Fatalf("domain rule: %s", rules[2])
+	if !strings.HasPrefix(rules[1], "AND,((RULE-SET,lanflow-mitm-sel),(NOT,((IN-NAME,lanflow-mitm-up))),(NETWORK,TCP),(DST-PORT,80/443/8443),(OR,((SRC-IP-CIDR,127.0.0.0/8),(SRC-IP-CIDR,::1/128),(IN-TYPE,TUN))),(NOT,((IP-CIDR6,::/0,no-resolve))),(NOT,((RULE-SET,lanflow-mitm-bypass)))),LANFLOW-MITM-abcd") {
+		t.Fatalf("domain rule: %s", rules[1])
 	}
 	if rules[3] != "DOMAIN,custom.com,DIRECT" || rules[4] != ipv6RejectRule {
 		t.Fatalf("custom / ipv6: %v", rules[3:5])
@@ -243,5 +245,49 @@ func TestComposeCaptureForcesFindProcess(t *testing.T) {
 	out, _ = compose(in)
 	if !strings.Contains(string(out.YAML), "find-process-mode: \"off\"") && !strings.Contains(string(out.YAML), "find-process-mode: off") {
 		t.Fatalf("find-process-mode changed without a program selection:\n%s", out.YAML)
+	}
+}
+
+// Selections allowed onto intranet destinations get their own rule without
+// the private-network set; the VPN's own processes stay ahead of capture.
+func TestComposeCapturePrivate(t *testing.T) {
+	in := captureInput()
+	in.Coexist.Processes = []string{"aTrustAgent"}
+	in.Capture.Apps = nil
+	in.Capture.Domains = []string{"portal.test.za.biz", "api.example.com"}
+	in.Capture.AllowPrivate = []string{"PORTAL.test.za.biz."}
+	in.Capture.Bypass = []string{"+.apple.com"}
+	in.Capture.Private = []string{"10.0.0.0/8", "+.corp"}
+	out, err := compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(out.YAML, &doc); err != nil {
+		t.Fatal(err)
+	}
+	rules := toStrings(doc["rules"])
+	if rules[0] != "PROCESS-NAME,aTrustAgent,DIRECT" {
+		t.Fatalf("VPN process not first: %v", rules[:4])
+	}
+	lan, rest := rules[1], rules[2]
+	if !strings.HasPrefix(lan, "AND,((RULE-SET,lanflow-mitm-sel-lan),") || strings.Contains(lan, "lanflow-mitm-private") || !strings.Contains(lan, "lanflow-mitm-bypass") {
+		t.Fatalf("lan rule: %s", lan)
+	}
+	if !strings.HasPrefix(rest, "AND,((RULE-SET,lanflow-mitm-sel),") || !strings.Contains(rest, "(NOT,((RULE-SET,lanflow-mitm-private)))") {
+		t.Fatalf("domain rule: %s", rest)
+	}
+	if !strings.HasPrefix(rules[3], "DOMAIN-SUFFIX,corp.example,DIRECT") {
+		t.Fatalf("coexist domain not after capture: %v", rules[:5])
+	}
+	rp := doc["rule-providers"].(map[string]any)
+	if got := toStrings(rp["lanflow-mitm-sel-lan"].(map[string]any)["payload"]); len(got) != 1 || got[0] != "DOMAIN,portal.test.za.biz" {
+		t.Fatalf("lan set: %v", got)
+	}
+	if got := toStrings(rp["lanflow-mitm-sel"].(map[string]any)["payload"]); len(got) != 1 || got[0] != "DOMAIN,api.example.com" {
+		t.Fatalf("sel set: %v", got)
+	}
+	if got := toStrings(rp["lanflow-mitm-private"].(map[string]any)["payload"]); len(got) != 2 {
+		t.Fatalf("private set: %v", got)
 	}
 }

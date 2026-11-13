@@ -199,6 +199,7 @@ var methodLevels = map[string]Level{
 	"AddCaptureDomain":    LevelDanger,
 	"AddCaptureApp":       LevelDanger,
 	"ClearCaptureFlows":   LevelWrite,
+	"CheckCaptureTarget":  LevelSensitive,
 	"InstallCACert":       LevelDanger,
 	"RegenerateCA":        LevelDanger,
 	"RemoveCACert":        LevelDanger,
